@@ -105,13 +105,13 @@ def _require_files(spec: dict) -> None:
     loader = spec.get("loader") or "diffusion"
     if loader == "checkpoint":
         if not (spec.get("checkpoint") or "").strip():
-            raise WorkflowError("Не выбран checkpoint для этого пайплайна.")
+            raise WorkflowError("Загрузчик checkpoint: не выбран файл checkpoint.")
     else:
         missing = [k for k in ("unet", "clip", "vae") if not (spec.get(k) or "").strip()]
         if missing:
-            names = {"unet": "diffusion-модель", "clip": "текстовый энкодер", "vae": "VAE"}
+            names = {"unet": "UNET (diffusion-модель)", "clip": "CLIP (текстовый энкодер)", "vae": "VAE"}
             raise WorkflowError(
-                "Не выбраны файлы: " + ", ".join(names[k] for k in missing) + "."
+                "Загрузчик diffusion: не выбран файл — " + ", ".join(names[k] for k in missing) + "."
             )
 
 

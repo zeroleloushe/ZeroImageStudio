@@ -12,22 +12,23 @@
   ];
   const state = {
     projectId: null,
-    projectName: "Портрет_волосы",
+    projectName: "Новый проект",
     pipeline: "edit",
     hintId: "krea2_identity_edit",
     hintByMode: { create: "krea2", edit: "krea2_identity_edit" },
-    prompt: "медно-рыжие волосы, мягкие естественные пряди, сохранить текстуру и объём, тёплый контровой свет",
+    prompt: "",
     negative: "",
     promptPresets: [
-      { id: "p1", name: "Портрет-студия", category: "Портрет", text: "студийный портрет, мягкий свет, резкий фокус", position: "before", enabled: true, order: 0 },
-      { id: "p2", name: "Детализация кожи 8k", category: "Детализация", text: "детальная кожа, естественные поры", position: "after", enabled: true, order: 1 },
+      { id: "p1", name: "Портрет-студия", category: "Портрет", text: "студийный портрет, мягкий свет, резкий фокус", position: "before", enabled: false, order: 0 },
+      { id: "p2", name: "Детализация кожи 8k", category: "Детализация", text: "детальная кожа, естественные поры", position: "after", enabled: false, order: 1 },
       { id: "p3", name: "Плёнка Kodak", category: "Плёнка", text: "плёночное зерно, kodak portra", position: "after", enabled: false, order: 2 },
     ],
-    sampler: { seed: 48211937, seedMode: "fixed", steps: 28, cfg: 3.5, denoise: 0.72, sampler: "euler", scheduler: "simple", batch: 1 },
+    sampler: { seed: 0, seedMode: "random", steps: 28, cfg: 3.5, denoise: 0.72, sampler: "euler", scheduler: "simple", batch: 1 },
+    dirty: false,
     create: blankPipe("create"),
     edit: blankPipe("edit"),
     references: [],
-    area: { outW: 1024, outH: 1024, aspect: "1:1", context: 0.15, feather: 48, paste: "poisson", colorMatch: true },
+    area: { outW: 1024, outH: 1024, aspect: "1:1", context: 0.15, feather: 48, paste: "poisson", colorMatch: true, userPlaced: false },
     tool: "genarea",
     color: "#e7c27a",
     brush: { size: 64, hardness: 0.3, opacity: 1 },
@@ -68,12 +69,24 @@
   let ws = null;
   let wsWait = null;
 
-  function toast(text) {
+  function toast(text, opts) {
     const el = $("toast");
     el.hidden = false;
-    el.textContent = text;
+    el.replaceChildren();
+    const span = document.createElement("span");
+    span.textContent = text;
+    el.appendChild(span);
+    const open = opts && opts.openModels || /не выбран/i.test(text || "");
+    if (open) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "b s";
+      b.textContent = "Открыть модели";
+      b.onclick = () => openModelDrawer();
+      el.appendChild(b);
+    }
     clearTimeout(toast._t);
-    toast._t = setTimeout(() => { el.hidden = true; }, 5200);
+    toast._t = setTimeout(() => { el.hidden = true; }, open ? 9000 : 5200);
   }
 
   async function api(path, opts) {
@@ -115,26 +128,43 @@
         '<div class="hd" data-h="nw"></div><div class="hd" data-h="ne"></div>' +
         '<div class="hd" data-h="sw"></div><div class="hd" data-h="se"></div></div>';
       this.stage.appendChild(this.overlay);
+      this.runBox = document.createElement("div");
+      this.runBox.className = "ga-run";
+      this.runBox.id = "ga-run";
+      this.runBox.hidden = true;
+      this.runBox.innerHTML = '<img id="ga-preview" alt=""><div id="ga-run-label">В очереди</div><button type="button" class="b" id="btn-cancel">Отмена</button>';
+      this.stage.appendChild(this.runBox);
       this.ga = this.overlay.querySelector(".ga");
-      this.doc = { w: 800, h: 1000 };
+      this.doc = { w: 1024, h: 1024 };
       this.layers = [];
       this.active = 0;
-      this.zoom = 0.5;
+      this.zoom = 1;
       this.panX = 40;
       this.panY = 30;
-      this.gen = { x: 144, y: 70, w: 512, h: 512 };
+      this.gen = { x: 0, y: 0, w: 1024, h: 1024 };
+      this._viewW = 0;
+      this._viewH = 0;
       this.maskCanvas = document.createElement("canvas");
       this.maskCtx = null;
       this.selection = null;
-      this.undo = [];
-      this.redo = [];
+      this.undoStack = [];
+      this.redoStack = [];
       this.space = false;
       this.drag = null;
       this._raf = 0;
       this.resizeMask();
       this.bind();
       this.resizeView();
-      new ResizeObserver(() => this.resizeView()).observe(stage);
+      new ResizeObserver(() => {
+        const r = this.stage.getBoundingClientRect();
+        const changed = Math.abs(r.width - this._viewW) > 1 || Math.abs(r.height - this._viewH) > 1;
+        this.resizeView();
+        if (changed && r.width > 20 && r.height > 20) {
+          this._viewW = r.width;
+          this._viewH = r.height;
+          this.fit();
+        }
+      }).observe(stage);
     }
 
     resizeMask() {
@@ -163,10 +193,29 @@
 
     fit() {
       const r = this.stage.getBoundingClientRect();
-      const pad = 64;
-      this.zoom = Math.max(0.05, Math.min((r.width - pad) / this.doc.w, (r.height - pad) / this.doc.h));
+      const pad = 48;
+      const zw = (r.width - pad) / this.doc.w;
+      const zh = (r.height - pad) / this.doc.h;
+      this.zoom = Math.max(0.05, Math.min(zw, zh, 8));
       this.panX = (r.width - this.doc.w * this.zoom) / 2;
       this.panY = (r.height - this.doc.h * this.zoom) / 2;
+      this.requestDraw();
+    }
+
+    zoom100() {
+      const r = this.stage.getBoundingClientRect();
+      this.zoom = 1;
+      this.panX = (r.width - this.doc.w) / 2;
+      this.panY = (r.height - this.doc.h) / 2;
+      this.requestDraw();
+    }
+
+    zoomBy(factor, cx, cy) {
+      const before = this.screenToDoc(cx, cy);
+      this.zoom = Math.min(8, Math.max(0.05, this.zoom * factor));
+      const r = this.canvas.getBoundingClientRect();
+      this.panX = cx - r.left - before.x * this.zoom;
+      this.panY = cy - r.top - before.y * this.zoom;
       this.requestDraw();
     }
 
@@ -250,7 +299,12 @@
       ctx.restore();
       this.placeGen();
       const info = $("canvas-info");
-      if (info) info.textContent = `${this.doc.w} × ${this.doc.h} · ${Math.round(this.zoom * 100)}% · RGB 8 бит`;
+      if (info) {
+        info.textContent = `${this.doc.w}×${this.doc.h}`;
+        info.title = `${this.doc.w} × ${this.doc.h} · RGB 8 бит`;
+      }
+      const zoom = $("zoom-readout");
+      if (zoom) zoom.textContent = Math.round(this.zoom * 100) + "%";
     }
 
     maskTint() {
@@ -298,7 +352,17 @@
       this.ga.style.height = Math.max(8, g.h * this.zoom) + "px";
       this.ga.style.pointerEvents = state.tool === "genarea" ? "auto" : "none";
       const lab = this.ga.querySelector(".lab");
-      lab.textContent = `Область генерации ${Math.round(g.w)}×${Math.round(g.h)} → ${state.area.outW}×${state.area.outH}`;
+      const kind = state.area.userPlaced ? "Область" : "Весь холст";
+      lab.textContent = `${kind} ${Math.round(g.w)}×${Math.round(g.h)} → ${state.area.outW}×${state.area.outH}`;
+      lab.classList.toggle("inside", (this.panY + g.y * this.zoom) < 26);
+      const run = $("ga-run");
+      if (run) {
+        run.hidden = !state.running;
+        run.style.left = this.ga.style.left;
+        run.style.top = this.ga.style.top;
+        run.style.width = this.ga.style.width;
+        run.style.height = this.ga.style.height;
+      }
     }
 
     flatten() {
@@ -426,29 +490,30 @@
     }
 
     pushUndo(rec) {
-      this.undo.push(rec);
-      if (this.undo.length > 20) this.undo.shift();
-      this.redo = [];
+      this.undoStack.push(rec);
+      if (this.undoStack.length > 20) this.undoStack.shift();
+      this.redoStack = [];
+      if (this.onChange) this.onChange();
     }
 
     undo() {
-      const rec = this.undo.pop();
+      const rec = this.undoStack.pop();
       if (!rec) return;
-      if (rec.type === "full") this.redo.push(this.fullSnapshot());
+      if (rec.type === "full") this.redoStack.push(this.fullSnapshot());
       else if (rec.type === "pixels") {
         const layer = this.layers.find((l) => l.id === rec.id);
-        this.redo.push({ type: "pixels", id: rec.id, data: layer ? layer.ctx.getImageData(0, 0, layer.canvas.width, layer.canvas.height) : rec.data, mask: this.maskCtx.getImageData(0, 0, this.maskCanvas.width, this.maskCanvas.height) });
+        this.redoStack.push({ type: "pixels", id: rec.id, data: layer ? layer.ctx.getImageData(0, 0, layer.canvas.width, layer.canvas.height) : rec.data, mask: this.maskCtx.getImageData(0, 0, this.maskCanvas.width, this.maskCanvas.height) });
       } else if (rec.type === "move") {
         const layer = this.layers.find((l) => l.id === rec.id);
-        this.redo.push({ type: "move", id: rec.id, x: layer ? layer.x : rec.x, y: layer ? layer.y : rec.y });
+        this.redoStack.push({ type: "move", id: rec.id, x: layer ? layer.x : rec.x, y: layer ? layer.y : rec.y });
       }
       this.restore(rec);
     }
 
     redo() {
-      const rec = this.redo.pop();
+      const rec = this.redoStack.pop();
       if (!rec) return;
-      if (rec.type === "full") this.undo.push(this.fullSnapshot());
+      if (rec.type === "full") this.undoStack.push(this.fullSnapshot());
       this.restore(rec);
     }
 
@@ -480,25 +545,24 @@
       window.addEventListener("pointerup", (e) => this.pointerUp(e));
       this.stage.addEventListener("wheel", (e) => {
         e.preventDefault();
-        const before = this.screenToDoc(e.clientX, e.clientY);
         const factor = e.deltaY < 0 ? 1.08 : 1 / 1.08;
-        this.zoom = Math.min(8, Math.max(0.05, this.zoom * factor));
-        const r = this.canvas.getBoundingClientRect();
-        this.panX = e.clientX - r.left - before.x * this.zoom;
-        this.panY = e.clientY - r.top - before.y * this.zoom;
-        this.requestDraw();
+        this.zoomBy(factor, e.clientX, e.clientY);
       }, { passive: false });
       window.addEventListener("keydown", (e) => {
-        if (e.code === "Space") this.space = true;
+        if (e.code === "Space") { this.space = true; if (!/^(input|textarea|select)$/i.test((e.target.tagName || ""))) e.preventDefault(); }
         const tag = (e.target.tagName || "").toLowerCase();
         if (tag === "input" || tag === "textarea" || tag === "select") return;
-        const map = { KeyV: "move", KeyM: "select", KeyL: "lasso", KeyT: "transform", KeyC: "crop", KeyB: "brush", KeyE: "eraser", KeyI: "eyedrop", KeyQ: "mask", KeyG: "genarea" };
+        const map = { KeyV: "move", KeyM: "select", KeyL: "lasso", KeyT: "transform", KeyC: "crop", KeyB: "brush", KeyE: "eraser", KeyI: "eyedrop", KeyQ: "mask", KeyG: "genarea", KeyH: "hand", KeyZ: "zoom" };
         if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") { e.preventDefault(); e.shiftKey ? this.redo() : this.undo(); return; }
         if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "y") { e.preventDefault(); this.redo(); return; }
+        if ((e.ctrlKey || e.metaKey) && e.key === "0") { e.preventDefault(); this.fit(); return; }
+        if ((e.ctrlKey || e.metaKey) && e.key === "1") { e.preventDefault(); this.zoom100(); return; }
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") { e.preventDefault(); saveProject().then(() => toast("Проект сохранён.")).catch((err) => toast(err.message || String(err))); return; }
+        if (e.key === "?" || (e.shiftKey && e.code === "Slash")) { e.preventDefault(); toggleHelp(true); return; }
         if (e.ctrlKey || e.metaKey || e.altKey) return;
         if (e.key === "Delete" || e.key === "Backspace") { this.deleteActive(); return; }
-        if (e.key === "[") { state.brush.size = Math.max(1, state.brush.size - 4); const b = $("brush-size"); if (b) b.value = state.brush.size; renderTags(); }
-        if (e.key === "]") { state.brush.size = Math.min(300, state.brush.size + 4); const b = $("brush-size"); if (b) b.value = state.brush.size; renderTags(); }
+        if (e.key === "[") { state.brush.size = Math.max(1, state.brush.size - 4); const b = $("brush-size"); if (b) b.value = state.brush.size; renderToolOptions(); }
+        if (e.key === "]") { state.brush.size = Math.min(300, state.brush.size + 4); const b = $("brush-size"); if (b) b.value = state.brush.size; renderToolOptions(); }
         if (map[e.code]) { setTool(map[e.code]); }
       });
       window.addEventListener("keyup", (e) => { if (e.code === "Space") this.space = false; });
@@ -537,7 +601,7 @@
         const layer = this.activeLayer();
         if (!layer || layer.locked) return;
         this.pushUndo({ type: "move", id: layer.id, x: layer.x, y: layer.y });
-        this.undo.pop(); // push happens on up; store start
+        this.undoStack.pop(); // push happens on up; store start
         this.drag = { kind: "move", id: layer.id, x: p.x, y: p.y, lx: layer.x, ly: layer.y };
         return;
       }
@@ -598,6 +662,7 @@
     }
 
     dragGen(d, p) {
+      state.area.userPlaced = true;
       const aspect = state.area.aspect;
       const ratio = aspect === "free" ? 0 : aspect.split(":").map(Number).reduce((a, b) => a / b);
       if (d.kind === "new-ga") {
@@ -771,6 +836,7 @@
   function setTool(name) {
     state.tool = name;
     document.querySelectorAll(".tool").forEach((b) => b.classList.toggle("on", b.dataset.tool === name));
+    renderToolOptions();
     const cursors = { brush: "crosshair", eraser: "crosshair", mask: "crosshair", hand: "grab", zoom: "zoom-in", move: "move", genarea: "crosshair", crop: "crosshair", select: "crosshair", lasso: "crosshair", eyedrop: "crosshair", transform: "move" };
     editor.canvas.style.cursor = cursors[name] || "default";
     editor.requestDraw();
@@ -788,6 +854,9 @@
     renderPipe();
     renderPresetSelect();
     renderTags();
+    renderToolOptions();
+    renderEmpty();
+    updateGenerateButton();
     renderModelSummary();
     $("prompt").value = state.prompt;
     $("negative").value = state.negative;
@@ -1008,8 +1077,8 @@
     const cat = state.catalog || { samplers: ["euler"], schedulers: ["simple", "normal", "beta"] };
     const opt = (list, cur) => (list || []).map((n) => `<option ${n === cur ? "selected" : ""}>${escapeHtml(n)}</option>`).join("");
     $("sampler-box").innerHTML = `
-      <span>Seed</span><div class="row"><input id="seed" class="f" style="flex:1" value="${s.seed}"><button class="b s" id="btn-seed" data-i="dice" data-s="12" type="button"></button>
-        <select id="seed-mode" class="dd" style="width:78px"><option ${s.seedMode === "fixed" ? "selected" : ""}>fixed</option><option ${s.seedMode === "random" ? "selected" : ""}>random</option><option ${s.seedMode === "increment" ? "selected" : ""}>increment</option></select></div>
+      <span>Seed</span><div class="row"><input id="seed" class="f" style="flex:1" value="${s.seed}" title="Последний сид. В режиме «случайный» каждый запуск берёт новый."><button class="b s" id="btn-seed" data-i="dice" data-s="12" type="button" title="Случайный сид"></button>
+        <select id="seed-mode" class="dd" title="Режим сида"><option value="random" ${s.seedMode === "random" ? "selected" : ""}>случайный</option><option value="fixed" ${s.seedMode === "fixed" ? "selected" : ""}>фиксированный</option><option value="increment" ${s.seedMode === "increment" ? "selected" : ""}>+1</option></select></div>
       <span>Шаги</span><div class="row"><input id="steps-range" class="range" type="range" min="1" max="80" value="${s.steps}"><input id="steps" class="f" style="width:48px" value="${s.steps}"></div>
       <span>CFG</span><div class="row"><input id="cfg-range" class="range" type="range" min="0" max="12" step="0.1" value="${s.cfg}"><input id="cfg" class="f" style="width:48px" value="${s.cfg}"></div>
       <span>Denoise</span><div class="row"><input id="denoise-range" class="range" type="range" min="0" max="1" step="0.01" value="${s.denoise}"><input id="denoise" class="f" style="width:48px" value="${s.denoise}"></div>
@@ -1033,7 +1102,7 @@
     link("steps-range", "steps", "steps", (v) => Math.max(1, parseInt(v, 10) || 1));
     link("cfg-range", "cfg", "cfg", (v) => Math.max(0, parseFloat(v) || 0));
     link("denoise-range", "denoise", "denoise", (v) => Math.min(1, Math.max(0, parseFloat(v) || 0)));
-    $("seed").onchange = () => { state.sampler.seed = Math.max(0, parseInt($("seed").value, 10) || 0); };
+    $("seed").onchange = () => { state.sampler.seed = Math.max(0, parseInt($("seed").value, 10) || 0); if (state.sampler.seedMode === "random") state.sampler.seedMode = "fixed"; if ($("seed-mode")) $("seed-mode").value = state.sampler.seedMode; };
     $("seed-mode").onchange = () => { state.sampler.seedMode = $("seed-mode").value; };
     $("sampler").onchange = () => { state.sampler.sampler = $("sampler").value; renderPipe(); };
     $("scheduler").onchange = () => { state.sampler.scheduler = $("scheduler").value; };
@@ -1062,8 +1131,9 @@
         <span class="tag">масштаб ×${scale.toFixed(2)}</span>
         <span class="tag to">→ новый слой</span>
         <button type="button" class="b s" id="btn-gen-full">Весь холст</button>
-      </div>`;
-    const num = (id, fn) => $(id).onchange = () => { fn(parseFloat($(id).value)); editor.requestDraw(); renderTags(); };
+      </div>
+      ${state.area.userPlaced ? "" : `<div class="banner">Область не задана: берётся весь холст и масштабируется до ${a.outW}×${a.outH} — выход модели.</div>`}`;
+    const num = (id, fn) => $(id).onchange = () => { state.area.userPlaced = true; fn(parseFloat($(id).value)); editor.requestDraw(); renderInspector(); };
     num("gx", (v) => { editor.gen.x = clamp(v || 0, 0, editor.doc.w - 8); });
     num("gy", (v) => { editor.gen.y = clamp(v || 0, 0, editor.doc.h - 8); });
     num("gw", (v) => { editor.gen.w = Math.max(16, v || 16); });
@@ -1081,19 +1151,184 @@
     $("gcolor").onchange = () => { state.area.colorMatch = $("gcolor").checked; renderInspector(); };
     const full = $("btn-gen-full");
     if (full) full.onclick = () => {
+      state.area.userPlaced = true;
       editor.gen = { x: 0, y: 0, w: editor.doc.w, h: editor.doc.h };
       editor.requestDraw();
       renderInspector();
     };
   }
 
-  function renderTags() {
-    const area = editor.maskArea();
-    $("mask-tag").textContent = area > 8
-      ? `Маска: ${state.brush.size}px · жёстк. ${Math.round(state.brush.hardness * 100)}% · ${area} px²`
-      : "Маска: не нарисована · Q — кисть маски";
-    const ctxPct = usesSource() ? Math.round(state.area.context * 100) : 0;
-    $("context-tag").textContent = `Контекст +${ctxPct}% · растушёвка ${state.area.feather}px · ${state.area.paste}`;
+  function renderTags() { /* status lives in the tool options bar */ }
+
+  function renderToolOptions() {
+    const host = $("tool-options");
+    if (!host || !editor) return;
+    const tool = state.tool;
+    const b = state.brush;
+    if (tool === "brush" || tool === "eraser" || tool === "mask") {
+      const title = tool === "mask" ? "Маска" : (tool === "eraser" ? "Ластик" : "Кисть");
+      host.innerHTML = `<b>${title}</b>
+        <label>Размер <input id="brush-size" class="range" type="range" min="1" max="300" value="${b.size}" title="Размер кисти ([ и ])"></label>
+        <label>Жёсткость <input id="brush-hard" class="range" type="range" min="0" max="100" value="${Math.round(b.hardness * 100)}" title="Жёсткость"></label>
+        <label>Непрозр. <input id="brush-op" class="range" type="range" min="1" max="100" value="${Math.round(b.opacity * 100)}" title="Непрозрачность"></label>
+        <span class="mu" id="opt-status"></span>`;
+      $("brush-size").oninput = () => { state.brush.size = parseInt($("brush-size").value, 10) || 1; paintStatus(); };
+      $("brush-hard").oninput = () => { state.brush.hardness = (parseInt($("brush-hard").value, 10) || 0) / 100; paintStatus(); };
+      $("brush-op").oninput = () => { state.brush.opacity = Math.min(1, (parseInt($("brush-op").value, 10) || 1) / 100); paintStatus(); };
+      paintStatus();
+    } else if (tool === "genarea") {
+      const a = state.area;
+      host.innerHTML = `<b>Область</b>
+        <label>Контекст <input id="opt-context" class="f" style="width:52px" value="${Math.round(a.context * 100)}" title="Запас вокруг области, %"> %</label>
+        <label>Шов <input id="opt-feather" class="f" style="width:48px" value="${a.feather}" title="Растушёвка, пиксели"> px</label>
+        <select id="opt-paste" class="dd" title="Способ вклейки"><option value="poisson" ${a.paste === "poisson" ? "selected" : ""}>Poisson</option><option value="feather" ${a.paste === "feather" ? "selected" : ""}>Растушёвка</option><option value="hard" ${a.paste === "hard" ? "selected" : ""}>Жёстко</option></select>
+        <label title="Подгон цвета по краю"><input id="opt-color" type="checkbox" ${a.colorMatch ? "checked" : ""}> цвет</label>
+        <button type="button" class="b s" id="opt-full" title="Область на весь холст">Весь холст</button>
+        <span class="mu" id="opt-status"></span>`;
+      $("opt-context").onchange = () => { state.area.context = Math.max(0, (parseFloat($("opt-context").value) || 0) / 100); renderInspector(); paintStatus(); };
+      $("opt-feather").onchange = () => { state.area.feather = Math.max(0, parseInt($("opt-feather").value, 10) || 0); renderInspector(); };
+      $("opt-paste").onchange = () => { state.area.paste = $("opt-paste").value; renderInspector(); };
+      $("opt-color").onchange = () => { state.area.colorMatch = $("opt-color").checked; renderInspector(); };
+      $("opt-full").onclick = () => {
+        state.area.userPlaced = true;
+        editor.gen = { x: 0, y: 0, w: editor.doc.w, h: editor.doc.h };
+        editor.requestDraw();
+        renderInspector();
+      };
+      paintStatus();
+    } else {
+      const hints = {
+        move: "Перемещение слоя (V). Пробел — панорама.",
+        select: "Прямоугольное выделение (M).",
+        lasso: "Лассо (L).",
+        transform: "Масштаб слоя перетаскиванием (T).",
+        crop: "Кадрирование холста (C).",
+        eyedrop: "Пипетка (I) — цвет кисти.",
+        hand: "Рука (H или пробел).",
+        zoom: "Масштаб (Z). Колёсико крутит вокруг курсора. Ctrl+0 вмещает, Ctrl+1 — 100%.",
+      };
+      host.innerHTML = `<span class="mu">${hints[tool] || "Выберите инструмент."}</span>`;
+    }
+    if (window.zeroImageStudioHydrateIcons) window.zeroImageStudioHydrateIcons(host);
+  }
+
+  function paintStatus() {
+    const el = $("opt-status");
+    if (!el || !editor) return;
+    if (state.tool === "mask" || state.tool === "brush" || state.tool === "eraser") {
+      const area = editor.maskArea();
+      el.textContent = area > 8 ? `маска ${area} px²` : "маска не нарисована";
+    } else if (state.tool === "genarea") {
+      el.textContent = state.area.userPlaced ? "своя область" : "весь холст → масштаб модели";
+    }
+  }
+
+  function syncDefaultArea() {
+    if (!editor || state.area.userPlaced) return;
+    editor.gen = { x: 0, y: 0, w: editor.doc.w, h: editor.doc.h };
+  }
+
+  function missingModelFiles() {
+    const c = cfg();
+    const loader = c.loader || "diffusion";
+    if (loader === "checkpoint") {
+      return (c.checkpoint || "").trim() ? [] : ["Загрузчик checkpoint: не выбран файл checkpoint."];
+    }
+    const labels = { unet: "UNET (diffusion-модель)", clip: "CLIP (текстовый энкодер)", vae: "VAE" };
+    return ["unet", "clip", "vae"].filter((k) => !(c[k] || "").trim()).map((k) => `Загрузчик diffusion: не выбран ${labels[k]}.`);
+  }
+
+  function generateBlockReason() {
+    if (state.running) return "";
+    const reasons = [];
+    if (!(state.prompt || "").trim()) reasons.push("Промт пустой.");
+    if (state.pipeline === "edit" && !(editor && editor.layers.some((l) => l.visible))) reasons.push("В правке нет изображения. Откройте фото.");
+    reasons.push(...missingModelFiles());
+    return reasons.join(" ");
+  }
+
+  function updateGenerateButton() {
+    const btn = $("btn-gen");
+    const wrap = $("gen-wrap");
+    if (!btn) return;
+    if (state.running) {
+      btn.disabled = false;
+      const tip = "Отменить генерацию";
+      btn.title = tip;
+      if (wrap) wrap.title = tip;
+      return;
+    }
+    const reason = generateBlockReason();
+    btn.disabled = !!reason;
+    const tip = reason || "Сгенерировать (Ctrl+Enter)";
+    btn.title = tip;
+    if (wrap) wrap.title = tip;
+  }
+
+  function openModelDrawer() {
+    const node = $("model-node");
+    if (!node) return;
+    node.classList.add("open");
+    $("model-drawer").inert = false;
+    $("model-toggle").setAttribute("aria-expanded", "true");
+    try { localStorage.setItem("zeroimagestudio.modelDrawer", "open"); } catch (err) { /* private mode */ }
+    node.scrollIntoView({ block: "nearest" });
+  }
+
+  const CANVAS_PRESETS = [[512, 512], [768, 768], [1024, 1024], [832, 1216], [1216, 832], [1536, 1024]];
+
+  function renderEmpty() {
+    const el = $("empty-stage");
+    if (!el || !editor) return;
+    el.hidden = editor.layers.length > 0;
+    const sizes = $("empty-sizes");
+    if (sizes && !sizes.dataset.ready) {
+      sizes.dataset.ready = "1";
+      sizes.innerHTML = CANVAS_PRESETS.map(([w, h]) => `<button type="button" class="b s" data-size="${w}x${h}" title="Новый холст ${w}×${h}">${w}×${h}</button>`).join("");
+      sizes.onclick = (e) => {
+        const b = e.target.closest("[data-size]");
+        if (!b) return;
+        const [w, h] = b.dataset.size.split("x").map(Number);
+        newCanvas(w, h);
+      };
+    }
+  }
+
+  function newCanvas(w, h) {
+    if (editor.layers.length) editor.pushUndo(editor.fullSnapshot());
+    editor.doc = { w, h };
+    editor.resizeMask();
+    editor.maskCtx.clearRect(0, 0, w, h);
+    editor.layers = [];
+    editor.active = 0;
+    state.area.userPlaced = false;
+    syncDefaultArea();
+    editor.fit();
+    state.dirty = true;
+    renderLayers();
+    renderEmpty();
+    renderInspector();
+    updateGenerateButton();
+    toast(`Холст ${w} × ${h}.`);
+  }
+
+  function toggleHelp(force) {
+    let pop = $("help-pop");
+    if (!pop) {
+      pop = document.createElement("div");
+      pop.id = "help-pop";
+      pop.className = "help-pop";
+      pop.innerHTML = `<div class="row"><b>Клавиши</b><button type="button" class="b s" id="help-close" style="margin-left:auto" title="Закрыть">Закрыть</button></div>
+        <div>V перемещение · M рамка · L лассо · T трансформ · C кадр</div>
+        <div>B кисть · E ластик · I пипетка · Q маска · G область</div>
+        <div>H рука · Z масштаб · Пробел+перетаскивание панорама</div>
+        <div><kbd>[</kbd> <kbd>]</kbd> размер кисти · колесо — масштаб вокруг курсора</div>
+        <div><kbd>Ctrl+0</kbd> вместить · <kbd>Ctrl+1</kbd> 100% · <kbd>Ctrl+Z</kbd> отмена · <kbd>Ctrl+Shift+Z</kbd> повтор</div>
+        <div><kbd>Ctrl+S</kbd> сохранить · <kbd>Ctrl+Enter</kbd> генерировать · <kbd>?</kbd> эта шпаргалка</div>`;
+      document.body.appendChild(pop);
+      pop.querySelector("#help-close").onclick = () => { pop.hidden = true; };
+    }
+    pop.hidden = force === true ? false : !pop.hidden;
   }
 
   function renderLayers() {
@@ -1102,26 +1337,44 @@
     if (blend && !blend.dataset.ready) {
       blend.innerHTML = BLENDS.map(([v, n]) => `<option value="${v}">${n}</option>`).join("");
       blend.dataset.ready = "1";
-      blend.onchange = () => { const l = editor.activeLayer(); if (l && !l.locked) { l.blend = blend.value; editor.requestDraw(); renderLayers(); } };
+      blend.onchange = () => {
+        const l = editor.activeLayer(); if (!l || l.locked) return;
+        editor.pushUndo(editor.fullSnapshot());
+        l.blend = blend.value;
+        editor.requestDraw();
+        renderLayers();
+      };
       $("layer-opacity").onchange = () => {
         const l = editor.activeLayer(); if (!l || l.locked) return;
+        editor.pushUndo(editor.fullSnapshot());
         const v = parseFloat(String($("layer-opacity").value).replace("%", ""));
         l.opacity = Math.min(1, Math.max(0, (v > 1 ? v / 100 : v)));
-        editor.requestDraw(); renderLayers();
+        editor.requestDraw();
+        renderLayers();
       };
     }
     const cur = editor.activeLayer();
-    if (cur && blend) { blend.value = cur.blend; $("layer-opacity").value = Math.round(cur.opacity * 100) + "%"; }
+    if (cur && blend) {
+      blend.value = cur.blend;
+      blend.disabled = !!cur.locked;
+      $("layer-opacity").value = Math.round(cur.opacity * 100) + "%";
+      $("layer-opacity").disabled = !!cur.locked;
+    } else if (blend) {
+      blend.disabled = true;
+      $("layer-opacity").disabled = true;
+    }
     host.innerHTML = [...editor.layers].reverse().map((l) => {
       const idx = editor.layers.indexOf(l);
       const on = idx === editor.active;
+      const blendName = (BLENDS.find((b) => b[0] === l.blend) || ["", l.blend])[1];
       return `<div class="layer ${on ? "on" : ""}" data-layer="${l.id}">
-        <button class="e ${l.visible ? "" : "off"}" data-eye="${l.id}" data-i="${l.visible ? "eye" : "eyeoff"}" data-s="15" type="button"></button>
-        <div class="t">${l.thumb ? `<img src="${l.thumb}">` : ""}</div>
-        <div class="n"><b>${escapeHtml(l.name)}</b><small>${l.blend} · ${Math.round(l.opacity * 100)}%${l.locked ? " · locked" : ""}${l.visible ? "" : " · hidden"}</small></div>
-        <button data-lock="${l.id}" data-i="lock" data-s="13" type="button" style="color:${l.locked ? "var(--ac)" : "var(--mu)"}"></button>
+        <button class="e ${l.visible ? "" : "off"}" data-eye="${l.id}" data-i="${l.visible ? "eye" : "eyeoff"}" data-s="15" type="button" title="${l.visible ? "Скрыть слой" : "Показать слой"}"></button>
+        <div class="t" title="Миниатюра">${l.thumb ? `<img src="${l.thumb}" alt="">` : ""}</div>
+        <div class="n"><b title="Двойной щелчок — переименовать">${escapeHtml(l.name)}</b><small>${escapeHtml(blendName)} · ${Math.round(l.opacity * 100)}%${l.locked ? " · замок" : ""}${l.visible ? "" : " · скрыт"}</small></div>
+        <button data-lock="${l.id}" data-i="lock" data-s="13" type="button" title="${l.locked ? "Разблокировать" : "Заблокировать"}" style="color:${l.locked ? "var(--ac)" : "var(--mu)"}"></button>
       </div>`;
     }).join("") || `<div class="empty">Нет слоёв. Загрузите изображение или сгенерируйте.</div>`;
+    renderEmpty();
     if (window.zeroImageStudioHydrateIcons) window.zeroImageStudioHydrateIcons(host);
   }
 
@@ -1353,9 +1606,14 @@
     const real = items.filter((it) => !it.example);
     const colors = { krea2_edit: "#ff7a1a", qwen_image_21: "#4aa8ff", create: "#b18cff" };
     if (!real.length) {
-      const examples = ["portrait-copper.svg", "portrait-blond.svg", "portrait-blue.svg", "portrait.svg", "portrait-green.svg"];
-      host.innerHTML = examples.map((s, i) => `<button type="button" class="g" data-example="1"><img src="assets/${s}"><s style="background:${["#ff7a1a","#b18cff","#4aa8ff","#7d8594","#3ddc97"][i]}"></s></button>`).join("");
-      $("gal-legend").innerHTML = "<span>Примеры оформления, не генерации. После запуска здесь будут ваши кадры с сидом и промтом.</span>";
+      if (new URLSearchParams(location.search).get("demo") === "1") {
+        const examples = ["portrait-copper.svg", "portrait-blond.svg", "portrait-blue.svg", "portrait.svg", "portrait-green.svg"];
+        host.innerHTML = examples.map((s, i) => `<button type="button" class="g" data-example="1"><img src="assets/${s}" alt=""><s style="background:${["#ff7a1a","#b18cff","#4aa8ff","#7d8594","#3ddc97"][i]}"></s></button>`).join("");
+        $("gal-legend").innerHTML = "<span>Демо-оформление (?demo=1), не генерации.</span>";
+      } else {
+        host.innerHTML = `<div class="empty-gal">Галерея пуста. После генерации здесь будут ваши кадры с промтом и сидом.</div>`;
+        $("gal-legend").innerHTML = "";
+      }
     } else {
       host.innerHTML = real.map((it) => {
         const col = colors[it.meta.edit_method] || colors[it.meta.pipeline] || "#7d8594";
@@ -1458,12 +1716,44 @@
     if (location.protocol === "file:") return;
     const proto = location.protocol === "https:" ? "wss" : "ws";
     ws = new WebSocket(`${proto}://${location.host}/ws?clientId=${clientId}`);
+    ws.binaryType = "arraybuffer";
     ws.addEventListener("message", (ev) => {
+      if (ev.data instanceof ArrayBuffer) { showBinaryPreview(ev.data); return; }
       if (!wsWait) return;
       let msg; try { msg = JSON.parse(ev.data); } catch { return; }
       wsWait(msg);
     });
     ws.addEventListener("close", () => setTimeout(connectWs, 1500));
+  }
+
+  function showBinaryPreview(buf) {
+    if (!state.running || buf.byteLength < 8) return;
+    const view = new DataView(buf);
+    const event = view.getUint32(0);
+    let bytes = null;
+    let mime = "image/jpeg";
+    if (event === 1) {
+      const kind = view.getUint32(4);
+      mime = kind === 2 ? "image/png" : "image/jpeg";
+      bytes = buf.slice(8);
+    } else if (event === 4) {
+      const metaLen = view.getUint32(4);
+      const start = 8 + metaLen;
+      if (start >= buf.byteLength) return;
+      try {
+        const meta = JSON.parse(new TextDecoder().decode(new Uint8Array(buf.slice(8, start))));
+        if (meta && meta.image_type) mime = meta.image_type;
+      } catch { /* ignore */ }
+      bytes = buf.slice(start);
+    }
+    if (!bytes) return;
+    const url = URL.createObjectURL(new Blob([bytes], { type: mime }));
+    const img = $("ga-preview");
+    if (!img) return;
+    const prev = img.src;
+    img.src = url;
+    img.hidden = false;
+    if (prev && prev.startsWith("blob:")) URL.revokeObjectURL(prev);
   }
 
   function waitPrompt(promptId) {
@@ -1476,9 +1766,16 @@
           const pct = d.max ? Math.round(100 * d.value / d.max) : 0;
           $("gen-progress").style.display = "block";
           $("gen-progress").firstElementChild.style.width = pct + "%";
-          $("gen-label").textContent = `Шаг ${d.value}/${d.max}`;
+          const label = `Шаг ${d.value}/${d.max}`;
+          $("gen-label").textContent = label;
+          const run = $("ga-run-label");
+          if (run) run.textContent = label;
         }
-        if (msg.type === "executing" && d.node) $("gen-label").textContent = "Узел " + d.node;
+        if (msg.type === "executing" && d.node) {
+          $("gen-label").textContent = "Узел " + d.node;
+          const run = $("ga-run-label");
+          if (run) run.textContent = "Узел " + d.node;
+        }
         if (msg.type === "execution_interrupted") {
           clearTimeout(timer); wsWait = null;
           reject(new Error("Генерация остановлена"));
@@ -1496,11 +1793,21 @@
 
   async function generate() {
     if (state.running) { await fetch("/interrupt", { method: "POST" }); return; }
+    const blocked = generateBlockReason();
+    if (blocked) { toast(blocked, { openModels: missingModelFiles().length > 0 }); if (missingModelFiles().length) openModelDrawer(); return; }
     state.running = true;
     $("btn-gen").classList.add("stop");
-    $("gen-label").textContent = "Остановка…";
-    $("btn-gen").querySelector("[data-i]") && ($("gen-label").textContent = "В очереди");
+    $("gen-label").textContent = "Отмена";
+    $("gen-progress").style.display = "block";
+    $("gen-progress").firstElementChild.style.width = "0%";
+    const runLabel = $("ga-run-label");
+    if (runLabel) runLabel.textContent = "В очереди";
+    const preview = $("ga-preview");
+    if (preview) { preview.removeAttribute("src"); preview.hidden = true; }
+    updateGenerateButton();
+    editor.requestDraw();
     try {
+      syncDefaultArea();
       nextSeed();
       const source = usesSource();
       const expand = source && state.pipeline === "edit" ? state.area.context : (editor.maskArea() > 8 ? state.area.context : 0);
@@ -1579,15 +1886,21 @@
         editor.addLayer(layer);
       }
       editor.pushUndo(snap);
-      toast("Готово, новый слой.");
+      renderEmpty();
+      toast("Готово, новый слой. Сид " + spec.seed + ".");
     } catch (err) {
-      toast(err.message || String(err));
+      const msg = err.message || String(err);
+      const missing = /не выбран/i.test(msg);
+      toast(msg, { openModels: missing });
+      if (missing) openModelDrawer();
     } finally {
       state.running = false;
       state.promptId = null;
       $("btn-gen").classList.remove("stop");
       $("gen-label").textContent = "Сгенерировать";
       $("gen-progress").style.display = "none";
+      updateGenerateButton();
+      editor.requestDraw();
       renderGallery();
     }
   }
@@ -1650,7 +1963,96 @@
     });
   }
 
-  async function saveProject() {
+  function duplicateActive() {
+    const l = editor.activeLayer(); if (!l) return;
+    editor.pushUndo(editor.fullSnapshot());
+    const c = document.createElement("canvas");
+    c.width = l.canvas.width; c.height = l.canvas.height;
+    c.getContext("2d").drawImage(l.canvas, 0, 0);
+    const copy = editor.makeLayer(l.name + " копия", c);
+    copy.x = l.x + 16; copy.y = l.y + 16; copy.blend = l.blend; copy.opacity = l.opacity;
+    editor.addLayer(copy);
+  }
+
+  function mergeDown() {
+    const i = editor.active;
+    if (i <= 0) { toast("Ниже нет слоя."); return; }
+    const upper = editor.layers[i];
+    const lower = editor.layers[i - 1];
+    if (!upper || !lower || lower.locked) { toast(lower && lower.locked ? "Нижний слой заблокирован." : "Ниже нет слоя."); return; }
+    editor.pushUndo(editor.fullSnapshot());
+    lower.ctx.save();
+    lower.ctx.setTransform(1, 0, 0, 1, 0, 0);
+    lower.ctx.globalAlpha = upper.opacity;
+    lower.ctx.globalCompositeOperation = !upper.blend || upper.blend === "normal" ? "source-over" : upper.blend;
+    lower.ctx.translate(upper.x - lower.x, upper.y - lower.y);
+    lower.ctx.rotate(upper.rotation || 0);
+    lower.ctx.scale(upper.scaleX || 1, upper.scaleY || 1);
+    lower.ctx.drawImage(upper.canvas, 0, 0);
+    lower.ctx.restore();
+    editor.layers.splice(i, 1);
+    editor.active = i - 1;
+    editor.thumb(lower);
+    editor.requestDraw();
+    renderLayers();
+  }
+
+  function maskFromLayer() {
+    const layer = editor.activeLayer();
+    if (!layer) return;
+    editor.pushUndo(editor.fullSnapshot());
+    const tmp = document.createElement("canvas");
+    tmp.width = layer.canvas.width; tmp.height = layer.canvas.height;
+    const g = tmp.getContext("2d");
+    g.drawImage(layer.canvas, 0, 0);
+    const data = g.getImageData(0, 0, tmp.width, tmp.height);
+    for (let i = 0; i < data.data.length; i += 4) {
+      const a = data.data[i + 3];
+      data.data[i] = data.data[i + 1] = data.data[i + 2] = a;
+      data.data[i + 3] = 255;
+    }
+    g.putImageData(data, 0, 0);
+    editor.maskCtx.clearRect(0, 0, editor.doc.w, editor.doc.h);
+    editor.maskCtx.drawImage(tmp, layer.x, layer.y);
+    editor.requestDraw();
+    renderInspector();
+    toast("Маска взята из непрозрачности слоя.");
+  }
+
+  function openLayerMenu(x, y) {
+    let menu = $("layer-menu");
+    if (!menu) {
+      menu = document.createElement("div");
+      menu.id = "layer-menu";
+      menu.className = "layer-menu";
+      document.body.appendChild(menu);
+      document.addEventListener("pointerdown", (e) => {
+        if (menu.hidden || menu.contains(e.target)) return;
+        menu.hidden = true;
+      });
+    }
+    const layer = editor.activeLayer();
+    menu.innerHTML = `
+      <button type="button" data-act="dup">Дублировать</button>
+      <button type="button" data-act="merge">Объединить с нижним</button>
+      <button type="button" data-act="mask">Маска из слоя</button>
+      <button type="button" data-act="del">Удалить</button>`;
+    menu.hidden = false;
+    menu.style.left = Math.min(x, window.innerWidth - 200) + "px";
+    menu.style.top = Math.min(y, window.innerHeight - 160) + "px";
+    menu.onclick = (e) => {
+      const act = e.target.closest("[data-act]");
+      menu.hidden = true;
+      if (!act) return;
+      if (act.dataset.act === "dup") duplicateActive();
+      if (act.dataset.act === "merge") mergeDown();
+      if (act.dataset.act === "mask") maskFromLayer();
+      if (act.dataset.act === "del") editor.deleteActive();
+    };
+    void layer;
+  }
+
+  async function saveProject(opts) {
     const meta = editor.exportMeta();
     meta.state = {
       projectName: state.projectName, pipeline: state.pipeline, hintId: state.hintId,
@@ -1665,7 +2067,8 @@
     const path = state.projectId ? "/zeroimagestudio/project/" + state.projectId : "/zeroimagestudio/project";
     const saved = await api(path, { method: "POST", body: fd });
     state.projectId = saved.id;
-    $("project-sub").textContent = "ComfyUI · ZeroImageStudio · сохранено " + new Date().toLocaleTimeString();
+    state.dirty = false;
+    $("project-sub").textContent = (opts && opts.auto ? "автосохранение " : "сохранено ") + new Date().toLocaleTimeString();
     return saved.id;
   }
 
@@ -1720,7 +2123,9 @@
       state.references.push({ id: ref.id, name: ref.name, canvas: c, url: c.toDataURL("image/png") });
     }
     editor.active = Math.max(0, editor.layers.length - 1);
+    if (!state.area.userPlaced) syncDefaultArea();
     editor.fit();
+    state.dirty = false;
     renderAll();
   }
 
@@ -1737,7 +2142,8 @@
       editor.doc = { w, h };
       editor.resizeMask();
       editor.maskCtx.clearRect(0, 0, w, h);
-      editor.gen = { x: Math.round(w * 0.12), y: Math.round(h * 0.08), w: Math.round(w * 0.76), h: Math.round(h * 0.7) };
+      state.area.userPlaced = false;
+      syncDefaultArea();
     }
     const layer = editor.makeLayer(String(name || "Фото").replace(/\.[^.]+$/, ""), c);
     if (demo || !editor.layers.length) {
@@ -1751,6 +2157,7 @@
     editor.requestDraw();
     renderLayers();
     renderInspector();
+    updateGenerateButton();
     toast(fit ? `Холст ${w} × ${h}. Слой в полном размере, без уменьшения.` : "Слой добавлен в полном размере, холст не менялся.");
   }
 
@@ -1793,6 +2200,28 @@
   }
 
   async function collapseZeroImageStudio() {
+    if (state.dirty) {
+      const choice = await new Promise((resolve) => {
+        const back = document.createElement("div");
+        back.className = "modal-back";
+        back.innerHTML = `<div class="modal"><h3>Проект не сохранён</h3>
+          <div class="mu">Есть несохранённые правки. Автосохранение пишет проект раз в 3 минуты.</div>
+          <div class="row" style="flex-wrap:wrap">
+            <button class="b ac" type="button" data-save="1">Сохранить и свернуть</button>
+            <button class="b" type="button" data-drop="1">Свернуть всё равно</button>
+            <button class="b" type="button" data-cancel="1">Отмена</button>
+          </div></div>`;
+        const done = (v) => { back.remove(); resolve(v); };
+        back.querySelector("[data-save]").onclick = () => done("save");
+        back.querySelector("[data-drop]").onclick = () => done("drop");
+        back.querySelector("[data-cancel]").onclick = () => done("cancel");
+        document.body.appendChild(back);
+      });
+      if (choice === "cancel") return;
+      if (choice === "save") {
+        try { await saveProject(); } catch (err) { toast(err.message || String(err)); return; }
+      }
+    }
     try {
       const id = await saveProject();
       const flat = editor.flatten();
@@ -2014,6 +2443,7 @@
         editor.resizeMask();
         editor.gen.w = Math.min(editor.gen.w, w);
         editor.gen.h = Math.min(editor.gen.h, h);
+        if (!state.area.userPlaced) syncDefaultArea();
         editor.fit();
         close();
       };
@@ -2023,8 +2453,12 @@
         editor.doc = { w: parseInt($("cw").value, 10) || 1024, h: parseInt($("ch").value, 10) || 1024 };
         editor.resizeMask();
         editor.maskCtx.clearRect(0, 0, editor.doc.w, editor.doc.h);
+        state.area.userPlaced = false;
+        syncDefaultArea();
         editor.fit();
         renderLayers();
+        renderEmpty();
+        renderInspector();
         close();
       };
     });
@@ -2078,7 +2512,7 @@
     $("graph-options").addEventListener("change", onFileChange);
     $("tools").onclick = (e) => { const b = e.target.closest("[data-tool]"); if (b) setTool(b.dataset.tool); };
     $("swatch").oninput = () => { state.color = $("swatch").value; };
-    $("prompt").oninput = () => { state.prompt = $("prompt").value; updateFinal(); };
+    $("prompt").oninput = () => { state.prompt = $("prompt").value; state.dirty = true; updateFinal(); updateGenerateButton(); };
     $("negative").oninput = () => { state.negative = $("negative").value; };
     $("project-name").onchange = () => { state.projectName = $("project-name").value || "zeroimagestudio"; };
     $("btn-gen").onclick = () => generate();
@@ -2103,7 +2537,29 @@
     $("btn-system").onclick = () => openSystem();
     $("btn-canvas-size").onclick = () => openCanvasSize();
     $("btn-open-image").onclick = () => $("file-layer").click();
-    $("brush-size").oninput = () => { state.brush.size = Number($("brush-size").value) || 1; renderTags(); };
+    $("empty-open").onclick = () => $("file-layer").click();
+    $("btn-help").onclick = () => toggleHelp();
+    const stageMid = () => {
+      const r = $("stage").getBoundingClientRect();
+      return [r.left + r.width / 2, r.top + r.height / 2];
+    };
+    $("zoom-out").onclick = () => { const [x, y] = stageMid(); editor.zoomBy(1 / 1.15, x, y); };
+    $("zoom-in").onclick = () => { const [x, y] = stageMid(); editor.zoomBy(1.15, x, y); };
+    $("zoom-fit").onclick = () => editor.fit();
+    $("zoom-100").onclick = () => editor.zoom100();
+    $("zoom-readout").onclick = () => editor.fit();
+    $("btn-cancel").onclick = () => { if (state.running) generate(); };
+    window.addEventListener("beforeunload", (e) => {
+      if (!state.dirty) return;
+      e.preventDefault();
+      e.returnValue = "";
+    });
+    setInterval(() => {
+      if (!state.dirty || state.running) return;
+      saveProject({ auto: true }).catch(() => {});
+    }, 3 * 60 * 1000);
+    const brushSize = $("brush-size");
+    if (brushSize) brushSize.oninput = () => { state.brush.size = Number(brushSize.value) || 1; renderToolOptions(); };
     $("llm-improve").onclick = () => runLlm("improve");
     $("llm-extend").onclick = () => runLlm("extend");
     $("llm-describe").onclick = () => runLlm("describe");
@@ -2318,10 +2774,10 @@
       const row = e.target.closest("[data-layer]");
       if (eye) {
         const l = editor.layers.find((x) => x.id === eye.dataset.eye);
-        if (l) l.visible = !l.visible;
+        if (l) { editor.pushUndo(editor.fullSnapshot()); l.visible = !l.visible; }
       } else if (lock) {
         const l = editor.layers.find((x) => x.id === lock.dataset.lock);
-        if (l) l.locked = !l.locked;
+        if (l) { editor.pushUndo(editor.fullSnapshot()); l.locked = !l.locked; }
       } else if (row) {
         editor.active = editor.layers.findIndex((x) => x.id === row.dataset.layer);
       } else return;
@@ -2329,13 +2785,37 @@
       renderLayers();
     };
     $("layer-list").ondblclick = (e) => {
+      const nameEl = e.target.closest(".n b");
       const row = e.target.closest("[data-layer]");
-      if (!row) return;
+      if (!row || !nameEl) return;
       const l = editor.layers.find((x) => x.id === row.dataset.layer);
       if (!l) return;
-      const name = window.prompt("Имя слоя", l.name);
-      if (name) { l.name = name; renderLayers(); }
+      const input = document.createElement("input");
+      input.className = "f";
+      input.value = l.name;
+      input.style.width = "100%";
+      nameEl.replaceWith(input);
+      input.focus();
+      input.select();
+      const commit = () => {
+        const next = input.value.trim();
+        if (next && next !== l.name) { editor.pushUndo(editor.fullSnapshot()); l.name = next; }
+        renderLayers();
+      };
+      input.onkeydown = (ev) => {
+        if (ev.key === "Enter") { ev.preventDefault(); input.blur(); }
+        if (ev.key === "Escape") { input.onblur = null; renderLayers(); }
+      };
+      input.onblur = commit;
     };
+    $("layer-list").addEventListener("contextmenu", (e) => {
+      const row = e.target.closest("[data-layer]");
+      if (!row) return;
+      e.preventDefault();
+      editor.active = editor.layers.findIndex((x) => x.id === row.dataset.layer);
+      renderLayers();
+      openLayerMenu(e.clientX, e.clientY);
+    });
     $("btn-layer-add").onclick = () => {
       editor.pushUndo(editor.fullSnapshot());
       const layer = editor.makeLayer("Слой " + (editor.layers.length + 1));
@@ -2428,6 +2908,7 @@
     renderPipe();
     renderModelSummary();
     if (t.dataset.file === "method") renderRefs();
+    updateGenerateButton();
   }
 
   async function onLoraClick(e) {
@@ -2496,6 +2977,11 @@
 
   async function boot() {
     editor = new Editor($("stage"));
+    editor.onChange = () => {
+      state.dirty = true;
+      const sub = $("project-sub");
+      if (sub) sub.textContent = "есть несохранённые правки";
+    };
     bindStatic();
     connectWs();
     try {
@@ -2523,12 +3009,18 @@
     }
     const params = new URLSearchParams(location.search);
     if (params.get("project")) {
-      try { await loadProject(params.get("project")); } catch (err) { toast(err.message); await loadExample(); }
+      try { await loadProject(params.get("project")); } catch (err) { toast(err.message); renderAll(); }
     } else {
       const hint = state.hints.find((h) => h.id === state.hintId);
       if (hint) applyHint(hint);
-      await loadExample();
+      if (params.get("demo") === "1") await loadExample();
+      else {
+        syncDefaultArea();
+        editor.fit();
+        renderAll();
+      }
     }
+    state.dirty = false;
     renderGallery();
     pollStats();
     booted = true;

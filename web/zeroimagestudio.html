@@ -13,13 +13,13 @@
   <div class="logo" title="ZeroImageStudio">Z</div>
   <div class="brand">ZeroImageStudio</div>
   <div class="project">
-    <input id="project-name" class="project-name" value="Портрет_волосы" title="Портрет_волосы">
+    <input id="project-name" class="project-name" value="Новый проект" title="Имя проекта">
     <div class="mu" id="project-sub">проект</div>
   </div>
   <button class="b" id="btn-save" data-i="save" data-s="14" title="Сохранить"><span class="btn-label">Сохранить</span></button>
   <button class="b" id="btn-load" data-i="open" data-s="14" title="Загрузить"><span class="btn-label">Загрузить</span></button>
-  <button class="b s" id="btn-undo" data-i="undo" data-s="13" title="Ctrl+Z"></button>
-  <button class="b s" id="btn-redo" data-i="redo" data-s="13" title="Ctrl+Y"></button>
+  <button class="b s" id="btn-undo" data-i="undo" data-s="13" title="Отменить (Ctrl+Z)"></button>
+  <button class="b s" id="btn-redo" data-i="redo" data-s="13" title="Повторить (Ctrl+Shift+Z)"></button>
   <div class="tabs">
     <button type="button" class="on" data-tab="canvas" data-i="image" data-s="14">Холст</button>
     <button type="button" data-tab="gallery" data-i="grid" data-s="14">Галерея <em id="gal-count">0</em></button>
@@ -34,11 +34,11 @@
   <button class="b ac" id="btn-collapse" data-i="collapse" data-s="14">Свернуть в ноду</button>
 </div>
 <div class="pipe" id="pipe">
-  <span class="mu">Граф генерации:</span>
+  <span class="mu pipe-label">Граф генерации:</span>
   <div id="pipe-steps" class="row"></div>
   <div class="top-gap"></div>
   <span class="mu mono" id="sys-stats">GPU … · очередь …</span>
-  <button class="b s" id="btn-focus" data-i="link" data-s="12">Открыть в графе ComfyUI</button>
+  <button class="b s" id="btn-focus" data-i="link" data-s="12" title="Открыть в графе ComfyUI">Открыть в графе ComfyUI</button>
 </div>
 
 <div class="cols">
@@ -56,10 +56,11 @@
     <button class="tool" data-tool="mask" data-i="mask" data-s="17" title="Маска области (Q)"><small>Q</small></button>
     <button class="tool on" data-tool="genarea" data-i="genarea" data-s="17" title="Область генерации (G)"><small>G</small></button>
     <hr>
-    <button class="tool" data-tool="hand" data-i="hand" data-s="17" title="Рука (пробел)"></button>
-    <button class="tool" data-tool="zoom" data-i="zoom" data-s="17" title="Масштаб"></button>
+    <button class="tool" data-tool="hand" data-i="hand" data-s="17" title="Рука (H, пробел)"></button>
+    <button class="tool" data-tool="zoom" data-i="zoom" data-s="17" title="Масштаб (Z)"></button>
     <hr>
     <input id="swatch" type="color" value="#e7c27a" title="Цвет кисти" style="width:28px;height:22px;border:0;background:transparent;padding:0">
+    <button class="tool help" id="btn-help" type="button" title="Клавиши (?)">?</button>
   </div>
 
   <div class="left">
@@ -122,17 +123,30 @@
 
   <div class="center">
     <div class="node" style="--c:#4aa8ff;flex:1">
-      <div class="nh"><span class="d"></span>Холст
-        <span class="r"><span class="mono" id="canvas-info">—</span>
-          <button class="b s" id="btn-open-image" data-i="open" data-s="12">Открыть изображение</button>
-          <button class="b s" id="btn-canvas-size" data-i="crop" data-s="12">Размер холста</button>
+      <div class="nh canvas-head"><span class="d"></span><span class="ht">Холст</span>
+        <span class="mono" id="canvas-info" title="RGB 8 бит">—</span>
+        <span class="zoombar">
+          <button type="button" class="b s" id="zoom-out" title="Уменьшить">−</button>
+          <button type="button" class="b s zoom-read" id="zoom-readout" title="Текущий масштаб">100%</button>
+          <button type="button" class="b s" id="zoom-in" title="Увеличить">+</button>
+          <button type="button" class="b s" id="zoom-fit" title="Вместить в окно (Ctrl+0)">Вместить</button>
+          <button type="button" class="b s" id="zoom-100" title="Масштаб 100% (Ctrl+1)">100%</button>
+        </span>
+        <span class="r">
+          <button class="b s" id="btn-open-image" data-i="open" data-s="12" title="Открыть изображение"><span class="btn-label">Открыть изображение</span></button>
+          <button class="b s" id="btn-canvas-size" data-i="crop" data-s="12" title="Размер холста"><span class="btn-label">Размер холста</span></button>
         </span>
       </div>
+      <div class="opts" id="tool-options"></div>
       <div class="stage" id="stage">
-        <div style="position:absolute;left:12px;top:12px;display:flex;flex-direction:column;gap:6px;align-items:flex-start;z-index:3;pointer-events:none">
-          <span class="tag tgr" id="mask-tag" style="font-size:10.5px;padding:3px 7px">Маска: нет</span>
-          <span class="tag to" id="context-tag" style="font-size:10.5px;padding:3px 7px">Контекст</span>
-          <label class="tag" style="pointer-events:auto;display:flex;align-items:center;gap:6px">Кисть <input id="brush-size" class="range" type="range" min="1" max="300" value="64" style="width:88px"></label>
+        <div class="empty-stage" id="empty-stage">
+          <div class="empty-card">
+            <b>Откройте изображение, перетащите или вставьте Ctrl+V</b>
+            <div class="mu">Пиксели не уменьшаются. Холст можно подогнать под кадр.</div>
+            <button type="button" class="b ac" id="empty-open" data-i="open" data-s="14">Открыть изображение</button>
+            <div class="mu" id="empty-new-label">Новый холст</div>
+            <div class="row empty-sizes" id="empty-sizes"></div>
+          </div>
         </div>
       </div>
     </div>
@@ -179,7 +193,9 @@
           <button class="b s" id="btn-system" data-i="gear" data-s="12">Системный промт</button>
         </div>
         <div class="progress-line" id="gen-progress" style="display:none"><i></i></div>
-        <button class="gen" id="btn-gen"><span data-i="play" data-s="14"></span><span id="gen-label">Сгенерировать</span> <span class="mono" id="gen-batch" style="font-weight:500;font-size:11px;opacity:.75">×1 · Ctrl+↵</span></button>
+        <div class="gen-wrap" id="gen-wrap" title="Сгенерировать (Ctrl+Enter)">
+          <button class="gen" id="btn-gen" type="button" title="Сгенерировать (Ctrl+Enter)"><span data-i="play" data-s="14"></span><span id="gen-label">Сгенерировать</span> <span class="mono" id="gen-batch" style="font-weight:500;font-size:11px;opacity:.75">×1 · Ctrl+↵</span></button>
+        </div>
       </div>
     </div>
   </div>
