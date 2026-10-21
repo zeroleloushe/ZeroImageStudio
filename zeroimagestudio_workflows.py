@@ -1,10 +1,10 @@
-"""Build ComfyUI API-format workflows for the two generic Studio pipelines.
+"""Build ComfyUI API-format workflows for the two generic ZeroImageStudio pipelines.
 
 Создание (create): checkpoint or diffusion model + text encoder + VAE + LoRAs + sampler.
 Редактирование (edit): the same loaders, then one of
   - inpaint / img2img via core nodes (any model),
   - Qwen Image 2.1 via core TextEncodeQwenImage21,
-  - Krea 2 Edit via the embedded StudioKrea2Edit* nodes (or the optional external pack).
+  - Krea 2 Edit via the embedded ZeroImageStudioKrea2Edit* nodes (or the optional external pack).
 
 No per-model Python. A hint or a preset only fills this spec.
 """
@@ -190,7 +190,7 @@ def _save(g: _Graph, samples, vae, prefix: str) -> str:
     decoded = g.add("VAEDecode", {"samples": samples, "vae": vae}, "VAEDecode")
     return g.add(
         "SaveImage",
-        {"images": g.ref(decoded, 0), "filename_prefix": prefix or "studio/gen"},
+        {"images": g.ref(decoded, 0), "filename_prefix": prefix or "zeroimagestudio/gen"},
         "Save",
     )
 
@@ -269,7 +269,7 @@ def build_create(spec: dict, warnings: list[str]) -> dict:
             positive, negative, latent = g.ref(pos, 0), g.ref(neg, 0), g.ref(enc, 0)
         if denoise >= 0.999:
             warnings.append("Inpaint с denoise 1 перегенерирует маску почти с нуля. Для правки обычно 0.4–0.85.")
-        _save(g, g.ref(_sampler(g, spec, model, positive, negative, latent, denoise), 0), vae, spec.get("filename_prefix") or "studio/gen")
+        _save(g, g.ref(_sampler(g, spec, model, positive, negative, latent, denoise), 0), vae, spec.get("filename_prefix") or "zeroimagestudio/gen")
         return g.nodes
 
     if has_image and denoise < 0.999:
@@ -279,7 +279,7 @@ def build_create(spec: dict, warnings: list[str]) -> dict:
             g,
             g.ref(_sampler(g, spec, model, g.ref(pos, 0), g.ref(neg, 0), g.ref(enc, 0), denoise), 0),
             vae,
-            spec.get("filename_prefix") or "studio/gen",
+            spec.get("filename_prefix") or "zeroimagestudio/gen",
         )
         return g.nodes
 
@@ -289,7 +289,7 @@ def build_create(spec: dict, warnings: list[str]) -> dict:
         g,
         g.ref(_sampler(g, spec, model, g.ref(pos, 0), g.ref(neg, 0), g.ref(latent, 0), 1.0), 0),
         vae,
-        spec.get("filename_prefix") or "studio/gen",
+        spec.get("filename_prefix") or "zeroimagestudio/gen",
     )
     return g.nodes
 
@@ -329,7 +329,7 @@ def _build_qwen(g, spec, warnings, model, clip, vae, prompt, negative, include_i
         g,
         g.ref(_sampler(g, spec, model, g.ref(enc, 0), g.ref(enc, 1), g.ref(enc, 2), denoise if include_image else 1.0), 0),
         vae,
-        spec.get("filename_prefix") or "studio/gen",
+        spec.get("filename_prefix") or "zeroimagestudio/gen",
     )
     return g.nodes
 
@@ -355,8 +355,8 @@ def build_krea_edit(spec: dict, warnings: list[str]) -> dict:
         patch_cls = "Krea2EditModelPatch"
         enc_cls = "Krea2EditGroundedEncode"
     else:
-        patch_cls = "StudioKrea2EditModelPatch"
-        enc_cls = "StudioKrea2EditGroundedEncode"
+        patch_cls = "ZeroImageStudioKrea2EditModelPatch"
+        enc_cls = "ZeroImageStudioKrea2EditGroundedEncode"
 
     w, h, batch = _size(spec, 16)
     src = _load_image(g, spec["image"], "Source")
@@ -417,7 +417,7 @@ def build_krea_edit(spec: dict, warnings: list[str]) -> dict:
         g,
         g.ref(_sampler(g, spec, g.ref(patched, 0), g.ref(pos, 0), g.ref(neg, 0), g.ref(latent, 0), denoise), 0),
         vae,
-        spec.get("filename_prefix") or "studio/gen",
+        spec.get("filename_prefix") or "zeroimagestudio/gen",
     )
     return g.nodes
 
@@ -489,7 +489,7 @@ def _build_qwen_legacy(spec: dict, warnings: list[str]) -> dict:
         g,
         g.ref(_sampler(g, spec, model, g.ref(pos, 0), g.ref(neg, 0), g.ref(latent, 0), 1.0), 0),
         vae,
-        spec.get("filename_prefix") or "studio/gen",
+        spec.get("filename_prefix") or "zeroimagestudio/gen",
     )
     return g.nodes
 

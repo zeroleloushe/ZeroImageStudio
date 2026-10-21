@@ -1,6 +1,6 @@
-"""Filesystem layout for Studio projects, gallery, presets and settings.
+"""Filesystem layout for ZeroImageStudio projects, gallery, presets and settings.
 
-Lives under ComfyUI's user directory (``user/studio``) plus commits/gallery
+Lives under ComfyUI's user directory (``user/zeroimagestudio``) plus commits/gallery
 PNGs under the output directory so the graph node can load them.
 """
 
@@ -26,14 +26,14 @@ def _folder_paths():
 
 def user_root() -> str:
     fp = _folder_paths()
-    root = os.path.join(fp.get_user_directory(), "studio")
+    root = os.path.join(fp.get_user_directory(), "zeroimagestudio")
     os.makedirs(root, exist_ok=True)
     return root
 
 
 def output_root() -> str:
     fp = _folder_paths()
-    root = os.path.join(fp.get_output_directory(), "studio")
+    root = os.path.join(fp.get_output_directory(), "zeroimagestudio")
     os.makedirs(root, exist_ok=True)
     return root
 
@@ -150,7 +150,7 @@ def write_png(path: str, data: bytes, meta: dict | None = None) -> None:
     info = PngImagePlugin.PngInfo()
     if meta is not None:
         payload = json.dumps(meta, ensure_ascii=False)
-        info.add_text("studio", payload)
+        info.add_text("zeroimagestudio", payload)
         prompt = meta.get("prompt") or ""
         if prompt:
             info.add_text("parameters", prompt)
@@ -160,7 +160,7 @@ def write_png(path: str, data: bytes, meta: dict | None = None) -> None:
 def read_png_meta(path: str) -> dict:
     try:
         image = Image.open(path)
-        raw = (image.info or {}).get("studio")
+        raw = (image.info or {}).get("zeroimagestudio")
         if not raw:
             return {}
         data = json.loads(raw)
@@ -238,11 +238,11 @@ def commit_image(image_bytes: bytes, mask_bytes: bytes | None, meta: dict) -> di
     folder = os.path.join(output_root(), "commits")
     os.makedirs(folder, exist_ok=True)
     ident = new_id()
-    image_rel = f"studio/commits/{ident}.png"
+    image_rel = f"zeroimagestudio/commits/{ident}.png"
     write_png(os.path.join(folder, ident + ".png"), image_bytes, meta)
     mask_rel = ""
     if mask_bytes:
-        mask_rel = f"studio/commits/{ident}_mask.png"
+        mask_rel = f"zeroimagestudio/commits/{ident}_mask.png"
         write_png(os.path.join(folder, ident + "_mask.png"), mask_bytes, None)
     return {"image": image_rel, "mask": mask_rel, "id": ident}
 
@@ -260,7 +260,7 @@ def save_gallery_image(image_bytes: bytes, meta: dict) -> dict:
     meta.setdefault("id", ident)
     meta.setdefault("created", int(time.time()))
     write_png(path, image_bytes, meta)
-    return {"id": ident, "file": f"studio/gallery/{ident}.png", "meta": meta}
+    return {"id": ident, "file": f"zeroimagestudio/gallery/{ident}.png", "meta": meta}
 
 
 def list_gallery() -> list[dict]:
@@ -277,7 +277,7 @@ def list_gallery() -> list[dict]:
             meta.setdefault("created", int(os.path.getmtime(path)))
         except OSError:
             meta.setdefault("created", 0)
-        items.append({"id": ident, "file": f"studio/gallery/{name}", "meta": meta})
+        items.append({"id": ident, "file": f"zeroimagestudio/gallery/{name}", "meta": meta})
     items.sort(key=lambda x: x["meta"].get("created") or 0, reverse=True)
     return items
 

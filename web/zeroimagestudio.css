@@ -27,6 +27,7 @@ button { cursor: pointer; }
   width: 26px; height: 26px; border-radius: 6px; background: var(--ac); color: #111;
   font-weight: 800; display: grid; place-items: center; flex: none;
 }
+.brand { font-weight: 800; font-size: 13px; letter-spacing: -0.03em; color: #fff; flex: none; }
 .tabs { display: flex; height: 44px; margin-left: 8px; }
 .tabs button {
   padding: 0 16px; display: flex; align-items: center; gap: 7px; color: var(--mu);

@@ -1,6 +1,6 @@
 import unittest
 
-from studio_workflows import WorkflowError, assemble_prompt, build_workflow, snap
+from zeroimagestudio_workflows import WorkflowError, assemble_prompt, build_workflow, snap
 
 
 def _diff_spec(**extra):
@@ -96,7 +96,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(lora["inputs"]["strength_model"], 0.8)
 
     def test_create_inpaint(self):
-        spec = _diff_spec(image="studio/crop.png", mask="studio/mask.png", has_mask=True, denoise=0.7, latent_mode="standard")
+        spec = _diff_spec(image="zeroimagestudio/crop.png", mask="zeroimagestudio/mask.png", has_mask=True, denoise=0.7, latent_mode="standard")
         prompt, _w, _b = build_workflow(spec)
         self.assertIn("VAEEncodeForInpaint", classes(prompt))
         self.assertIn("ImageToMask", classes(prompt))
@@ -106,8 +106,8 @@ class WorkflowTests(unittest.TestCase):
 
     def test_create_inpaint_conditioning(self):
         spec = _diff_spec(
-            image="studio/crop.png",
-            mask="studio/mask.png",
+            image="zeroimagestudio/crop.png",
+            mask="zeroimagestudio/mask.png",
             has_mask=True,
             inpaint_mode="inpaint_conditioning",
         )
@@ -115,7 +115,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("InpaintModelConditioning", classes(prompt))
 
     def test_create_img2img(self):
-        spec = _diff_spec(image="studio/crop.png", has_mask=False, denoise=0.55)
+        spec = _diff_spec(image="zeroimagestudio/crop.png", has_mask=False, denoise=0.55)
         prompt, _w, _b = build_workflow(spec)
         self.assertIn("VAEEncode", classes(prompt))
         self.assertNotIn("VAEEncodeForInpaint", classes(prompt))
@@ -125,8 +125,8 @@ class WorkflowTests(unittest.TestCase):
             pipeline="edit",
             edit_method="qwen_image_21",
             clip_type="qwen_image",
-            image="studio/crop.png",
-            references=["studio/ref.png"],
+            image="zeroimagestudio/crop.png",
+            references=["zeroimagestudio/ref.png"],
             qwen_resolution=1024,
             has_mask=True,
         )
@@ -145,18 +145,18 @@ class WorkflowTests(unittest.TestCase):
         spec = _diff_spec(
             pipeline="edit",
             edit_method="krea2_edit",
-            image="studio/crop.png",
-            references=["studio/id.png"],
+            image="zeroimagestudio/crop.png",
+            references=["zeroimagestudio/id.png"],
             loras=[{"name": "krea2_identity_edit_v2.safetensors", "enabled": True, "strength_model": 1, "strength_clip": 0}],
             krea={"fit_mode": "fit", "grounding_px": 1024, "impl": "internal", "ref_position": "beside (right of target)"},
             denoise=0.4,
         )
         prompt, warnings, built = build_workflow(spec)
         self.assertEqual(built, "edit:krea2_edit")
-        self.assertIn("StudioKrea2EditModelPatch", classes(prompt))
-        self.assertIn("StudioKrea2EditGroundedEncode", classes(prompt))
-        self.assertEqual(classes(prompt).count("StudioKrea2EditGroundedEncode"), 2)
-        patch = next(n for n in prompt.values() if n["class_type"] == "StudioKrea2EditModelPatch")
+        self.assertIn("ZeroImageStudioKrea2EditModelPatch", classes(prompt))
+        self.assertIn("ZeroImageStudioKrea2EditGroundedEncode", classes(prompt))
+        self.assertEqual(classes(prompt).count("ZeroImageStudioKrea2EditGroundedEncode"), 2)
+        patch = next(n for n in prompt.values() if n["class_type"] == "ZeroImageStudioKrea2EditModelPatch")
         latent = next(nid for nid, n in prompt.items() if n["class_type"] == "EmptySD3LatentImage")
         sampler = next(n for n in prompt.values() if n["class_type"] == "KSampler")
         self.assertEqual(patch["inputs"]["target_latent"], [latent, 0])
@@ -170,7 +170,7 @@ class WorkflowTests(unittest.TestCase):
         spec = _diff_spec(pipeline="edit", edit_method="krea2_edit", image="a.png", krea={"impl": "external"})
         prompt, _w, _b = build_workflow(spec)
         self.assertIn("Krea2EditModelPatch", classes(prompt))
-        self.assertNotIn("StudioKrea2EditModelPatch", classes(prompt))
+        self.assertNotIn("ZeroImageStudioKrea2EditModelPatch", classes(prompt))
 
     def test_edit_inpaint_requires_image(self):
         with self.assertRaises(WorkflowError):

@@ -1,7 +1,7 @@
-/* ComfyUI Studio — холст, слои, два пайплайна. Runs inside studio.html.
+/* ZeroImageStudio — холст, слои, два пайплайна. Runs inside zeroimagestudio.html.
    If ComfyUI imports this file as an extension, the guard below makes it a no-op. */
 (function () {
-  if (!window.__STUDIO_PAGE) return;
+  if (!window.__ZEROIMAGESTUDIO_PAGE) return;
 
   const $ = (id) => document.getElementById(id);
   const BLENDS = [
@@ -12,7 +12,7 @@
   ];
   const state = {
     projectId: null,
-    projectName: "Портрет_волосы.studio",
+    projectName: "Портрет_волосы",
     pipeline: "edit",
     hintId: "krea2_identity_edit",
     prompt: "медно-рыжие волосы, мягкие естественные пряди, сохранить текстуру и объём, тёплый контровой свет",
@@ -63,7 +63,7 @@
   }
   const cfg = () => (state.pipeline === "edit" ? state.edit : state.create);
 
-  const clientId = (crypto.randomUUID && crypto.randomUUID()) || ("studio-" + Date.now());
+  const clientId = (crypto.randomUUID && crypto.randomUUID()) || ("zeroimagestudio-" + Date.now());
   let ws = null;
   let wsWait = null;
 
@@ -790,7 +790,7 @@
     $("negative").value = state.negative;
     $("project-name").value = state.projectName;
     document.querySelectorAll("#mode button").forEach((b) => b.classList.toggle("on", b.dataset.pipe === state.pipeline));
-    if (window.studioHydrateIcons) window.studioHydrateIcons(document);
+    if (window.zeroImageStudioHydrateIcons) window.zeroImageStudioHydrateIcons(document);
   }
 
   function renderHints() {
@@ -856,7 +856,7 @@
       `<button class="ref add" id="ref-upload" type="button"><div><span data-i="upload" data-s="15"></span><br>Загрузить</div></button>` +
       `<button class="ref add" id="ref-from-layer" type="button"><div><span data-i="layers" data-s="15"></span><br>Из слоя</div></button>`;
     $("ref-cap").textContent = `для Edit-моделей · ${state.references.length}`;
-    if (window.studioHydrateIcons) window.studioHydrateIcons(host);
+    if (window.zeroImageStudioHydrateIcons) window.zeroImageStudioHydrateIcons(host);
   }
 
   function activeLoras() { return cfg().loras; }
@@ -964,7 +964,7 @@
       <span>Батч</span><input id="batch" class="f" value="${s.batch}">
     `;
     $("gen-batch").textContent = `×${s.batch} · Ctrl+↵`;
-    if (window.studioHydrateIcons) window.studioHydrateIcons($("sampler-box"));
+    if (window.zeroImageStudioHydrateIcons) window.zeroImageStudioHydrateIcons($("sampler-box"));
     bindSampler();
   }
 
@@ -1061,7 +1061,7 @@
         <button data-lock="${l.id}" data-i="lock" data-s="13" type="button" style="color:${l.locked ? "var(--ac)" : "var(--mu)"}"></button>
       </div>`;
     }).join("") || `<div class="empty">Нет слоёв. Загрузите изображение или сгенерируйте.</div>`;
-    if (window.studioHydrateIcons) window.studioHydrateIcons(host);
+    if (window.zeroImageStudioHydrateIcons) window.zeroImageStudioHydrateIcons(host);
   }
 
   function renderChips() {
@@ -1070,7 +1070,7 @@
       `<button type="button" class="chip ${p.enabled ? "on" : ""}" data-chip="${p.id}"><span class="p">${p.position === "after" ? "ПОСЛЕ" : "ДО"}</span>${escapeHtml(p.name)}</button>`
     ).join("") + `<button type="button" class="chip" id="chip-add" style="border-style:dashed" data-i="plus" data-s="12">пресет</button>`;
     updateFinal();
-    if (window.studioHydrateIcons) window.studioHydrateIcons(host);
+    if (window.zeroImageStudioHydrateIcons) window.zeroImageStudioHydrateIcons(host);
   }
 
   function assembleLocal() {
@@ -1140,7 +1140,7 @@
     } else {
       host.innerHTML = real.map((it) => {
         const col = colors[it.meta.edit_method] || colors[it.meta.pipeline] || "#7d8594";
-        return `<button type="button" class="g" data-gal="${it.id}"><img src="/view?filename=${encodeURIComponent(it.file.split("/").pop())}&type=output&subfolder=studio/gallery"><s style="background:${col}"></s></button>`;
+        return `<button type="button" class="g" data-gal="${it.id}"><img src="/view?filename=${encodeURIComponent(it.file.split("/").pop())}&type=output&subfolder=zeroimagestudio/gallery"><s style="background:${col}"></s></button>`;
       }).join("");
       $("gal-legend").innerHTML = `<span><b style="color:#ff7a1a">▬</b> Krea Edit</span><span><b style="color:#b18cff">▬</b> Создание</span><span><b style="color:#4aa8ff">▬</b> Qwen</span>`;
     }
@@ -1200,7 +1200,7 @@
       batch: s.batch,
       width: state.area.outW,
       height: state.area.outH,
-      filename_prefix: "studio/gen",
+      filename_prefix: "zeroimagestudio/gen",
     };
   }
 
@@ -1217,7 +1217,7 @@
     fd.append("image", blob, name);
     fd.append("overwrite", "true");
     fd.append("type", "input");
-    fd.append("subfolder", "studio");
+    fd.append("subfolder", "zeroimagestudio");
     const res = await fetch("/upload/image", { method: "POST", body: fd });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "Не удалось загрузить изображение в ComfyUI");
@@ -1297,7 +1297,7 @@
       const refs = [];
       for (const ref of state.references) refs.push(await uploadCanvas(ref.canvas, "ref.png"));
       spec.references = refs;
-      const built = await api("/studio/build_workflow", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(spec) });
+      const built = await api("/zeroimagestudio/build_workflow", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(spec) });
       if (built.warnings && built.warnings.length) toast(built.warnings[0]);
       if (built.pipe) {
         $("pipe-steps").innerHTML = built.pipe.map((s, i) =>
@@ -1332,7 +1332,7 @@
           fd.append("mode", state.area.paste);
           fd.append("feather", String(state.area.feather));
           fd.append("color_match", state.area.colorMatch ? "1" : "0");
-          const res = await fetch("/studio/paste", { method: "POST", body: fd });
+          const res = await fetch("/zeroimagestudio/paste", { method: "POST", body: fd });
           if (!res.ok) throw new Error(await res.text());
           pasted = await res.blob();
         } catch (err) {
@@ -1390,7 +1390,7 @@
     const fd = new FormData();
     fd.append("image", blob, "gen.png");
     fd.append("meta", JSON.stringify(meta));
-    const saved = await api("/studio/gallery", { method: "POST", body: fd });
+    const saved = await api("/zeroimagezeroimagestudio/gallery", { method: "POST", body: fd });
     state.gallery.unshift({ id: saved.id, file: saved.file, meta: saved.meta });
   }
 
@@ -1439,15 +1439,15 @@
     fd.append("mask.png", await canvasBlob(editor.maskCanvas), "mask.png");
     for (const layer of editor.layers) fd.append("layers/" + layer.id + ".png", await canvasBlob(layer.canvas), layer.id + ".png");
     for (const ref of state.references) fd.append("refs/" + ref.id + ".png", await canvasBlob(ref.canvas), ref.id + ".png");
-    const path = state.projectId ? "/studio/project/" + state.projectId : "/studio/project";
+    const path = state.projectId ? "/zeroimagestudio/project/" + state.projectId : "/zeroimagestudio/project";
     const saved = await api(path, { method: "POST", body: fd });
     state.projectId = saved.id;
-    $("project-sub").textContent = "ComfyUI · Studio · сохранено " + new Date().toLocaleTimeString();
+    $("project-sub").textContent = "ComfyUI · ZeroImageStudio · сохранено " + new Date().toLocaleTimeString();
     return saved.id;
   }
 
   async function loadProject(id) {
-    const data = await api("/studio/project/" + id);
+    const data = await api("/zeroimagestudio/project/" + id);
     const meta = data.meta || {};
     state.projectId = id;
     if (meta.state) Object.assign(state, {
@@ -1469,7 +1469,7 @@
     editor.resizeMask();
     editor.layers = [];
     for (const layer of meta.layers || []) {
-      const img = await loadImage(`/studio/project/${id}/file/${layer.file}`);
+      const img = await loadImage(`/zeroimagestudio/project/${id}/file/${layer.file}`);
       const c = document.createElement("canvas");
       c.width = img.width; c.height = img.height;
       c.getContext("2d").drawImage(img, 0, 0);
@@ -1480,14 +1480,14 @@
     }
     if (meta.mask) {
       try {
-        const img = await loadImage(`/studio/project/${id}/file/${meta.mask}`);
+        const img = await loadImage(`/zeroimagestudio/project/${id}/file/${meta.mask}`);
         editor.maskCtx.clearRect(0, 0, editor.doc.w, editor.doc.h);
         editor.maskCtx.drawImage(img, 0, 0);
       } catch { /* no mask */ }
     }
     state.references = [];
     for (const ref of meta.references || []) {
-      const img = await loadImage(`/studio/project/${id}/file/${ref.file}`);
+      const img = await loadImage(`/zeroimagestudio/project/${id}/file/${ref.file}`);
       const c = document.createElement("canvas");
       c.width = img.width; c.height = img.height;
       c.getContext("2d").drawImage(img, 0, 0);
@@ -1515,7 +1515,7 @@
     renderAll();
   }
 
-  async function collapseStudio() {
+  async function collapseZeroImageStudio() {
     try {
       const id = await saveProject();
       const flat = editor.flatten();
@@ -1524,11 +1524,11 @@
       fd.append("image", await canvasBlob(flat), "flat.png");
       fd.append("mask", await canvasBlob(mask), "mask.png");
       fd.append("meta", JSON.stringify({ projectId: id, name: state.projectName, layers: editor.layers.map((l) => ({ name: l.name, blend: l.blend, opacity: l.opacity, meta: l.meta })) }));
-      const saved = await api("/studio/commit", { method: "POST", body: fd });
+      const saved = await api("/zeroimagestudio/commit", { method: "POST", body: fd });
       const preview = flat.toDataURL("image/jpeg", 0.8);
       if (window.parent && window.parent !== window) {
         window.parent.postMessage({
-          type: "studio-collapse",
+          type: "zeroimagestudio-collapse",
           projectId: id,
           image: saved.image,
           mask: saved.mask,
@@ -1538,7 +1538,7 @@
           info: { layers: editor.layers.length, doc: editor.doc, preset: $("preset-select").selectedOptions[0] ? $("preset-select").selectedOptions[0].textContent : "" },
         }, "*");
       } else {
-        toast("Сведено в " + saved.image + ". Откройте студию из ноды, чтобы вернуть кадр в граф.");
+        toast("Сведено в " + saved.image + ". Откройте ZeroImageStudio из ноды, чтобы вернуть кадр в граф.");
       }
     } catch (err) {
       toast(err.message || String(err));
@@ -1621,7 +1621,7 @@
     const r = anchor.getBoundingClientRect();
     pop.style.left = Math.max(8, r.left - 280) + "px";
     pop.style.top = Math.max(8, r.bottom + 8) + "px";
-    if (window.studioHydrateIcons) window.studioHydrateIcons(pop);
+    if (window.zeroImageStudioHydrateIcons) window.zeroImageStudioHydrateIcons(pop);
     $("pop-apply").onclick = () => { applyMeta(m); pop.hidden = true; document.body.dataset.tab = "canvas"; };
     $("pop-seed").onclick = () => { state.sampler.seed = m.seed || state.sampler.seed; renderSampler(); pop.hidden = true; };
     $("pop-lora").onclick = () => { if (m.loras) { cfg().loras = m.loras.map((l) => ({ enabled: true, strength_clip: l.strength_model, trigger_mode: "end", triggers: [], ...l })); renderLoras(); } pop.hidden = true; };
@@ -1638,7 +1638,7 @@
         body.image = small.toDataURL("image/jpeg", 0.8);
       }
       $("gen-label").textContent = "LLM…";
-      const res = await api("/studio/llm", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const res = await api("/zeroimagestudio/llm", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       if (mode === "extend") state.prompt = (state.prompt ? state.prompt.replace(/[, ]*$/, "") + ", " : "") + res.text;
       else state.prompt = res.text;
       $("prompt").value = state.prompt;
@@ -1669,11 +1669,11 @@
       <div class="mu">Ключ, если сервер его требует</div>
       <input id="set-key" type="password" value="${escapeHtml(s.llm_key || "")}">`, async (box, close) => {
       box.querySelector("[data-ok]").onclick = async () => {
-        state.settings = await api("/studio/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
+        state.settings = await api("/zeroimagestudio/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
           civitai_token: $("set-civ").value, llm_base: $("set-base").value, llm_model: $("set-model").value, llm_key: $("set-key").value,
         }) });
         close();
-        toast("Настройки сохранены в user/studio/settings.json");
+        toast("Настройки сохранены в user/zeroimagestudio/settings.json");
       };
     });
   }
@@ -1690,7 +1690,7 @@
         const presets = (state.settings && state.settings.llm_presets) || [];
         const name = $("sys-name").value.trim();
         if (name) presets.unshift({ id: "llm" + Date.now(), name, systems: llm_systems });
-        state.settings = await api("/studio/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ llm_systems, llm_presets: presets }) });
+        state.settings = await api("/zeroimagestudio/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ llm_systems, llm_presets: presets }) });
         fillLlmPresets();
         close();
       };
@@ -1770,11 +1770,11 @@
     $("swatch").oninput = () => { state.color = $("swatch").value; };
     $("prompt").oninput = () => { state.prompt = $("prompt").value; updateFinal(); };
     $("negative").oninput = () => { state.negative = $("negative").value; };
-    $("project-name").onchange = () => { state.projectName = $("project-name").value || "studio"; };
+    $("project-name").onchange = () => { state.projectName = $("project-name").value || "zeroimagestudio"; };
     $("btn-gen").onclick = () => generate();
-    $("btn-collapse").onclick = () => collapseStudio();
-    $("btn-focus").onclick = () => { if (window.parent !== window) window.parent.postMessage({ type: "studio-focus" }, "*"); else toast("Кнопка возвращает к ноде, когда студия открыта из графа."); };
-    $("btn-save").onclick = async () => { try { await saveProject(); const id = state.projectId; const a = document.createElement("a"); a.href = "/studio/project/" + id + "/export"; a.download = state.projectName + ".zip"; a.click(); toast("Проект сохранён и скачан."); } catch (err) { toast(err.message); } };
+    $("btn-collapse").onclick = () => collapseZeroImageStudio();
+    $("btn-focus").onclick = () => { if (window.parent !== window) window.parent.postMessage({ type: "zeroimagestudio-focus" }, "*"); else toast("Кнопка возвращает к ноде, когда ZeroImageStudio открыт из графа."); };
+    $("btn-save").onclick = async () => { try { await saveProject(); const id = state.projectId; const a = document.createElement("a"); a.href = "/zeroimagestudio/project/" + id + "/export"; a.download = state.projectName + ".zip"; a.click(); toast("Проект сохранён и скачан."); } catch (err) { toast(err.message); } };
     $("btn-load").onclick = () => $("file-open").click();
     $("file-open").onchange = async () => {
       const file = $("file-open").files[0];
@@ -1782,7 +1782,7 @@
       const fd = new FormData();
       fd.append("file", file);
       try {
-        const data = await api("/studio/import_project", { method: "POST", body: fd });
+        const data = await api("/zeroimagestudio/import_project", { method: "POST", body: fd });
         await loadProject(data.id);
         toast("Проект загружен.");
       } catch (err) { toast(err.message); }
@@ -1800,7 +1800,7 @@
     $("btn-save-preset").onclick = async () => {
       const name = window.prompt("Имя пресета", "Портрет HQ");
       if (!name) return;
-      const item = await api("/studio/collection/presets", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
+      const item = await api("/zeroimagestudio/collection/presets", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
         name, pipeline: state.pipeline, hintId: state.hintId, prompt: state.prompt, negative: state.negative,
         promptPresets: state.promptPresets, sampler: state.sampler, create: state.create, edit: state.edit, area: state.area,
       }) });
@@ -1963,7 +1963,7 @@
       const pp = e.target.closest("[data-pp-del]");
       if (load) applyPreset(state.presets.find((p) => p.id === load.dataset.loadPreset));
       if (del) {
-        await api("/studio/collection/presets/" + del.dataset.delPreset, { method: "DELETE" });
+        await api("/zeroimagestudio/collection/presets/" + del.dataset.delPreset, { method: "DELETE" });
         state.presets = state.presets.filter((p) => p.id !== del.dataset.delPreset);
         renderPresetSelect(); renderPresetPage();
       }
@@ -1971,11 +1971,11 @@
     });
     window.addEventListener("keydown", (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); generate(); }
-      if (e.key === "Escape") collapseStudio();
+      if (e.key === "Escape") collapseZeroImageStudio();
     });
     window.addEventListener("message", async (ev) => {
       const msg = ev.data || {};
-      if (msg.type === "studio-open" && msg.projectId && msg.projectId !== state.projectId) {
+      if (msg.type === "zeroimagestudio-open" && msg.projectId && msg.projectId !== state.projectId) {
         try { await loadProject(msg.projectId); } catch (err) { toast(err.message); }
       }
     });
@@ -2013,7 +2013,7 @@
       const l = activeLoras().find((x) => x.name === state.loraSelected);
       if (!l) return;
       try {
-        const data = await api("/studio/loras/civitai", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: l.name }) });
+        const data = await api("/zeroimagestudio/loras/civitai", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: l.name }) });
         l.sha256 = data.sha256;
         l.civitai = data.info;
         if (data.info && data.info.trained_words) {
@@ -2060,8 +2060,8 @@
     connectWs();
     try {
       const [hints, models, loras, presets, gallery, settings] = await Promise.all([
-        api("/studio/hints"), api("/studio/models"), api("/studio/loras"),
-        api("/studio/collection/presets"), api("/studio/gallery"), api("/studio/settings"),
+        api("/zeroimagestudio/hints"), api("/zeroimagestudio/models"), api("/zeroimagestudio/loras"),
+        api("/zeroimagestudio/collection/presets"), api("/zeroimagezeroimagestudio/gallery"), api("/zeroimagestudio/settings"),
       ]);
       state.hints = hints.hints || [];
       state.catalog = models;
@@ -2084,7 +2084,7 @@
     }
     renderGallery();
     pollStats();
-    window.parent.postMessage({ type: "studio-ready" }, "*");
+    window.parent.postMessage({ type: "zeroimagestudio-ready" }, "*");
   }
 
   async function pollStats() {

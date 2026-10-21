@@ -1,4 +1,4 @@
-"""Graph nodes: Studio (the editor shell) and StudioModelLoader."""
+"""Graph nodes: ZeroImageStudio (the editor shell) and ZeroImageStudioModelLoader."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import numpy as np
 import torch
 from PIL import Image
 
-import studio_storage as store
+import zeroimagestudio_storage as store
 
 
 def _list(folder: str) -> list[str]:
@@ -63,20 +63,20 @@ def _output_path(rel: str) -> str:
     return store.safe_join(folder_paths.get_output_directory(), rel)
 
 
-class Studio:
+class ZeroImageStudio:
     """Full-page editor. Execution returns the last committed composite."""
 
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "studio_image": ("STRING", {"default": "", "tooltip": "Служебное: файл сведённого холста. Заполняет студия."}),
-                "studio_mask": ("STRING", {"default": ""}),
-                "studio_layers": ("STRING", {"default": "", "multiline": True}),
-                "studio_project": ("STRING", {"default": ""}),
+                "zeroimagestudio_image": ("STRING", {"default": "", "tooltip": "Служебное: файл сведённого холста. Заполняет ZeroImageStudio."}),
+                "zeroimagestudio_mask": ("STRING", {"default": ""}),
+                "zeroimagestudio_layers": ("STRING", {"default": "", "multiline": True}),
+                "zeroimagestudio_project": ("STRING", {"default": ""}),
             },
             "optional": {
-                "image": ("IMAGE", {"tooltip": "Необязательный входной кадр. Если студия ещё ничего не сохранила, уходит на выход."}),
+                "image": ("IMAGE", {"tooltip": "Необязательный входной кадр. Если редактор ещё ничего не сохранил, уходит на выход."}),
                 "model": ("MODEL",),
                 "clip": ("CLIP",),
                 "vae": ("VAE",),
@@ -86,21 +86,21 @@ class Studio:
     RETURN_TYPES = ("IMAGE", "MASK", "STRING")
     RETURN_NAMES = ("IMAGE", "MASK", "LAYERS")
     FUNCTION = "run"
-    CATEGORY = "studio"
+    CATEGORY = "ZeroImageStudio"
     DESCRIPTION = (
-        "Редактор Studio. Кнопка «Развернуть студию» открывает холст на весь браузер. "
+        "Редактор ZeroImageStudio. Кнопка «Развернуть ZeroImageStudio» открывает холст на весь браузер. "
         "Генерация и редактирование ставятся в очередь ComfyUI отдельными графами. "
         "Эта нода отдаёт последний сведённый кадр и маску."
     )
 
-    def run(self, studio_image, studio_mask, studio_layers, studio_project, image=None, model=None, clip=None, vae=None):
-        del model, clip, vae, studio_project
-        layers = studio_layers or ""
-        if studio_image:
-            path = _output_path(studio_image)
+    def run(self, zeroimagestudio_image, zeroimagestudio_mask, zeroimagestudio_layers, zeroimagestudio_project, image=None, model=None, clip=None, vae=None):
+        del model, clip, vae, zeroimagestudio_project
+        layers = zeroimagestudio_layers or ""
+        if zeroimagestudio_image:
+            path = _output_path(zeroimagestudio_image)
             if os.path.isfile(path):
                 tensor = _image_tensor(path)
-                mask_path = _output_path(studio_mask) if studio_mask else ""
+                mask_path = _output_path(zeroimagestudio_mask) if zeroimagestudio_mask else ""
                 mask = _mask_tensor(mask_path, (tensor.shape[1], tensor.shape[2]))
                 if mask.shape[-2:] != tensor.shape[1:3]:
                     mask_img = Image.open(mask_path).convert("L").resize((tensor.shape[2], tensor.shape[1]), Image.Resampling.BILINEAR)
@@ -113,7 +113,7 @@ class Studio:
         return (blank, torch.zeros((1, 64, 64), dtype=torch.float32), layers)
 
 
-class StudioModelLoader:
+class ZeroImageStudioModelLoader:
     """One loader node that matches the graph mockup: MODEL, CLIP, VAE.
 
     The studio UI reads the widget values (file names) without executing the
@@ -138,8 +138,8 @@ class StudioModelLoader:
     RETURN_TYPES = ("MODEL", "CLIP", "VAE")
     RETURN_NAMES = ("MODEL", "CLIP", "VAE")
     FUNCTION = "load"
-    CATEGORY = "studio"
-    DESCRIPTION = "Загрузчик файлов для ноды Studio. В студии имена файлов читаются из виджетов; при запуске графа веса загружаются по-настоящему."
+    CATEGORY = "ZeroImageStudio"
+    DESCRIPTION = "Загрузчик файлов для ноды ZeroImageStudio. В ZeroImageStudio имена файлов читаются из виджетов; при запуске графа веса загружаются по-настоящему."
 
     def load(self, loader, ckpt_name, unet_name, clip_name, clip_type, vae_name, weight_dtype):
         import nodes
@@ -158,11 +158,11 @@ class StudioModelLoader:
 
 
 NODE_CLASS_MAPPINGS = {
-    "Studio": Studio,
-    "StudioModelLoader": StudioModelLoader,
+    "ZeroImageStudio": ZeroImageStudio,
+    "ZeroImageStudioModelLoader": ZeroImageStudioModelLoader,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "Studio": "Studio — редактор изображений",
-    "StudioModelLoader": "Загрузчик моделей Studio",
+    "ZeroImageStudio": "ZeroImageStudio — редактор изображений",
+    "ZeroImageStudioModelLoader": "ZeroImageStudio — загрузчик моделей",
 }

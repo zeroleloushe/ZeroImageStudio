@@ -45,16 +45,16 @@ play:'<path d="M7 4l13 8-13 8z" fill="currentColor"/>',
 fx:'<path d="M10 4H7a2 2 0 00-2 2v14M3 11h6M13 10l6 8M19 10l-6 8"/>',
 };
 function ic(n,s){s=s||16;return `<svg class="i" width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${IC[n]||''}</svg>`}
-window.studioIcon = ic;
-function studioHydrateIcons(root){
+window.zeroImageStudioIcon = ic;
+function zeroImageStudioHydrateIcons(root){
   (root||document).querySelectorAll("[data-i]").forEach(e=>{
     if (e.dataset.hydrated) return;
     e.dataset.hydrated = "1";
     e.insertAdjacentHTML("afterbegin", ic(e.dataset.i, +e.dataset.s || undefined));
   });
 }
-window.studioHydrateIcons = studioHydrateIcons;
-if (window.__STUDIO_PAGE) {
-  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", () => studioHydrateIcons());
-  else studioHydrateIcons();
+window.zeroImageStudioHydrateIcons = zeroImageStudioHydrateIcons;
+if (window.__ZEROIMAGESTUDIO_PAGE) {
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", () => zeroImageStudioHydrateIcons());
+  else zeroImageStudioHydrateIcons();
 }

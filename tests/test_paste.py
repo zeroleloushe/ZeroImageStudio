@@ -3,7 +3,7 @@ import unittest
 import numpy as np
 from PIL import Image
 
-from studio_paste import box_blur, color_match, paste, poisson_blend
+from zeroimagestudio_paste import box_blur, color_match, paste, poisson_blend
 
 
 class PasteTests(unittest.TestCase):

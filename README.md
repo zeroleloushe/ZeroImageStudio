@@ -1,122 +1,121 @@
-# ComfyUI Studio
+# ZeroImageStudio
 
-Нода `Studio` открывает редактор на весь браузер поверх ComfyUI. Холст со слоями, область генерации, маска и два общих пайплайна: **Создание** и **Редактирование**. Результат вклеивается обратно бесшовным слоем. Свёрнутая нода отдаёт в граф сведённый кадр и маску.
+ZeroImageStudio is an open-source ComfyUI node that opens a full-page image editor in the browser. You paint a region, generate or edit inside it, and the result comes back as its own layer. The collapsed node returns the flattened image, the mask, and a JSON description of the layers.
 
-Сторонние паки нод не нужны. Логика Krea 2 Edit встроена в этот пакет (Apache-2.0, см. ниже). Qwen Image 2.1 Edit собирается из нод ядра ComfyUI.
+The interface is in Russian. There are two pipelines, and neither one is hard-wired to a single checkpoint:
 
-## Установка
+- **Создание** (create) is one generic graph: a checkpoint or a diffusion model plus text encoder and VAE, LoRAs, and a sampler. The same code path covers text-to-image, img2img, and inpaint.
+- **Редактирование** (edit) crops the generation area, runs an edit, and pastes the crop back. Krea 2 Edit is built in. Qwen Image 2.1 Edit uses ComfyUI’s own nodes.
 
-Нужен ComfyUI с нативной поддержкой Krea 2 и Qwen Image 2.1 (проверено на 0.42.0). Скопируйте эту папку в `ComfyUI/custom_nodes/comfyui-studio` и перезапустите ComfyUI. Отдельных Python-зависимостей нет: достаточно того, что уже стоит с ComfyUI (`torch`, `numpy`, `Pillow`, `einops`, `aiohttp`).
+No third-party custom-node packs are required.
 
-В графе добавьте ноду **Studio — редактор изображений** и нажмите **Развернуть студию**. Esc или «Свернуть в ноду» возвращает в граф последний сведённый кадр (`IMAGE`), маску (`MASK`) и JSON слоёв (`LAYERS`).
+![Editor](docs/editor.png)
 
-Нода **Загрузчик моделей Studio** необязательна. Студия сама читает списки файлов из папок моделей и собирает отдельный граф на каждую генерацию. Загрузчик нужен, если вы хотите провести `MODEL` / `CLIP` / `VAE` через обычный граф.
+The create pipeline uses the same panels. Switch it with **Создание** in the model column.
 
-## Два пайплайна
+![Create pipeline](docs/create.png)
 
-Переключатель в панели «Модель». Подсказки моделей (Krea 2, Krea 2 Identity Edit 2.0, Qwen Image 2.1 Edit) только подставляют типичные файлы, LoRA и сэмплер. Имена файлов можно заменить на свои. Новая модель — это пресет, а не новый код.
+## Install
 
-**Создание.** Один и тот же граф для любой модели:
+You need a ComfyUI build that already knows Krea 2 and Qwen Image 2.1. Qwen Image 2.1 landed in ComfyUI 0.37; this package was checked against 0.42.
 
-- `CheckpointLoaderSimple` либо `UNETLoader` + `CLIPLoader` + `VAELoader`;
-- ноль или больше `LoraLoader`;
-- `CLIPTextEncode` или, если выбран энкодер Qwen, `TextEncodeQwenImage21`;
-- пустой латент (`EmptyLatentImage` на 4 канала или `EmptySD3LatentImage` на 16), либо `VAEEncode` / `VAEEncodeForInpaint`, если на холсте есть картинка и denoise < 1 или нарисована маска;
-- `KSampler` → `VAEDecode` → `SaveImage`.
+```bash
+cd ComfyUI/custom_nodes
+git clone <this repository> ComfyUI-ZeroImageStudio
+# restart ComfyUI
+```
 
-Кадр кладётся новым слоем в область генерации.
+The folder name matters: ComfyUI serves the editor from `/extensions/ComfyUI-ZeroImageStudio/`.
 
-**Редактирование.** Берётся кроп области (с запасом контекста), считается в целевом разрешении и вклеивается обратно.
+In the graph, add **ZeroImageStudio — редактор изображений** and press **Развернуть ZeroImageStudio**. Esc, or **Свернуть в ноду**, writes the flattened frame back to the node outputs `IMAGE`, `MASK`, and `LAYERS`.
 
-| Способ | Что собирается |
+**ZeroImageStudio — загрузчик моделей** is optional. The editor reads ComfyUI’s model folders itself and queues a separate prompt for each generation. Use the loader only when you want `MODEL`, `CLIP`, and `VAE` sockets in the graph.
+
+## Requirements
+
+Nothing extra to pip-install. ComfyUI already provides `torch`, `numpy`, `Pillow`, `einops`, and `aiohttp`.
+
+Weights are not in this repository. Put them in the usual ComfyUI folders and pick the files in the editor. The hints in `hints/models.json` only suggest names:
+
+| Hint | Typical files |
 | --- | --- |
-| Inpaint / img2img | Тот же граф, что и Создание. С маской — `VAEEncodeForInpaint` или `InpaintModelConditioning`. Без маски — img2img кропа, denoise 0.75, если вы оставили 1. |
-| Krea 2 Edit | Встроенные `StudioKrea2EditModelPatch` и `StudioKrea2EditGroundedEncode`. См. следующий раздел. |
-| Qwen Image 2.1 | Ядро: `TextEncodeQwenImage21` со слотами `images.image_1` … `images.image_16`. |
-| Qwen Image Edit (прежний) | Ядро: `TextEncodeQwenImageEdit`. Это не 2.1. |
+| Krea 2 | `krea2_turbo_fp8_scaled.safetensors`, CLIP `qwen3vl_4b_fp8_scaled.safetensors` with type `krea2`, VAE `qwen_image_vae.safetensors` |
+| Krea 2 Identity Edit 2.0 | the same, plus one LoRA: `krea2_identity_edit_v2.safetensors` or `krea2_general_edit_v2.safetensors` |
+| Qwen Image 2.1 Edit | a Qwen Image 2.1 UNET, CLIP type `qwen_image`, and the matching VAE |
 
-Вклейка — NumPy, без OpenCV: растушёвка, жёсткая маска или Пуассон (Якоби по пирамиде) плюс подгон цвета по рамке маски (Reinhard). Слой остаётся отдельным, исходник не затирается.
+A Civitai API token and an OpenAI-compatible LLM (Ollama, llama.cpp, LM Studio) are optional. Both are saved under ComfyUI’s user directory (`user/zeroimagestudio/settings.json`), not in this repo. Leave them blank and those buttons report that they are not configured.
+
+## How a generation is built
+
+Create, and the generic inpaint edit, assemble core nodes only: `CheckpointLoaderSimple` or `UNETLoader` + `CLIPLoader` + `VAELoader`, then `LoraLoader`, `CLIPTextEncode` or `TextEncodeQwenImage21`, an empty latent or a VAE encode, `KSampler`, `VAEDecode`, `SaveImage`.
+
+Edit methods:
+
+| Method | Graph |
+| --- | --- |
+| Inpaint / img2img | Same as create. A painted mask uses `VAEEncodeForInpaint` or `InpaintModelConditioning`. With no mask, the crop is img2img; denoise falls back to 0.75 if you left it at 1. |
+| Krea 2 Edit | `ZeroImageStudioKrea2EditModelPatch` and `ZeroImageStudioKrea2EditGroundedEncode`. |
+| Qwen Image 2.1 | Core `TextEncodeQwenImage21`, slots `images.image_1` … `images.image_16`. |
+| Older Qwen Image Edit | Core `TextEncodeQwenImageEdit`. This is not 2.1. |
+
+The paste-back is NumPy: a feather, a hard mask, or a coarse-to-fine Jacobi Poisson blend, plus an optional Reinhard color match on the mask border. The original layer stays underneath.
 
 ## Krea 2 Edit
 
-Официальный пак — [lbouaraba/comfyui-krea2edit](https://github.com/lbouaraba/comfyui-krea2edit), лицензия [Apache-2.0](https://github.com/lbouaraba/comfyui-krea2edit/blob/v2.0.0/LICENSE). Это разрешает копирование с сохранением лицензии и уведомлений. Закрытых кусков в нодах нет. Веса LoRA в пак не входят и распространяются отдельно по Krea 2 Community License.
+The edit forward is derived from [lbouaraba/comfyui-krea2edit](https://github.com/lbouaraba/comfyui-krea2edit) v2.0.0 (commit `13ef60f`, Apache-2.0). See [that README](https://github.com/lbouaraba/comfyui-krea2edit/blob/v2.0.0/README.md), the example [workflow](https://github.com/lbouaraba/comfyui-krea2edit/blob/v2.0.0/workflows/krea2_identity_edit.json), and `NOTICE`.
 
-Разбор сделан по тегу `v2.0.0` (коммит `13ef60f`, 2026-10-16): [README](https://github.com/lbouaraba/comfyui-krea2edit/blob/v2.0.0/README.md) и пример [workflows/krea2_identity_edit.json](https://github.com/lbouaraba/comfyui-krea2edit/blob/v2.0.0/workflows/krea2_identity_edit.json). Код нод лежит в `studio_krea2edit.py`. Классы переименованы в `StudioKrea2EditModelPatch` и `StudioKrea2EditGroundedEncode`, чтобы не затирать оригинальный пак, если он тоже установлен. Прямой проход, раскладка RoPE, пиксельный fit и шаблон Qwen3-VL не менялись. Лицензия — `third_party/comfyui-krea2edit/LICENSE`.
+What the two nodes do:
 
-Что делают ноды:
+1. **Model patch.** The VAE latent of the source (and one optional second reference) is prepended to `SingleStreamDiT` as RoPE frames 1 and 2. `fit` resamples the picture in pixel space onto the output grid. Connect VAE, source image, and the same latent the sampler uses so the encode happens before sampling.
+2. **Grounded encode.** The instruction is tokenized with the picture through the Qwen3-VL template (`<|vision_start|><|image_pad|><|vision_end|>` plus the text). At CFG above 1 the negative is grounded on the same image with an empty prompt. `grounding_px` caps the long side sent to the vision encoder (768 by default; 1024 is a common choice for faces).
 
-1. **Патч модели.** Чистый латент исходника (и необязательного второго референса) вставляется в `SingleStreamDiT` как токены RoPE frame 1 и frame 2, перед шумным кадром. Внешний вид несёт VAE-латент, а не текстовый энкодер. Режим `fit` (как обучали v2) ресемплит картинку в пикселях под сетку выхода и ставит её по центру. `crop (legacy)` — старая геометрия v1. `vae` + `source_image` + `target_latent` кодируют источник до сэмплера, иначе VAE может выгрузить часть модели на первом шаге.
-2. **Grounded encode.** Инструкция токенизируется вместе с картинкой шаблоном Qwen3-VL: `<|vision_start|><|image_pad|><|vision_end|>` и текст. Без этого модель не видит сцену семантически («человек слева»). При CFG > 1 негатив тоже заземляется на ту же картинку с пустым промтом — так обучен unconditional. `grounding_px` ограничивает длинную сторону для VLM: ниже — послушнее инструкция, выше — крепче сходство. В README автора: по умолчанию 768, для лиц часто 1024, для упрямой смены сцены 512.
+Both nodes are required. A plain `CLIPTextEncode` does not match how the LoRA was trained.
 
-Оба узла нужны. Обычный `CLIPTextEncode` для этого LoRA недостаточен.
+The upstream example workflow uses 1024×1024, euler / simple, CFG 1, 10 steps, and grounding 768. The README there also describes a fast Turbo path of about 8 steps at CFG 1, and a Raw model at CFG around 3 and about 20 steps when the edit has to remove something. Denoise inside this editor is forced to 1 for Krea; the mask is what keeps the edit local. One extra reference image is sent. Further references are ignored.
 
-Файлы из примера и README (имена можно поменять в студии, если у вас другие):
+In **Параметры графа** you can point the same pipeline at an installed copy of `comfyui-krea2edit` instead of the embedded nodes.
 
-- UNET: `krea2_turbo_fp8_scaled.safetensors` (в примере workflow), CLIP `qwen3vl_4b_fp8_scaled.safetensors` с типом `krea2`, VAE `qwen_image_vae.safetensors`.
-- LoRA, одна за раз: `krea2_identity_edit_v2.safetensors` (человек с одного фото) или `krea2_general_edit_v2.safetensors` (правка по инструкции). Пример workflow на теге v2.0.0 всё ещё ссылается на `Krea2/krea2_identity_edit_v1_2.safetensors` со силой 1 — старые веса на этих нодах тоже работают.
-- Сэмплер. README: Turbo, **8 шагов, CFG 1**, euler / simple — быстрый путь для перекраски, вставки, смены атрибута. Пример workflow: **10 шагов, CFG 1**, euler / simple, 1024×1024. Удаление заметного объекта — модель Raw, CFG около 3, порядка 20 шагов; Turbo на CFG 1 обычно перерисовывает объект, а не убирает его.
-- Второй референс (сцена + человек) уходит в `image_b` / `source_latent_b`. В студии это первая картинка блока «Референсы». Лишние референсы Krea не получает.
-- Denoise для Krea принудительно 1: локальность даёт маска вклейки, а не шум сэмплера. Выше ~2 Мп автор просит не подниматься — модель так не учили.
+## Qwen Image 2.1
 
-В «Параметрах графа» можно переключить реализацию на внешний пак `comfyui-krea2edit` (`Krea2EditModelPatch` / `Krea2EditGroundedEncode`), если он установлен. По умолчанию используются встроенные ноды.
+`TextEncodeQwenImage21` returns the latent that matches the first reference. Sampling any other size shifts the edit. At `resolution` 1024 with a VAE connected, ComfyUI has a known noisy-reference bug ([issue #16435](https://github.com/Comfy-Org/ComfyUI/issues/16435)). The editor warns and suggests 992 or 1056. Refer to pictures in the prompt as `<image1>`, `<image2>`, and so on. Up to 16 references are passed through.
 
-## Qwen Image 2.1 Edit
+## Editor
 
-Тот же пайплайн «Редактирование», способ `qwen_image_21`. Нода ядра `TextEncodeQwenImage21` (ComfyUI ≥ 0.37, в 0.42 она в `comfy_extras/nodes_qwen.py`): CLIP типа `qwen_image`, VAE, промт, до 16 картинок в `images.image_N`. Первая — кроп области, дальше референсы. Пустой латент нода отдаёт сама, по размеру первого референса; сэмплить другой размер нельзя, правка съезжает. В промте картинки адресуются как `<image1>`, `<image2>`, …
+- Move, marquee, lasso, scale, crop, brush, eraser, eyedropper, mask, generation area, hand, zoom. Wheel zooms, space pans, `[` and `]` change the brush.
+- The generation rectangle sets the output size, aspect lock, context padding, and paste mode.
+- Layers have visibility, lock, opacity, blend mode, duplicate, delete, and drag-to-reorder. Undo and redo keep 20 steps.
+- References come from a file or from the active layer.
+- The gallery writes PNG files under `output/zeroimagestudio/gallery` with prompt, seed, model, and LoRA metadata. **Применить заново** fills the settings and does not start a job.
+- **Сохранить** writes the project under `user/zeroimagestudio/projects` and downloads a zip.
+- Generation presets store the model, LoRAs, sampler, and area, not the canvas pixels. Prompt presets are wrapped around the text only when the job is queued.
+- The LoRA list is the `models/loras` tree. **Civitai info** hashes the file and reads the public model-version API. Trigger words can be inserted at the start, at the end, or not at all.
+- The LLM buttons call an OpenAI-compatible `/chat/completions` endpoint: improve, extend, or describe the canvas.
 
-При `resolution=1024` и подключённом VAE известен шум на референсах: [ComfyUI issue #16435](https://github.com/Comfy-Org/ComfyUI/issues/16435). Студия предупреждает и предлагает 992 или 1056.
+Each run is a normal ComfyUI `/prompt`. Pressing generate again while one is running calls `/interrupt`.
 
-## Холст
+## Adding a model
 
-- Инструменты: перемещение, прямоугольник, лассо, масштаб слоя, кадрирование, кисть, ластик, пипетка, маска, область генерации, рука, зум. Колёсико — масштаб, пробел — панорама, `[` `]` — размер кисти.
-- Область генерации двигается и тянется за углы. Можно зафиксировать аспект и задать выходное разрешение. Контекст в процентах расширяет кроп за рамку, маска внутри остаётся белой.
-- Слои: видимость, замок, непрозрачность, режимы наложения, дубль, удаление, перетаскивание для порядка. Ctrl+Z / Ctrl+Y — до 20 шагов.
-- Референсы: загрузка или текущий слой. Для Krea берётся один, для Qwen — до 16.
-- Галерея пишет PNG в `output/studio/gallery` с метаданными (`prompt`, seed, модель, LoRA, шаги). «Применить заново» подставляет настройки и не запускает генерацию.
-- Проект: zip с `project.json`, слоями и маской. Кнопка «Сохранить» пишет проект в `user/studio/projects` и скачивает zip.
-- Пресеты генерации хранят модель, LoRA, сэмплер и область, но не пиксели холста. Пресеты промта дописываются до или после текста только в момент отправки, поле промта они не меняют.
-- LoRA: дерево папок `models/loras`, сила model/CLIP, включение. «Civitai info» считает SHA256 и запрашивает `https://civitai.com/api/v1/model-versions/by-hash/`. Триггеры можно включить по одному; режим вставки — начало, конец или выкл. Ключ API — в настройках, для скрытых моделей.
-- LLM: OpenAI-совместимый `/chat/completions` (Ollama, llama.cpp, LM Studio). Режимы «Улучшить», «Дописать», «Описать изображение». Адрес и системные промты — в настройках, файл `user/studio/settings.json`.
+Add an object to `hints/models.json`. Set `pipeline` to `create` or `edit`, and for an edit set `edit_method` to `inpaint`, `krea2_edit`, `qwen_image_21`, or `qwen_image`. `defaults` are file names. `sampler` and `output` are optional. The graph builders do not need a change.
 
-Генерация ставится в обычную очередь ComfyUI (`/prompt` + websocket). Повторное нажатие во время счёта вызывает `/interrupt`. Батч больше одного показывает выбор кадра.
-
-## Файлы
-
-| Файл | Роль |
-| --- | --- |
-| `studio_nodes.py` | Ноды `Studio` и `StudioModelLoader` |
-| `studio_workflows.py` | Сборка API-графа обоих пайплайнов |
-| `studio_krea2edit.py` | Встроенные ноды Krea 2 Edit |
-| `studio_paste.py` | Растушёвка, цвет, Пуассон |
-| `studio_routes.py` | HTTP `/studio/*` |
-| `studio_storage.py` | Проекты, галерея, настройки, кеш хешей |
-| `hints/models.json` | Необязательные подсказки моделей |
-| `web/` | Страница редактора и расширение ноды |
-
-Подсказки добавляются записью в `hints/models.json`: `pipeline` (`create` или `edit`), `edit_method` (`inpaint`, `krea2_edit`, `qwen_image_21`, `qwen_image`), `defaults` с именами файлов, `sampler`, `output`. Ядро из-за этого менять не нужно.
-
-## Запуск проверки без браузера
+## Development
 
 ```bash
-python -m unittest tests.test_workflows tests.test_paste
+python -m unittest discover -s tests
 ```
 
-Тесты не требуют torch и ComfyUI.
+The tests cover prompt assembly, both pipelines’ API graphs, and the paste-back. They do not need Torch or a running ComfyUI.
 
-## Что проверено
+## Contributing
 
-На машине с ComfyUI 0.42.0 (CPU, без весов моделей):
+Issues and pull requests are welcome.
 
-- Юнит-тесты сборки графов и вклейки.
-- Импорт пакета внутри ComfyUI: ноды `Studio`, `StudioModelLoader`, `StudioKrea2EditModelPatch`, `StudioKrea2EditGroundedEncode` регистрируются, `INPUT_TYPES` у Krea-нод читается.
-- `adapt_to_installed` принимает графы Создание (UNET и checkpoint), Krea 2 Edit и Qwen Image 2.1: все `class_type` есть в этой сборке, лишние входы не выкидываются.
-- Живой сервер ComfyUI 0.42.0 на CPU: `/studio/health`, подсказки, списки моделей (тип CLIP `krea2` есть), сборка графов Создание / Krea 2 Edit / Qwen Image 2.1 (для 1024 приходит предупреждение про issue #16435), отказ Krea без картинки, Пуассон-вклейка, проект (сохранение, чтение слоя, zip), галерея с метаданными, пресеты, статика редактора и `object_info` нод Studio и Krea.
-- LLM: при пустом имени модели ответ 400 «Не задано имя модели LLM». Адрес по умолчанию — `http://127.0.0.1:11434/v1`, но запрос уходит только когда заданы и адрес, и модель. Запрос на закрытый порт возвращает 502. Живой чат-модели в этой среде нет.
-- Страница редактора открывается по адресу расширения, холст рисует пример, переключение «Создание» / «Редактирование» меняет подсказки.
+- Keep the two pipelines generic. A new model should be a hint and a preset, not a new code path, unless it needs a node ComfyUI does not ship.
+- Do not add a dependency on another custom-node pack. If you vendor something, keep its license and add the attribution to `NOTICE`.
+- UI strings are Russian.
+- Do not commit API keys, model weights, or machine-local paths. Settings belong in ComfyUI’s user directory.
 
-Не проверялось, потому что в этой среде нет весов и GPU:
+## License
 
-- Реальный прогон Krea 2, Identity Edit и Qwen Image 2.1 через KSampler.
-- Ответ Civitai на настоящем файле LoRA (хеш пустого файла и ошибка сети обрабатываются, но карточка модели не запрашивалась на живом файле из `models/loras`).
-- Ответ LLM: эндпоинт отвечает 400, пока в настройках пустой адрес. Сам чат-запрос к Ollama отсюда не гонялся.
-- Визуальное совпадение с конкретным макетом сверено по вёрстке (тёмная тема, акцент `#ff7a1a`, панели с цветными шапками, вкладки Холст / Галерея / LoRA / Пресеты), а не по пиксельному диффу с исходным HTML макета.
+Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+
+`zeroimagestudio_krea2edit.py` is derived from comfyui-krea2edit v2.0.0, also Apache-2.0. The Krea edit weights are not part of this repository and stay under their own license.

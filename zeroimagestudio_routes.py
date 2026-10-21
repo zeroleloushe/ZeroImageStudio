@@ -1,4 +1,4 @@
-"""HTTP routes under /studio. Registered on ComfyUI's PromptServer."""
+"""HTTP routes under /zeroimagestudio. Registered on ComfyUI's PromptServer."""
 
 from __future__ import annotations
 
@@ -11,9 +11,9 @@ import urllib.request
 
 from aiohttp import web
 
-import studio_paste
-import studio_storage as store
-import studio_workflows as wf
+import zeroimagestudio_paste
+import zeroimagestudio_storage as store
+import zeroimagestudio_workflows as wf
 
 KREA_IMPORT_ERROR = None
 HINTS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hints", "models.json")
@@ -116,7 +116,7 @@ async def health(_request):
         version = getattr(comfyui_version, "__version__", None) or str(comfyui_version)
     except Exception:
         pass
-    return _json({"ok": True, "comfyui": version, "krea_import_error": KREA_IMPORT_ERROR, "package": "comfyui-studio"})
+    return _json({"ok": True, "comfyui": version, "krea_import_error": KREA_IMPORT_ERROR, "package": "comfyui-zeroimagestudio"})
 
 
 async def hints(_request):
@@ -183,7 +183,7 @@ async def lora_civitai(request):
         return _json({"sha256": digest, "cached": True, "info": cached})
     settings = store.load_settings()
     url = f"https://civitai.com/api/v1/model-versions/by-hash/{digest}"
-    headers = {"User-Agent": "comfyui-studio", "Accept": "application/json"}
+    headers = {"User-Agent": "comfyui-zeroimagestudio", "Accept": "application/json"}
     token = (settings.get("civitai_token") or "").strip()
     if token:
         headers["Authorization"] = f"Bearer {token}"
@@ -294,7 +294,7 @@ async def paste(request):
     from PIL import Image
 
     try:
-        out = studio_paste.paste(
+        out = zeroimagestudio_paste.paste(
             Image.open(io.BytesIO(result)),
             Image.open(io.BytesIO(original)),
             Image.open(io.BytesIO(mask)),
@@ -409,7 +409,7 @@ async def project_export(request):
     return web.Response(
         body=blob,
         content_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="{project_id}.studio.zip"'},
+        headers={"Content-Disposition": f'attachment; filename="{project_id}.zeroimagestudio.zip"'},
     )
 
 
@@ -503,27 +503,27 @@ def register(krea_import_error=None):
     def add(method, path, handler):
         routes.route(method, path)(handler)
 
-    add("GET", "/studio/health", health)
-    add("GET", "/studio/hints", hints)
-    add("GET", "/studio/models", models)
-    add("GET", "/studio/loras", lora_tree)
-    add("POST", "/studio/loras/hash", lora_hash)
-    add("POST", "/studio/loras/civitai", lora_civitai)
-    add("GET", "/studio/settings", get_settings)
-    add("POST", "/studio/settings", post_settings)
-    add("GET", "/studio/collection/{kind}", list_presets)
-    add("POST", "/studio/collection/{kind}", save_preset)
-    add("DELETE", "/studio/collection/{kind}/{item_id}", delete_preset)
-    add("POST", "/studio/build_workflow", build_workflow)
-    add("POST", "/studio/assemble", assemble)
-    add("POST", "/studio/paste", paste)
-    add("POST", "/studio/commit", commit)
-    add("GET", "/studio/gallery", gallery_list)
-    add("POST", "/studio/gallery", gallery_save)
-    add("POST", "/studio/project", project_put)
-    add("POST", "/studio/project/{project_id}", project_put)
-    add("GET", "/studio/project/{project_id}", project_get)
-    add("GET", "/studio/project/{project_id}/file/{name:.+}", project_file)
-    add("GET", "/studio/project/{project_id}/export", project_export)
-    add("POST", "/studio/import_project", project_import)
-    add("POST", "/studio/llm", llm)
+    add("GET", "/zeroimagestudio/health", health)
+    add("GET", "/zeroimagestudio/hints", hints)
+    add("GET", "/zeroimagestudio/models", models)
+    add("GET", "/zeroimagestudio/loras", lora_tree)
+    add("POST", "/zeroimagestudio/loras/hash", lora_hash)
+    add("POST", "/zeroimagestudio/loras/civitai", lora_civitai)
+    add("GET", "/zeroimagestudio/settings", get_settings)
+    add("POST", "/zeroimagestudio/settings", post_settings)
+    add("GET", "/zeroimagestudio/collection/{kind}", list_presets)
+    add("POST", "/zeroimagestudio/collection/{kind}", save_preset)
+    add("DELETE", "/zeroimagestudio/collection/{kind}/{item_id}", delete_preset)
+    add("POST", "/zeroimagestudio/build_workflow", build_workflow)
+    add("POST", "/zeroimagestudio/assemble", assemble)
+    add("POST", "/zeroimagestudio/paste", paste)
+    add("POST", "/zeroimagestudio/commit", commit)
+    add("GET", "/zeroimagezeroimagestudio/gallery", gallery_list)
+    add("POST", "/zeroimagezeroimagestudio/gallery", gallery_save)
+    add("POST", "/zeroimagestudio/project", project_put)
+    add("POST", "/zeroimagestudio/project/{project_id}", project_put)
+    add("GET", "/zeroimagestudio/project/{project_id}", project_get)
+    add("GET", "/zeroimagestudio/project/{project_id}/file/{name:.+}", project_file)
+    add("GET", "/zeroimagestudio/project/{project_id}/export", project_export)
+    add("POST", "/zeroimagestudio/import_project", project_import)
+    add("POST", "/zeroimagestudio/llm", llm)

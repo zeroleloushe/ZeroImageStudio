@@ -3,17 +3,18 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Studio</title>
-  <link rel="stylesheet" href="studio.css">
-  <script>window.__STUDIO_PAGE = true;</script>
+  <title>ZeroImageStudio</title>
+  <link rel="stylesheet" href="zeroimagestudio.css">
+  <script>window.__ZEROIMAGESTUDIO_PAGE = true;</script>
   <script src="icons.js"></script>
 </head>
 <body data-tab="canvas">
 <div class="top">
-  <div class="logo">S</div>
+  <div class="logo" title="ZeroImageStudio">Z</div>
+  <div class="brand">ZeroImageStudio</div>
   <div>
-    <input id="project-name" class="f" style="height:18px;border:0;background:transparent;font-weight:700;font-size:13px;font-family:inherit;padding:0;width:220px" value="Портрет_волосы.studio">
-    <div class="mu" id="project-sub" style="font-size:10.5px">ComfyUI · Studio</div>
+    <input id="project-name" class="f" style="height:18px;border:0;background:transparent;font-weight:700;font-size:13px;font-family:inherit;padding:0;width:180px" value="Портрет_волосы">
+    <div class="mu" id="project-sub" style="font-size:10.5px">проект</div>
   </div>
   <button class="b" id="btn-save" data-i="save" data-s="14">Сохранить</button>
   <button class="b" id="btn-load" data-i="open" data-s="14">Загрузить</button>
@@ -186,11 +187,11 @@
 
 <div id="pop" class="pop" hidden></div>
 <div id="toast" class="toast" hidden></div>
-<input id="file-open" type="file" accept=".zip,.studio.zip,application/zip" hidden>
+<input id="file-open" type="file" accept=".zip,.zeroimagestudio.zip,application/zip" hidden>
 <input id="file-ref" type="file" accept="image/*" multiple hidden>
 <input id="file-layer" type="file" accept="image/*" hidden>
 
 <div id="modal"></div>
-<script src="studio_app.js"></script>
+<script src="zeroimagestudio_app.js"></script>
 </body>
 </html>

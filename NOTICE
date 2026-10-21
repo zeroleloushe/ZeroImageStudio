@@ -1,10 +1,21 @@
-studio_krea2edit.py is derived from lbouaraba/comfyui-krea2edit v2.0.0
-(commit 13ef60f20828949becada815d3cbc371eb5ccaab), Apache License 2.0.
-https://github.com/lbouaraba/comfyui-krea2edit
+ZeroImageStudio
+Copyright 2026 ZeroImageStudio contributors
 
-The node class ids in this copy are StudioKrea2EditModelPatch and
-StudioKrea2EditGroundedEncode. The forward, RoPE placement, pixel-path fit,
-and grounded Qwen3-VL template are the upstream implementation.
+Licensed under the Apache License, Version 2.0. See LICENSE.
+
+This product includes code derived from comfyui-krea2edit v2.0.0
+(https://github.com/lbouaraba/comfyui-krea2edit),
+commit 13ef60f20828949becada815d3cbc371eb5ccaab.
+Copyright the comfyui-krea2edit contributors.
+Licensed under the Apache License, Version 2.0.
+
+The derived nodes are in zeroimagestudio_krea2edit.py. Their class ids in
+this copy are ZeroImageStudioKrea2EditModelPatch and
+ZeroImageStudioKrea2EditGroundedEncode, so they do not overwrite the
+upstream pack if both are installed. The diffusion forward, RoPE placement,
+pixel-path fit, and grounded Qwen3-VL template are the upstream
+implementation. A copy of that license is in
+third_party/comfyui-krea2edit/LICENSE.
 
 Krea 2 and the Identity Edit / General Edit LoRA weights are not included.
 Those weights are published separately under the Krea 2 Community License.

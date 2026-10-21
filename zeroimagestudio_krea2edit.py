@@ -1,4 +1,4 @@
-"""Krea 2 Edit forward and grounded encode, embedded in comfyui-studio.
+"""Krea 2 Edit forward and grounded encode, embedded in comfyui-zeroimagestudio.
 
 Derived from lbouaraba/comfyui-krea2edit (Apache-2.0), commit 13ef60f20828949becada815d3cbc371eb5ccaab
 (v2.0.0, 2026-10-16): https://github.com/lbouaraba/comfyui-krea2edit
@@ -7,7 +7,7 @@ Copyright the comfyui-krea2edit contributors.
 Licensed under the Apache License, Version 2.0. See third_party/comfyui-krea2edit/LICENSE.
 
 Modifications in this copy:
-- Node class ids are StudioKrea2EditModelPatch and StudioKrea2EditGroundedEncode so this
+- Node class ids are ZeroImageStudioKrea2EditModelPatch and ZeroImageStudioKrea2EditGroundedEncode so this
   pack does not overwrite comfyui-krea2edit if both are installed.
 - The import-time banner identifies the embedded copy.
 - The forward, RoPE placement, pixel-path fit, and grounded Qwen3-VL template are unchanged.
@@ -321,7 +321,7 @@ class Krea2EditModelPatch:
 
     RETURN_TYPES = ("MODEL",)
     FUNCTION = "patch"
-    CATEGORY = "krea2edit"
+    CATEGORY = "ZeroImageStudio/krea2edit"
     DESCRIPTION = "Adds the krea2_edit in-context source-preservation path (source latent as frame=1 tokens) to a Krea2 model."
 
     def patch(self, model, source_latent, source_latent_b=None, ref_boost=1.0, ref_boost_a=1.0,
@@ -477,7 +477,7 @@ class Krea2EditGroundedEncode:
 
     RETURN_TYPES = ("CONDITIONING",)
     FUNCTION = "encode"
-    CATEGORY = "krea2edit"
+    CATEGORY = "ZeroImageStudio/krea2edit"
     DESCRIPTION = "Encodes the edit instruction grounded on the source image (training-matched semantic path)."
 
     KREA2_EDIT_TEMPLATE_2REF = (
@@ -513,13 +513,13 @@ class Krea2EditGroundedEncode:
 
 
 NODE_CLASS_MAPPINGS = {
-    "StudioKrea2EditModelPatch": Krea2EditModelPatch,
-    "StudioKrea2EditGroundedEncode": Krea2EditGroundedEncode,
+    "ZeroImageStudioKrea2EditModelPatch": Krea2EditModelPatch,
+    "ZeroImageStudioKrea2EditGroundedEncode": Krea2EditGroundedEncode,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "StudioKrea2EditModelPatch": "Studio · Krea2 Edit (source patch)",
-    "StudioKrea2EditGroundedEncode": "Studio · Krea2 Edit (grounded encode)",
+    "ZeroImageStudioKrea2EditModelPatch": "ZeroImageStudio · Krea2 Edit (source patch)",
+    "ZeroImageStudioKrea2EditGroundedEncode": "ZeroImageStudio · Krea2 Edit (grounded encode)",
 }
 
 
-print("[comfyui-studio] embedded Krea2 Edit nodes (derived from comfyui-krea2edit v2.0.0, Apache-2.0)", flush=True)
+print("[comfyui-zeroimagestudio] embedded Krea2 Edit nodes (derived from comfyui-krea2edit v2.0.0, Apache-2.0)", flush=True)

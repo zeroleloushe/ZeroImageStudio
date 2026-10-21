@@ -31,7 +31,7 @@
     "pipeline": "edit",
     "edit_method": "krea2_edit",
     "tags": ["edit", "id-lock", "refs ≤2"],
-    "note": "Тот же Krea 2 плюс LoRA krea2_identity_edit_v2 и встроенные ноды StudioKrea2Edit*. Для правки сцены вместо человека — krea2_general_edit_v2, одна LoRA за раз.",
+    "note": "Тот же Krea 2 плюс LoRA krea2_identity_edit_v2 и встроенные ноды ZeroImageStudioKrea2Edit*. Для правки сцены вместо человека — krea2_general_edit_v2, одна LoRA за раз.",
     "defaults": {
       "loader": "diffusion",
       "clip_type": "krea2",
