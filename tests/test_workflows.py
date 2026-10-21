@@ -120,6 +120,22 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("VAEEncode", classes(prompt))
         self.assertNotIn("VAEEncodeForInpaint", classes(prompt))
 
+    def test_create_drops_references(self):
+        spec = _diff_spec(
+            pipeline="create",
+            encoder="qwen_image_21",
+            clip_type="qwen_image",
+            image="zeroimagestudio/crop.png",
+            references=["zeroimagestudio/ref.png"],
+            denoise=0.4,
+        )
+        prompt, _warnings, built = build_workflow(spec)
+        self.assertEqual(built, "create")
+        blob = str(prompt)
+        self.assertIn("zeroimagestudio/crop.png", blob)
+        self.assertNotIn("zeroimagestudio/ref.png", blob)
+        self.assertNotIn("Reference", blob)
+
     def test_qwen_edit(self):
         spec = _diff_spec(
             pipeline="edit",

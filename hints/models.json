@@ -3,7 +3,8 @@
     "id": "krea2",
     "name": "Krea 2",
     "pipeline": "create",
-    "tags": ["t2i", "fp8"],
+    "pipelines": ["create"],
+    "tags": { "create": ["t2i", "fp8"] },
     "note": "Нативный Krea 2 в ComfyUI: UNETLoader + CLIPLoader type=krea2 + VAE. Turbo обычно 8 шагов, CFG 1.",
     "defaults": {
       "loader": "diffusion",
@@ -29,8 +30,9 @@
     "id": "krea2_identity_edit",
     "name": "Krea 2 Identity Edit 2.0",
     "pipeline": "edit",
+    "pipelines": ["edit"],
     "edit_method": "krea2_edit",
-    "tags": ["edit", "id-lock", "refs ≤2"],
+    "tags": { "edit": ["edit", "id-lock", "refs ≤2"] },
     "note": "Тот же Krea 2 плюс LoRA krea2_identity_edit_v2 и встроенные ноды ZeroImageStudioKrea2Edit*. Для правки сцены вместо человека — krea2_general_edit_v2, одна LoRA за раз.",
     "defaults": {
       "loader": "diffusion",
@@ -70,12 +72,16 @@
     "output": [1024, 1024]
   },
   {
-    "id": "qwen_image_21_edit",
-    "name": "Qwen Image 2.1 Edit",
+    "id": "qwen_image_21",
+    "name": "Qwen Image 2.1",
     "pipeline": "edit",
+    "pipelines": ["create", "edit"],
     "edit_method": "qwen_image_21",
-    "tags": ["edit", "refs ≤16", "bf16"],
-    "note": "Только ноды ядра: UNETLoader, CLIPLoader type=qwen_image, VAELoader, TextEncodeQwenImage21. Нужен ComfyUI ≥ 0.37.",
+    "tags": {
+      "create": ["t2i", "bf16"],
+      "edit": ["edit", "refs ≤16", "bf16"]
+    },
+    "note": "Одна модель на оба режима. Создание — общий граф без референсов. Редактирование — TextEncodeQwenImage21 и референсы <image1>…. Нужен ComfyUI ≥ 0.37.",
     "defaults": {
       "loader": "diffusion",
       "clip_type": "qwen_image",

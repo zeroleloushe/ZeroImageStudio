@@ -229,7 +229,10 @@ def build_create(spec: dict, warnings: list[str]) -> dict:
             warnings.append(
                 "Для Qwen Image 2.1 маска не режет шум сэмплера: модель видит весь кроп, маска ограничивает только вклейку."
             )
-        return _build_qwen(g, spec, warnings, model, clip, vae, prompt, negative, include_image=has_image or has_mask)
+        return _build_qwen(
+            g, spec, warnings, model, clip, vae, prompt, negative,
+            include_image=has_image or has_mask, include_references=False,
+        )
 
     step = 16 if (spec.get("latent_mode") == "sd3") else 8
     w, h, batch = _size(spec, step)
@@ -294,7 +297,7 @@ def build_create(spec: dict, warnings: list[str]) -> dict:
     return g.nodes
 
 
-def _build_qwen(g, spec, warnings, model, clip, vae, prompt, negative, include_image: bool) -> dict:
+def _build_qwen(g, spec, warnings, model, clip, vae, prompt, negative, include_image: bool, include_references: bool = True) -> dict:
     res = int(spec.get("qwen_resolution") or spec.get("width") or 1024)
     res = snap(res, 32, minimum=32)
     if res == 1024 and include_image:
@@ -314,7 +317,8 @@ def _build_qwen(g, spec, warnings, model, clip, vae, prompt, negative, include_i
         img = _load_image(g, spec["image"], "Edit image")
         inputs[f"images.image_{index}"] = g.ref(img, 0)
         index += 1
-    for i, ref in enumerate(spec.get("references") or []):
+    ref_list = spec.get("references") or [] if include_references else []
+    for i, ref in enumerate(ref_list):
         if not ref or index > 16:
             break
         node = _load_image(g, ref, f"Reference {i + 1}")

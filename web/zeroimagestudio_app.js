@@ -15,12 +15,13 @@
     projectName: "Портрет_волосы",
     pipeline: "edit",
     hintId: "krea2_identity_edit",
+    hintByMode: { create: "krea2", edit: "krea2_identity_edit" },
     prompt: "медно-рыжие волосы, мягкие естественные пряди, сохранить текстуру и объём, тёплый контровой свет",
     negative: "",
     promptPresets: [
-      { id: "p1", name: "Портрет-студия", text: "студийный портрет, мягкий свет, резкий фокус", position: "before", enabled: true },
-      { id: "p2", name: "Детализация кожи 8k", text: "детальная кожа, естественные поры", position: "after", enabled: true },
-      { id: "p3", name: "Плёнка Kodak", text: "плёночное зерно, kodak portra", position: "after", enabled: false },
+      { id: "p1", name: "Портрет-студия", category: "Портрет", text: "студийный портрет, мягкий свет, резкий фокус", position: "before", enabled: true, order: 0 },
+      { id: "p2", name: "Детализация кожи 8k", category: "Детализация", text: "детальная кожа, естественные поры", position: "after", enabled: true, order: 1 },
+      { id: "p3", name: "Плёнка Kodak", category: "Плёнка", text: "плёночное зерно, kodak portra", position: "after", enabled: false, order: 2 },
     ],
     sampler: { seed: 48211937, seedMode: "fixed", steps: 28, cfg: 3.5, denoise: 0.72, sampler: "euler", scheduler: "simple", batch: 1 },
     create: blankPipe("create"),
@@ -494,6 +495,7 @@
         const map = { KeyV: "move", KeyM: "select", KeyL: "lasso", KeyT: "transform", KeyC: "crop", KeyB: "brush", KeyE: "eraser", KeyI: "eyedrop", KeyQ: "mask", KeyG: "genarea" };
         if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") { e.preventDefault(); e.shiftKey ? this.redo() : this.undo(); return; }
         if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "y") { e.preventDefault(); this.redo(); return; }
+        if (e.ctrlKey || e.metaKey || e.altKey) return;
         if (e.key === "Delete" || e.key === "Backspace") { this.deleteActive(); return; }
         if (e.key === "[") { state.brush.size = Math.max(1, state.brush.size - 4); const b = $("brush-size"); if (b) b.value = state.brush.size; renderTags(); }
         if (e.key === "]") { state.brush.size = Math.min(300, state.brush.size + 4); const b = $("brush-size"); if (b) b.value = state.brush.size; renderTags(); }
@@ -786,6 +788,7 @@
     renderPipe();
     renderPresetSelect();
     renderTags();
+    renderModelSummary();
     $("prompt").value = state.prompt;
     $("negative").value = state.negative;
     $("project-name").value = state.projectName;
@@ -793,13 +796,52 @@
     if (window.zeroImageStudioHydrateIcons) window.zeroImageStudioHydrateIcons(document);
   }
 
+  function canonicalHintId(id) {
+    if (id === "qwen_image_21_edit") return "qwen_image_21";
+    return id || "";
+  }
+
+  function hintPipelines(h) {
+    if (h && Array.isArray(h.pipelines) && h.pipelines.length) return h.pipelines;
+    return [((h && h.pipeline) || "create")];
+  }
+
+  function hintsForMode(mode) {
+    return state.hints.filter((h) => hintPipelines(h).includes(mode));
+  }
+
+  function hintTags(h, mode) {
+    const tags = (h && h.tags) || [];
+    if (!Array.isArray(tags)) return tags[mode] || tags.create || tags.edit || [];
+    return tags;
+  }
+
   function renderHints() {
     const host = $("hint-list");
-    host.innerHTML = state.hints.map((h) => {
+    const list = hintsForMode(state.pipeline);
+    host.innerHTML = list.map((h) => {
       const on = h.id === state.hintId;
-      const tags = (h.tags || []).map((t, i) => `<span class="tag ${on && i === 0 ? "to" : ""}">${t}</span>`).join("");
-      return `<button type="button" class="mrow ${on ? "on" : ""}" data-hint="${h.id}"><span class="rd"></span><b>${h.name}</b><span class="tg">${tags}</span></button>`;
-    }).join("") || '<div class="empty">Нет подсказок моделей.</div>';
+      const tags = hintTags(h, state.pipeline).map((t, i) => `<span class="tag ${on && i === 0 ? "to" : ""}">${escapeHtml(t)}</span>`).join("");
+      return `<button type="button" class="mrow ${on ? "on" : ""}" data-hint="${h.id}"><span class="rd"></span><b>${escapeHtml(h.name)}</b><span class="tg">${tags}</span></button>`;
+    }).join("") || '<div class="empty">Нет моделей для этого режима.</div>';
+  }
+
+  function renderModelSummary() {
+    const el = $("model-summary");
+    if (!el) return;
+    const hint = state.hints.find((h) => h.id === state.hintId);
+    const c = cfg();
+    if (!hint) {
+      el.textContent = "Модель не выбрана";
+      el.title = el.textContent;
+      return;
+    }
+    const third = c.loader === "checkpoint"
+      ? ((c.checkpoint || "чекпоинт").replace(/\.[^.]+$/, ""))
+      : (c.clip_type || "");
+    const text = [hint.name, c.loader || "diffusion", third].filter(Boolean).join(" · ");
+    el.textContent = text;
+    el.title = text;
   }
 
   function fileOptions(list, current, suggested) {
@@ -850,12 +892,24 @@
   function renderRefs() {
     const host = $("ref-list");
     const cards = state.references.map((r) =>
-      `<div class="ref"><img src="${r.url}"><s>${escapeHtml(r.name)}</s><button class="x" data-ref-del="${r.id}">×</button></div>`
+      `<div class="ref ${r.selected ? "on" : ""}" data-ref="${r.id}" title="Клик — выбрать для LLM"><img src="${r.url}"><s>${escapeHtml(r.name)}</s><button class="x" data-ref-del="${r.id}">×</button></div>`
     ).join("");
     host.innerHTML = cards +
       `<button class="ref add" id="ref-upload" type="button"><div><span data-i="upload" data-s="15"></span><br>Загрузить</div></button>` +
       `<button class="ref add" id="ref-from-layer" type="button"><div><span data-i="layers" data-s="15"></span><br>Из слоя</div></button>`;
-    $("ref-cap").textContent = `для Edit-моделей · ${state.references.length}`;
+    const n = state.references.length;
+    if (state.pipeline === "edit") {
+      const method = cfg().method;
+      $("ref-cap").textContent = `для модели · ${n}`;
+      $("ref-hint").textContent = method === "krea2_edit"
+        ? "Для модели: исходный кроп и один дополнительный референс. Те же кадры может взять LLM. Клик по карточке выбирает кадр для LLM."
+        : (method === "qwen_image_21" || method === "qwen")
+          ? "Для модели: до 16 референсов, в промте <image1>…. Те же кадры может взять LLM. Клик по карточке выбирает кадр для LLM."
+          : "Кроп холста идёт в модель как область правки. Референсы здесь — для LLM. Клик по карточке выбирает кадр.";
+    } else {
+      $("ref-cap").textContent = `для LLM-промта · ${n}`;
+      $("ref-hint").textContent = "В режиме Создание референсы не идут в модель. «Описать изображение» и «Улучшить» берут выбранные кадры (если ничего не выбрано — все).";
+    }
     if (window.zeroImageStudioHydrateIcons) window.zeroImageStudioHydrateIcons(host);
   }
 
@@ -1007,6 +1061,7 @@
         <span class="tag ${a.colorMatch?"tbl":""}">цвет. подгон ${a.colorMatch?"✓":"—"}</span>
         <span class="tag">масштаб ×${scale.toFixed(2)}</span>
         <span class="tag to">→ новый слой</span>
+        <button type="button" class="b s" id="btn-gen-full">Весь холст</button>
       </div>`;
     const num = (id, fn) => $(id).onchange = () => { fn(parseFloat($(id).value)); editor.requestDraw(); renderTags(); };
     num("gx", (v) => { editor.gen.x = clamp(v || 0, 0, editor.doc.w - 8); });
@@ -1024,6 +1079,12 @@
     $("gfeather").onchange = () => { state.area.feather = Math.max(0, parseInt($("gfeather").value, 10) || 0); renderTags(); };
     $("gcontext").onchange = () => { state.area.context = Math.max(0, (parseFloat($("gcontext").value) || 0) / 100); renderTags(); };
     $("gcolor").onchange = () => { state.area.colorMatch = $("gcolor").checked; renderInspector(); };
+    const full = $("btn-gen-full");
+    if (full) full.onclick = () => {
+      editor.gen = { x: 0, y: 0, w: editor.doc.w, h: editor.doc.h };
+      editor.requestDraw();
+      renderInspector();
+    };
   }
 
   function renderTags() {
@@ -1064,13 +1125,171 @@
     if (window.zeroImageStudioHydrateIcons) window.zeroImageStudioHydrateIcons(host);
   }
 
+  let ppEditingId = null;
+
+  function normalizePreset(p, i) {
+    return {
+      id: p.id || ("p" + Date.now().toString(36) + i),
+      name: p.name || "Пресет",
+      category: p.category || "Общее",
+      text: p.text || "",
+      position: p.position === "after" ? "after" : "before",
+      enabled: !!p.enabled,
+      order: Number.isFinite(Number(p.order)) ? Number(p.order) : i,
+    };
+  }
+
+  function orderedPresets() {
+    return [...state.promptPresets].sort((a, b) => (a.order - b.order) || String(a.name).localeCompare(String(b.name), "ru"));
+  }
+
+  function activeOrdered() {
+    return orderedPresets().filter((p) => p.enabled && p.text);
+  }
+
+  async function persistPreset(p) {
+    try {
+      const saved = await api("/zeroimagestudio/collection/prompt_presets", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(p),
+      });
+      if (saved && saved.id) p.id = saved.id;
+    } catch (err) {
+      toast(err.message || String(err));
+    }
+  }
+
   function renderChips() {
-    const host = $("prompt-chips");
-    host.innerHTML = `<span class="mu">Пресеты промта:</span>` + state.promptPresets.map((p) =>
-      `<button type="button" class="chip ${p.enabled ? "on" : ""}" data-chip="${p.id}"><span class="p">${p.position === "after" ? "ПОСЛЕ" : "ДО"}</span>${escapeHtml(p.name)}</button>`
-    ).join("") + `<button type="button" class="chip" id="chip-add" style="border-style:dashed" data-i="plus" data-s="12">пресет</button>`;
+    const active = activeOrdered();
+    const count = $("pp-count");
+    if (count) count.textContent = String(active.length);
+    const host = $("pp-chips");
+    if (!host) { updateFinal(); return; }
+    host.replaceChildren();
+    const make = (p) => {
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "pp-chip";
+      chip.dataset.ppOff = p.id;
+      chip.title = "Убрать из активных";
+      chip.innerHTML = `<span class="p">${p.position === "after" ? "ПОСЛЕ" : "ДО"}</span><span class="n">${escapeHtml(p.name)}</span><span class="x">×</span>`;
+      return chip;
+    };
+    if (host.clientWidth < 24) {
+      active.slice(0, 2).forEach((p) => host.appendChild(make(p)));
+      if (active.length > 2) {
+        const more = document.createElement("button");
+        more.type = "button";
+        more.className = "pp-more";
+        more.dataset.ppOpen = "1";
+        more.textContent = "+" + (active.length - 2);
+        host.appendChild(more);
+      }
+    } else {
+      let shown = 0;
+      for (const p of active) {
+        const chip = make(p);
+        host.appendChild(chip);
+        if (host.scrollWidth > host.clientWidth + 1) { chip.remove(); break; }
+        shown += 1;
+      }
+      const rest = active.length - shown;
+      if (rest > 0) {
+        const more = document.createElement("button");
+        more.type = "button";
+        more.className = "pp-more";
+        more.dataset.ppOpen = "1";
+        more.textContent = "+" + rest;
+        host.appendChild(more);
+        while (shown > 0 && host.scrollWidth > host.clientWidth + 1) {
+          const chips = host.querySelectorAll(".pp-chip");
+          if (!chips.length) break;
+          chips[chips.length - 1].remove();
+          shown -= 1;
+          more.textContent = "+" + (active.length - shown);
+        }
+      }
+    }
     updateFinal();
-    if (window.zeroImageStudioHydrateIcons) window.zeroImageStudioHydrateIcons(host);
+    if (!$("pp-pop").hidden) renderPromptMenu();
+  }
+
+  function renderPromptMenu() {
+    const host = $("pp-list");
+    if (!host) return;
+    const q = ($("pp-search") && $("pp-search").value || "").trim().toLowerCase();
+    const groups = new Map();
+    for (const p of orderedPresets()) {
+      if (q && !(p.name + " " + p.category + " " + p.text).toLowerCase().includes(q)) continue;
+      const cat = p.category || "Общее";
+      if (!groups.has(cat)) groups.set(cat, []);
+      groups.get(cat).push(p);
+    }
+    const active = activeOrdered();
+    const indexOf = (id) => active.findIndex((p) => p.id === id);
+    if (!groups.size) {
+      host.innerHTML = `<div class="empty">${q ? "Ничего не найдено." : "Пока нет пресетов. Нажмите «Создать»."}</div>`;
+      return;
+    }
+    host.innerHTML = [...groups.entries()].map(([cat, items]) => `
+      <div class="pp-group"><div class="pp-cat">${escapeHtml(cat)}</div>
+      ${items.map((p) => {
+        const i = indexOf(p.id);
+        return `<div class="pp-row">
+          <input type="checkbox" data-pp-on="${p.id}" ${p.enabled ? "checked" : ""}>
+          <button type="button" class="nm" data-pp-edit="${p.id}">${escapeHtml(p.name)}</button>
+          <button type="button" class="b s" data-pp-pos="${p.id}">${p.position === "after" ? "ПОСЛЕ" : "ДО"}</button>
+          <button type="button" class="b s" data-pp-up="${p.id}" ${i <= 0 ? "disabled" : ""} title="Раньше среди активных">↑</button>
+          <button type="button" class="b s" data-pp-down="${p.id}" ${i < 0 || i === active.length - 1 ? "disabled" : ""} title="Позже среди активных">↓</button>
+          <button type="button" class="b s" data-pp-dup="${p.id}">Дубль</button>
+          <button type="button" class="b s" data-pp-del="${p.id}">Удалить</button>
+        </div>`;
+      }).join("")}
+      </div>`).join("");
+  }
+
+  function placePromptPop() {
+    const pop = $("pp-pop");
+    const btn = $("pp-open");
+    const r = btn.getBoundingClientRect();
+    const width = Math.min(520, window.innerWidth - 16);
+    let left = Math.max(8, Math.min(r.left, window.innerWidth - width - 8));
+    pop.style.width = width + "px";
+    pop.style.left = left + "px";
+    const below = window.innerHeight - r.bottom - 10;
+    const above = r.top - 10;
+    if (below < 260 && above > below) {
+      pop.style.top = "auto";
+      pop.style.bottom = (window.innerHeight - r.top + 6) + "px";
+      pop.style.maxHeight = Math.max(180, above - 8) + "px";
+    } else {
+      pop.style.bottom = "auto";
+      pop.style.top = (r.bottom + 6) + "px";
+      pop.style.maxHeight = Math.max(180, below - 8) + "px";
+    }
+  }
+
+  function openPromptPop() {
+    $("pp-pop").hidden = false;
+    $("pp-open").setAttribute("aria-expanded", "true");
+    placePromptPop();
+    renderPromptMenu();
+  }
+
+  function closePromptPop() {
+    $("pp-pop").hidden = true;
+    $("pp-open").setAttribute("aria-expanded", "false");
+    $("pp-form").hidden = true;
+    ppEditingId = null;
+  }
+
+  function openPresetForm(p) {
+    ppEditingId = p ? p.id : null;
+    $("pp-form").hidden = false;
+    $("pp-name").value = p ? p.name : "";
+    $("pp-cat").value = p ? (p.category || "") : "";
+    $("pp-text").value = p ? p.text : "";
+    $("pp-pos").value = p && p.position === "after" ? "after" : "before";
+    $("pp-name").focus();
   }
 
   function assembleLocal() {
@@ -1081,7 +1300,7 @@
       if (!words.length) continue;
       (l.trigger_mode === "start" ? start : end).push(words.join(", "));
     }
-    for (const p of state.promptPresets) {
+    for (const p of orderedPresets()) {
       if (!p.enabled || !p.text) continue;
       (p.position === "after" ? after : before).push(p.text.trim());
     }
@@ -1091,9 +1310,9 @@
   function updateFinal() {
     const text = assembleLocal();
     const bits = [];
-    state.promptPresets.filter((p) => p.enabled && p.position !== "after").forEach((p) => bits.push("[" + p.name + "]"));
+    orderedPresets().filter((p) => p.enabled && p.position !== "after").forEach((p) => bits.push("[" + p.name + "]"));
     bits.push("промт");
-    state.promptPresets.filter((p) => p.enabled && p.position === "after").forEach((p) => bits.push("[" + p.name + "]"));
+    orderedPresets().filter((p) => p.enabled && p.position === "after").forEach((p) => bits.push("[" + p.name + "]"));
     $("prompt-final").textContent = "⤷ итог: " + bits.join(" + ") + " — пресеты применяются при генерации, в поле не вставляются";
     $("token-est").textContent = "CONDITIONING · " + text.length + " симв.";
   }
@@ -1190,7 +1409,7 @@
       loras: c.loras,
       prompt: state.prompt,
       negative: state.negative,
-      prompt_presets: state.promptPresets,
+      prompt_presets: orderedPresets(),
       seed: s.seed,
       steps: s.steps,
       cfg: s.cfg,
@@ -1295,7 +1514,9 @@
         if (spec.has_mask || state.pipeline === "edit") spec.mask = await uploadCanvas(scaledMask, "mask.png");
       }
       const refs = [];
-      for (const ref of state.references) refs.push(await uploadCanvas(ref.canvas, "ref.png"));
+      if (state.pipeline === "edit") {
+        for (const ref of state.references) refs.push(await uploadCanvas(ref.canvas, "ref.png"));
+      }
       spec.references = refs;
       const built = await api("/zeroimagestudio/build_workflow", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(spec) });
       if (built.warnings && built.warnings.length) toast(built.warnings[0]);
@@ -1342,16 +1563,18 @@
       }
       const img = await loadImage(URL.createObjectURL(pasted));
       const snap = editor.fullSnapshot();
+      const n = editor.layers.filter((l) => l.name.startsWith(state.pipeline === "edit" ? "Правка" : "Генерация")).length + 1;
+      const label = state.pipeline === "edit" ? ("Правка " + n) : ("Генерация " + n);
       if (!crop) {
         const layerCanvas = scaleCanvas(img, editor.gen.w, editor.gen.h);
-        const layer = editor.makeLayer("Генерация — " + (state.hintId || "create"), layerCanvas);
+        const layer = editor.makeLayer(label, layerCanvas);
         layer.x = editor.gen.x; layer.y = editor.gen.y; layer.meta = meta;
         editor.addLayer(layer);
       } else {
         const c = document.createElement("canvas");
         c.width = img.width; c.height = img.height;
         c.getContext("2d").drawImage(img, 0, 0);
-        const layer = editor.makeLayer("Генерация — " + (cfg().method || "create"), c);
+        const layer = editor.makeLayer(label, c);
         layer.x = crop.x; layer.y = crop.y; layer.meta = meta;
         editor.addLayer(layer);
       }
@@ -1390,7 +1613,7 @@
     const fd = new FormData();
     fd.append("image", blob, "gen.png");
     fd.append("meta", JSON.stringify(meta));
-    const saved = await api("/zeroimagezeroimagestudio/gallery", { method: "POST", body: fd });
+    const saved = await api("/zeroimagestudio/gallery", { method: "POST", body: fd });
     state.gallery.unshift({ id: saved.id, file: saved.file, meta: saved.meta });
   }
 
@@ -1464,6 +1687,9 @@
       color: meta.state.color || state.color,
       brush: meta.state.brush || state.brush,
     });
+    state.hintId = canonicalHintId(state.hintId);
+    state.hintByMode[state.pipeline] = state.hintId;
+    if (Array.isArray(state.promptPresets)) state.promptPresets = state.promptPresets.map((p, i) => normalizePreset(p, i));
     editor.doc = meta.canvas || editor.doc;
     editor.gen = meta.gen || editor.gen;
     editor.resizeMask();
@@ -1496,6 +1722,57 @@
     editor.active = Math.max(0, editor.layers.length - 1);
     editor.fit();
     renderAll();
+  }
+
+  function placeImportedImage(img, name, fit) {
+    const w = img.naturalWidth || img.width;
+    const h = img.naturalHeight || img.height;
+    editor.pushUndo(editor.fullSnapshot());
+    const demo = editor.layers.length === 1 && editor.layers[0].locked && editor.layers[0].name === "Оригинал";
+    const c = document.createElement("canvas");
+    c.width = w;
+    c.height = h;
+    c.getContext("2d").drawImage(img, 0, 0);
+    if (fit) {
+      editor.doc = { w, h };
+      editor.resizeMask();
+      editor.maskCtx.clearRect(0, 0, w, h);
+      editor.gen = { x: Math.round(w * 0.12), y: Math.round(h * 0.08), w: Math.round(w * 0.76), h: Math.round(h * 0.7) };
+    }
+    const layer = editor.makeLayer(String(name || "Фото").replace(/\.[^.]+$/, ""), c);
+    if (demo || !editor.layers.length) {
+      editor.layers = [layer];
+      editor.active = 0;
+    } else {
+      editor.addLayer(layer);
+    }
+    editor.thumb(layer);
+    editor.fit();
+    editor.requestDraw();
+    renderLayers();
+    renderInspector();
+    toast(fit ? `Холст ${w} × ${h}. Слой в полном размере, без уменьшения.` : "Слой добавлен в полном размере, холст не менялся.");
+  }
+
+  function offerImportImage(img, name) {
+    const w = img.naturalWidth || img.width;
+    const h = img.naturalHeight || img.height;
+    return new Promise((resolve) => {
+      const back = document.createElement("div");
+      back.className = "modal-back";
+      back.innerHTML = `<div class="modal"><h3>Открыть изображение</h3>
+        <div class="mu">${escapeHtml(name || "изображение")} · ${w} × ${h}. Можно подогнать холст под полный размер. Пиксели не уменьшаются.</div>
+        <div class="row" style="flex-wrap:wrap">
+          <button class="b ac" type="button" data-fit="1">Подогнать холст</button>
+          <button class="b" type="button" data-add="1">Добавить слоем</button>
+          <button class="b" type="button" data-cancel="1">Отмена</button>
+        </div></div>`;
+      const close = (mode) => { back.remove(); resolve(mode); };
+      back.querySelector("[data-fit]").onclick = () => close("fit");
+      back.querySelector("[data-add]").onclick = () => close("add");
+      back.querySelector("[data-cancel]").onclick = () => close(null);
+      document.body.appendChild(back);
+    }).then((mode) => { if (mode) placeImportedImage(img, name, mode === "fit"); });
   }
 
   async function loadExample() {
@@ -1546,14 +1823,16 @@
   }
 
   function applyHint(h) {
-    state.hintId = h.id;
-    state.pipeline = h.pipeline || "create";
-    const target = h.pipeline === "edit" ? state.edit : state.create;
+    const pipes = hintPipelines(h);
+    if (!pipes.includes(state.pipeline)) state.pipeline = pipes[0];
+    state.hintId = canonicalHintId(h.id);
+    state.hintByMode[state.pipeline] = state.hintId;
+    const target = cfg();
     const d = h.defaults || {};
     ["loader", "clip_type", "weight_dtype", "latent_mode", "encoder", "unet", "clip", "vae", "checkpoint"].forEach((k) => {
       if (d[k] != null) target[k] = d[k];
     });
-    if (h.edit_method) target.method = h.edit_method;
+    if (state.pipeline === "edit" && h.edit_method) target.method = h.edit_method;
     if (h.qwen_resolution) target.qwen_resolution = h.qwen_resolution;
     if (h.krea) target.krea = { ...target.krea, ...h.krea };
     if (h.sampler) Object.assign(state.sampler, h.sampler);
@@ -1627,16 +1906,35 @@
     $("pop-lora").onclick = () => { if (m.loras) { cfg().loras = m.loras.map((l) => ({ enabled: true, strength_clip: l.strength_model, trigger_mode: "end", triggers: [], ...l })); renderLoras(); } pop.hidden = true; };
   }
 
+  function jpegCanvas(canvas, maxSide) {
+    const w = canvas.width || 1;
+    const h = canvas.height || 1;
+    const scale = Math.min(1, maxSide / Math.max(w, h));
+    return scaleCanvas(canvas, Math.max(1, Math.round(w * scale)), Math.max(1, Math.round(h * scale))).toDataURL("image/jpeg", 0.72);
+  }
+
+  function llmReferenceCanvases() {
+    const picked = state.references.filter((r) => r.selected);
+    return (picked.length ? picked : state.references).slice(0, 3);
+  }
+
   async function runLlm(mode) {
     try {
       const presetId = $("llm-preset").value;
       const preset = (state.settings && state.settings.llm_presets || []).find((p) => p.id === presetId);
       const body = { mode, prompt: state.prompt, system: preset && preset.systems ? preset.systems[mode] : undefined };
+      const images = [];
       if (mode === "describe") {
         const flat = editor.flatten();
-        const small = scaleCanvas(flat, 512, Math.round(512 * flat.height / flat.width));
-        body.image = small.toDataURL("image/jpeg", 0.8);
+        images.push(jpegCanvas(flat, 512));
       }
+      if (mode === "describe" || mode === "improve") {
+        for (const ref of llmReferenceCanvases()) {
+          if (images.length >= 4) break;
+          images.push(jpegCanvas(ref.canvas, 512));
+        }
+      }
+      if (images.length) body.images = images;
       $("gen-label").textContent = "LLM…";
       const res = await api("/zeroimagestudio/llm", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       if (mode === "extend") state.prompt = (state.prompt ? state.prompt.replace(/[, ]*$/, "") + ", " : "") + res.text;
@@ -1753,10 +2051,22 @@
     });
     $("mode").onclick = (e) => {
       const b = e.target.closest("[data-pipe]");
-      if (!b) return;
+      if (!b || b.dataset.pipe === state.pipeline) return;
+      state.hintByMode[state.pipeline] = state.hintId;
       state.pipeline = b.dataset.pipe;
-      state.hintId = "";
-      renderAll();
+      const list = hintsForMode(state.pipeline);
+      const remembered = canonicalHintId(state.hintByMode[state.pipeline]);
+      const hint = list.find((h) => h.id === remembered) || list[0];
+      if (hint) applyHint(hint);
+      else renderAll();
+    };
+    $("model-toggle").onclick = () => {
+      const node = $("model-node");
+      const open = !node.classList.contains("open");
+      node.classList.toggle("open", open);
+      $("model-drawer").inert = !open;
+      $("model-toggle").setAttribute("aria-expanded", open ? "true" : "false");
+      try { localStorage.setItem("zeroimagestudio.modelDrawer", open ? "open" : "closed"); } catch (err) { /* private mode */ }
     };
     $("hint-list").onclick = (e) => {
       const b = e.target.closest("[data-hint]");
@@ -1812,23 +2122,111 @@
       const p = state.presets.find((x) => x.id === $("preset-select").value);
       if (p) applyPreset(p);
     };
-    $("prompt-chips").onclick = (e) => {
-      const chip = e.target.closest("[data-chip]");
-      if (chip) {
-        const p = state.promptPresets.find((x) => x.id === chip.dataset.chip);
-        if (p) p.enabled = !p.enabled;
+    $("pp-open").onclick = () => { if ($("pp-pop").hidden) openPromptPop(); else closePromptPop(); };
+    $("pp-chips").onclick = (e) => {
+      if (e.target.closest("[data-pp-open]")) { openPromptPop(); return; }
+      const off = e.target.closest("[data-pp-off]");
+      if (!off) return;
+      const p = state.promptPresets.find((x) => x.id === off.dataset.ppOff);
+      if (!p) return;
+      p.enabled = false;
+      persistPreset(p);
+      renderChips();
+    };
+    $("pp-create").onclick = () => openPresetForm(null);
+    $("pp-cancel").onclick = () => { $("pp-form").hidden = true; ppEditingId = null; };
+    $("pp-search").addEventListener("input", () => renderPromptMenu());
+    $("pp-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const name = $("pp-name").value.trim();
+      if (!name) { toast("У пресета нет имени."); return; }
+      const existing = ppEditingId ? state.promptPresets.find((x) => x.id === ppEditingId) : null;
+      const draft = normalizePreset({
+        id: existing && existing.id,
+        name,
+        category: $("pp-cat").value.trim() || "Общее",
+        text: $("pp-text").value,
+        position: $("pp-pos").value,
+        enabled: existing ? existing.enabled : false,
+        order: existing ? existing.order : state.promptPresets.length,
+      }, state.promptPresets.length);
+      if (existing) Object.assign(existing, draft);
+      else state.promptPresets.push(draft);
+      await persistPreset(existing || draft);
+      $("pp-form").hidden = true;
+      ppEditingId = null;
+      renderChips();
+    });
+    $("pp-list").addEventListener("change", (e) => {
+      const box = e.target.closest("[data-pp-on]");
+      if (!box) return;
+      const p = state.promptPresets.find((x) => x.id === box.dataset.ppOn);
+      if (!p) return;
+      p.enabled = box.checked;
+      if (p.enabled) p.order = Math.max(-1, ...state.promptPresets.map((x) => x.order)) + 1;
+      persistPreset(p);
+      renderChips();
+    });
+    $("pp-list").addEventListener("click", async (e) => {
+      const id = (sel) => { const n = e.target.closest(sel); return n && Object.values(n.dataset)[0]; };
+      const edit = e.target.closest("[data-pp-edit]");
+      const pos = e.target.closest("[data-pp-pos]");
+      const up = e.target.closest("[data-pp-up]");
+      const down = e.target.closest("[data-pp-down]");
+      const dup = e.target.closest("[data-pp-dup]");
+      const del = e.target.closest("[data-pp-del]");
+      const find = (node) => node && state.promptPresets.find((x) => x.id === Object.values(node.dataset)[0]);
+      if (edit) { openPresetForm(find(edit)); return; }
+      if (pos) {
+        const p = find(pos);
+        if (!p) return;
+        p.position = p.position === "after" ? "before" : "after";
+        await persistPreset(p);
         renderChips();
         return;
       }
-      if (e.target.closest("#chip-add")) {
-        const name = window.prompt("Имя пресета промта", "Новый");
-        if (!name) return;
-        const text = window.prompt("Текст", "") || "";
-        const position = window.confirm("OK — вставить ДО промта, Отмена — ПОСЛЕ") ? "before" : "after";
-        state.promptPresets.push({ id: "p" + Date.now(), name, text, position, enabled: true });
+      if (up || down) {
+        const node = up || down;
+        const active = activeOrdered();
+        const i = active.findIndex((p) => p.id === Object.values(node.dataset)[0]);
+        const j = i + (up ? -1 : 1);
+        if (i < 0 || j < 0 || j >= active.length) return;
+        const list = active.slice();
+        const [item] = list.splice(i, 1);
+        list.splice(j, 0, item);
+        const changed = [];
+        list.forEach((p, idx) => { if (p.order !== idx) { p.order = idx; changed.push(p); } });
+        await Promise.all(changed.map((p) => persistPreset(p)));
+        renderChips();
+        return;
+      }
+      if (dup) {
+        const p = find(dup);
+        if (!p) return;
+        const copy = normalizePreset({ ...p, id: undefined, name: p.name + " копия", enabled: false, order: state.promptPresets.length }, state.promptPresets.length);
+        delete copy.id;
+        state.promptPresets.push(copy);
+        await persistPreset(copy);
+        renderChips();
+        return;
+      }
+      if (del) {
+        const p = find(del);
+        if (!p) return;
+        if (!window.confirm("Удалить пресет «" + p.name + "»?")) return;
+        try { await api("/zeroimagestudio/collection/prompt_presets/" + encodeURIComponent(p.id), { method: "DELETE" }); }
+        catch (err) { toast(err.message || String(err)); }
+        state.promptPresets = state.promptPresets.filter((x) => x.id !== p.id);
         renderChips();
       }
-    };
+      void id;
+    });
+    document.addEventListener("click", (e) => {
+      if ($("pp-pop").hidden) return;
+      if (e.target.closest("#pp-pop") || e.target.closest("#pp-open") || e.target.closest("#pp-chips")) return;
+      closePromptPop();
+    });
+    window.addEventListener("resize", () => { if (!$("pp-pop").hidden) placePromptPop(); });
     $("ref-list").onclick = async (e) => {
       if (e.target.closest("#ref-upload")) { $("file-ref").click(); return; }
       if (e.target.closest("#ref-from-layer")) {
@@ -1842,7 +2240,12 @@
         return;
       }
       const del = e.target.closest("[data-ref-del]");
-      if (del) { state.references = state.references.filter((r) => r.id !== del.dataset.refDel); renderRefs(); }
+      if (del) { state.references = state.references.filter((r) => r.id !== del.dataset.refDel); renderRefs(); return; }
+      const card = e.target.closest(".ref[data-ref]");
+      if (card) {
+        const ref = state.references.find((r) => r.id === card.dataset.ref);
+        if (ref) { ref.selected = !ref.selected; renderRefs(); }
+      }
     };
     $("file-ref").onchange = async () => {
       for (const file of $("file-ref").files) {
@@ -1856,16 +2259,29 @@
     };
     $("file-layer").onchange = async () => {
       const file = $("file-layer").files[0];
+      $("file-layer").value = "";
       if (!file) return;
       const img = await loadImage(URL.createObjectURL(file));
-      editor.pushUndo(editor.fullSnapshot());
-      if (!editor.layers.length) {
-        editor.doc = { w: img.width, h: img.height };
-        editor.resizeMask();
-      }
-      await editor.addImage(img, { name: file.name });
-      editor.fit();
+      await offerImportImage(img, file.name);
     };
+    const stage = $("stage");
+    stage.addEventListener("dragover", (e) => { e.preventDefault(); });
+    stage.addEventListener("drop", async (e) => {
+      e.preventDefault();
+      const files = [...(e.dataTransfer && e.dataTransfer.files || [])].filter((f) => f.type.startsWith("image/"));
+      if (!files.length) return;
+      const img = await loadImage(URL.createObjectURL(files[0]));
+      await offerImportImage(img, files[0].name);
+    });
+    window.addEventListener("paste", async (e) => {
+      if (e.target && /^(input|textarea|select)$/i.test(e.target.tagName)) return;
+      const items = [...(e.clipboardData && e.clipboardData.items || [])];
+      const file = items.map((item) => (item.kind === "file" ? item.getAsFile() : null)).find((f) => f && /^image\//.test(f.type));
+      if (!file) return;
+      e.preventDefault();
+      const img = await loadImage(URL.createObjectURL(file));
+      await offerImportImage(img, "Буфер обмена");
+    });
     $("lora-panel").addEventListener("click", onLoraClick);
     $("lora-panel").addEventListener("change", onLoraChange);
     $("lora-panel").addEventListener("input", onLoraInput);
@@ -1971,14 +2387,33 @@
     });
     window.addEventListener("keydown", (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); generate(); }
-      if (e.key === "Escape") collapseZeroImageStudio();
+      if (e.key === "Escape") {
+        if (!$("pp-pop").hidden) { closePromptPop(); return; }
+        if (document.querySelector(".modal-back")) return;
+        collapseZeroImageStudio();
+      }
     });
     window.addEventListener("message", async (ev) => {
       const msg = ev.data || {};
-      if (msg.type === "zeroimagestudio-open" && msg.projectId && msg.projectId !== state.projectId) {
-        try { await loadProject(msg.projectId); } catch (err) { toast(err.message); }
-      }
+      if (msg.type !== "zeroimagestudio-open") return;
+      if (!booted) { pendingGraphOpen = msg; return; }
+      await applyGraphOpen(msg);
     });
+  }
+
+  async function applyGraphOpen(msg) {
+    if (msg.projectId && msg.projectId !== state.projectId) {
+      try { await loadProject(msg.projectId); } catch (err) { toast(err.message); }
+    }
+    if (msg.imageUrl && msg.imageUrl !== state._graphImage) {
+      state._graphImage = msg.imageUrl;
+      try {
+        const img = await loadImage(msg.imageUrl);
+        await offerImportImage(img, "Вход IMAGE");
+      } catch (err) { toast("Не удалось прочитать изображение со входа ноды."); }
+    } else if (msg.imageLinked && !msg.imageUrl) {
+      toast("Ко входу IMAGE подключён кадр, но файла ещё нет. Выберите файл в Load Image или выполните граф.");
+    }
   }
 
   function onFileChange(e) {
@@ -1991,6 +2426,8 @@
     }
     if (t.dataset.krea) c.krea[t.dataset.krea] = t.dataset.krea === "grounding_px" ? Number(t.value) : t.value;
     renderPipe();
+    renderModelSummary();
+    if (t.dataset.file === "method") renderRefs();
   }
 
   async function onLoraClick(e) {
@@ -2054,14 +2491,18 @@
     }
   }
 
+  let booted = false;
+  let pendingGraphOpen = null;
+
   async function boot() {
     editor = new Editor($("stage"));
     bindStatic();
     connectWs();
     try {
-      const [hints, models, loras, presets, gallery, settings] = await Promise.all([
+      const [hints, models, loras, presets, gallery, settings, promptPresets] = await Promise.all([
         api("/zeroimagestudio/hints"), api("/zeroimagestudio/models"), api("/zeroimagestudio/loras"),
-        api("/zeroimagestudio/collection/presets"), api("/zeroimagezeroimagestudio/gallery"), api("/zeroimagestudio/settings"),
+        api("/zeroimagestudio/collection/presets"), api("/zeroimagestudio/gallery"), api("/zeroimagestudio/settings"),
+        api("/zeroimagestudio/collection/prompt_presets"),
       ]);
       state.hints = hints.hints || [];
       state.catalog = models;
@@ -2069,6 +2510,12 @@
       state.presets = presets.items || [];
       state.gallery = gallery.items || [];
       state.settings = settings;
+      const storedPresets = (promptPresets && promptPresets.items) || [];
+      if (storedPresets.length) state.promptPresets = storedPresets.map((p, i) => normalizePreset(p, i));
+      else {
+        state.promptPresets = state.promptPresets.map((p, i) => normalizePreset(p, i));
+        for (const preset of state.promptPresets) await persistPreset(preset);
+      }
       if (models.krea_import_error) toast("Встроенные ноды Krea 2 Edit не загрузились: " + models.krea_import_error);
       fillLlmPresets();
     } catch (err) {
@@ -2084,6 +2531,12 @@
     }
     renderGallery();
     pollStats();
+    booted = true;
+    if (pendingGraphOpen) {
+      const queued = pendingGraphOpen;
+      pendingGraphOpen = null;
+      await applyGraphOpen(queued);
+    }
     window.parent.postMessage({ type: "zeroimagestudio-ready" }, "*");
   }
 

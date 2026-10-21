@@ -439,14 +439,23 @@ async def llm(request):
         return _json({"error": "Не задано имя модели LLM."}, 400)
     user_text = body.get("prompt") or ""
     content: list | str
+    images: list[str] = []
+    raw_images = body.get("images")
+    if isinstance(raw_images, list):
+        images.extend(str(item) for item in raw_images if item)
     image = body.get("image")  # data URL or raw base64
-    if mode == "describe" and image:
-        if isinstance(image, str) and not image.startswith("data:"):
-            image = "data:image/png;base64," + image
-        content = [
-            {"type": "text", "text": user_text or "Опиши изображение как промт."},
-            {"type": "image_url", "image_url": {"url": image}},
-        ]
+    if isinstance(image, str) and image:
+        images.insert(0, image)
+    images = images[:4]
+    normalized: list[str] = []
+    for item in images:
+        if not item.startswith("data:"):
+            item = "data:image/png;base64," + item
+        normalized.append(item)
+    if normalized and mode in ("describe", "improve"):
+        lead = user_text or ("Опиши изображение как промт." if mode == "describe" else "Улучши промт, опираясь на изображения.")
+        content = [{"type": "text", "text": lead}]
+        content.extend({"type": "image_url", "image_url": {"url": item}} for item in normalized)
     else:
         content = user_text
     payload = {
@@ -518,8 +527,8 @@ def register(krea_import_error=None):
     add("POST", "/zeroimagestudio/assemble", assemble)
     add("POST", "/zeroimagestudio/paste", paste)
     add("POST", "/zeroimagestudio/commit", commit)
-    add("GET", "/zeroimagezeroimagestudio/gallery", gallery_list)
-    add("POST", "/zeroimagezeroimagestudio/gallery", gallery_save)
+    add("GET", "/zeroimagestudio/gallery", gallery_list)
+    add("POST", "/zeroimagestudio/gallery", gallery_save)
     add("POST", "/zeroimagestudio/project", project_put)
     add("POST", "/zeroimagestudio/project/{project_id}", project_put)
     add("GET", "/zeroimagestudio/project/{project_id}", project_get)

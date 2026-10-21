@@ -24,6 +24,37 @@ function widget(node, name) {
   return (node.widgets || []).find((w) => w.name === name);
 }
 
+function linkedImage(node) {
+  try {
+    const slot = node.findInputSlot && node.findInputSlot("image");
+    if (slot == null || slot < 0) return {};
+    const input = node.inputs && node.inputs[slot];
+    if (!input || input.link == null) return {};
+    const link = app.graph && app.graph.links && app.graph.links[input.link];
+    if (!link) return { imageLinked: true };
+    const src = app.graph.getNodeById(link.origin_id);
+    if (!src) return { imageLinked: true };
+    const imageWidget = (src.widgets || []).find((w) => w.name === "image" || w.name === "filename");
+    if (imageWidget && imageWidget.value) {
+      let name = String(imageWidget.value);
+      let type = "input";
+      const bracket = name.match(/^(.*) \[(\w+)\]$/);
+      if (bracket) { name = bracket[1]; type = bracket[2]; }
+      return { imageUrl: `/view?filename=${encodeURIComponent(name)}&type=${encodeURIComponent(type)}` };
+    }
+    const outputs = app.nodeOutputs && app.nodeOutputs[src.id];
+    const img = outputs && outputs.images && outputs.images[0];
+    if (img && img.filename) {
+      return {
+        imageUrl: `/view?filename=${encodeURIComponent(img.filename)}&type=${encodeURIComponent(img.type || "output")}&subfolder=${encodeURIComponent(img.subfolder || "")}`,
+      };
+    }
+    return { imageLinked: true };
+  } catch (err) {
+    return {};
+  }
+}
+
 function openZeroImageStudio(node) {
   let overlay = document.getElementById("comfy-zeroimagestudio-overlay");
   if (!overlay) {
@@ -46,6 +77,7 @@ function openZeroImageStudio(node) {
       type: "zeroimagestudio-open",
       projectId: widget(node, "zeroimagestudio_project")?.value || "",
       nodeId: node.id,
+      ...linkedImage(node),
     }, "*");
   };
   if (frame.dataset.ready === "1") send();
@@ -62,6 +94,7 @@ function onMessage(ev, frame) {
         type: "zeroimagestudio-open",
         projectId: widget(frame._zisNode, "zeroimagestudio_project")?.value || "",
         nodeId: frame._zisNode.id,
+        ...linkedImage(frame._zisNode),
       }, "*");
     }
   }
