@@ -1,0 +1,100 @@
+[
+  {
+    "id": "krea2",
+    "name": "Krea 2",
+    "pipeline": "create",
+    "tags": ["t2i", "fp8"],
+    "note": "Нативный Krea 2 в ComfyUI: UNETLoader + CLIPLoader type=krea2 + VAE. Turbo обычно 8 шагов, CFG 1.",
+    "defaults": {
+      "loader": "diffusion",
+      "clip_type": "krea2",
+      "weight_dtype": "default",
+      "latent_mode": "sd3",
+      "encoder": "clip",
+      "unet": "krea2_turbo_fp8_scaled.safetensors",
+      "clip": "qwen3vl_4b_fp8_scaled.safetensors",
+      "vae": "qwen_image_vae.safetensors"
+    },
+    "sampler": {
+      "steps": 8,
+      "cfg": 1.0,
+      "denoise": 1.0,
+      "sampler": "euler",
+      "scheduler": "simple",
+      "batch": 1
+    },
+    "output": [1024, 1024]
+  },
+  {
+    "id": "krea2_identity_edit",
+    "name": "Krea 2 Identity Edit 2.0",
+    "pipeline": "edit",
+    "edit_method": "krea2_edit",
+    "tags": ["edit", "id-lock", "refs ≤2"],
+    "note": "Тот же Krea 2 плюс LoRA krea2_identity_edit_v2 и встроенные ноды StudioKrea2Edit*. Для правки сцены вместо человека — krea2_general_edit_v2, одна LoRA за раз.",
+    "defaults": {
+      "loader": "diffusion",
+      "clip_type": "krea2",
+      "weight_dtype": "default",
+      "latent_mode": "sd3",
+      "encoder": "clip",
+      "unet": "krea2_turbo_fp8_scaled.safetensors",
+      "clip": "qwen3vl_4b_fp8_scaled.safetensors",
+      "vae": "qwen_image_vae.safetensors"
+    },
+    "lora": {
+      "name": "krea2_identity_edit_v2.safetensors",
+      "strength_model": 1.0,
+      "strength_clip": 1.0,
+      "enabled": true,
+      "trigger_mode": "off",
+      "triggers": []
+    },
+    "krea": {
+      "fit_mode": "fit",
+      "ref_boost": 1.0,
+      "ref_boost_a": 1.0,
+      "ref_position": "aligned (trained)",
+      "ref_position_a": "aligned (trained)",
+      "grounding_px": 1024,
+      "impl": "internal"
+    },
+    "sampler": {
+      "steps": 8,
+      "cfg": 1.0,
+      "denoise": 1.0,
+      "sampler": "euler",
+      "scheduler": "simple",
+      "batch": 1
+    },
+    "output": [1024, 1024]
+  },
+  {
+    "id": "qwen_image_21_edit",
+    "name": "Qwen Image 2.1 Edit",
+    "pipeline": "edit",
+    "edit_method": "qwen_image_21",
+    "tags": ["edit", "refs ≤16", "bf16"],
+    "note": "Только ноды ядра: UNETLoader, CLIPLoader type=qwen_image, VAELoader, TextEncodeQwenImage21. Нужен ComfyUI ≥ 0.37.",
+    "defaults": {
+      "loader": "diffusion",
+      "clip_type": "qwen_image",
+      "weight_dtype": "default",
+      "latent_mode": "sd3",
+      "encoder": "qwen_image_21",
+      "unet": "qwen_image_2.1_bf16.safetensors",
+      "clip": "qwen3vl_8b_bf16.safetensors",
+      "vae": "qwen_image_2.1_vae_bf16.safetensors"
+    },
+    "qwen_resolution": 1024,
+    "sampler": {
+      "steps": 20,
+      "cfg": 1.0,
+      "denoise": 1.0,
+      "sampler": "euler",
+      "scheduler": "simple",
+      "batch": 1
+    },
+    "output": [1024, 1024]
+  }
+]

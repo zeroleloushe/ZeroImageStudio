@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Studio</title>
+  <link rel="stylesheet" href="studio.css">
+  <script>window.__STUDIO_PAGE = true;</script>
+  <script src="icons.js"></script>
+</head>
+<body data-tab="canvas">
+<div class="top">
+  <div class="logo">S</div>
+  <div>
+    <input id="project-name" class="f" style="height:18px;border:0;background:transparent;font-weight:700;font-size:13px;font-family:inherit;padding:0;width:220px" value="Портрет_волосы.studio">
+    <div class="mu" id="project-sub" style="font-size:10.5px">ComfyUI · Studio</div>
+  </div>
+  <button class="b" id="btn-save" data-i="save" data-s="14">Сохранить</button>
+  <button class="b" id="btn-load" data-i="open" data-s="14">Загрузить</button>
+  <button class="b s" id="btn-undo" data-i="undo" data-s="13" title="Ctrl+Z"></button>
+  <button class="b s" id="btn-redo" data-i="redo" data-s="13" title="Ctrl+Y"></button>
+  <div class="tabs">
+    <button type="button" class="on" data-tab="canvas" data-i="image" data-s="14">Холст</button>
+    <button type="button" data-tab="gallery" data-i="grid" data-s="14">Галерея <em id="gal-count">0</em></button>
+    <button type="button" data-tab="lora" data-i="layers" data-s="14">LoRA <em id="lora-count">0</em></button>
+    <button type="button" data-tab="presets" data-i="star" data-s="14">Пресеты <em id="preset-count">0</em></button>
+  </div>
+  <div style="flex:1"></div>
+  <span class="mu">Пресет</span>
+  <select id="preset-select" class="dd" style="width:280px;height:28px"></select>
+  <button class="b" id="btn-save-preset" data-i="plus" data-s="13">Сохранить как</button>
+  <button class="b" id="btn-settings" data-i="gear" data-s="14" title="LLM и Civitai"></button>
+  <button class="b ac" id="btn-collapse" data-i="collapse" data-s="14">Свернуть в ноду</button>
+</div>
+<div class="pipe" id="pipe">
+  <span class="mu">Граф генерации:</span>
+  <div id="pipe-steps" class="row" style="gap:8px;overflow:hidden"></div>
+  <div style="flex:1"></div>
+  <span class="mu mono" id="sys-stats">GPU … · очередь …</span>
+  <button class="b s" id="btn-focus" data-i="link" data-s="12">Открыть в графе ComfyUI</button>
+</div>
+
+<div class="cols">
+  <div class="toolcol" id="tools">
+    <button class="tool" data-tool="move" data-i="move" data-s="17" title="Перемещение (V)"><small>V</small></button>
+    <button class="tool" data-tool="select" data-i="select" data-s="17" title="Выделение (M)"><small>M</small></button>
+    <button class="tool" data-tool="lasso" data-i="lasso" data-s="17" title="Лассо (L)"><small>L</small></button>
+    <button class="tool" data-tool="transform" data-i="transform" data-s="17" title="Свободное трансформирование (T)"><small>T</small></button>
+    <button class="tool" data-tool="crop" data-i="crop" data-s="17" title="Кадрирование (C)"><small>C</small></button>
+    <hr>
+    <button class="tool" data-tool="brush" data-i="brush" data-s="17" title="Кисть (B)"><small>B</small></button>
+    <button class="tool" data-tool="eraser" data-i="eraser" data-s="17" title="Ластик (E)"><small>E</small></button>
+    <button class="tool" data-tool="eyedrop" data-i="eyedrop" data-s="17" title="Пипетка (I)"><small>I</small></button>
+    <hr>
+    <button class="tool" data-tool="mask" data-i="mask" data-s="17" title="Маска области (Q)"><small>Q</small></button>
+    <button class="tool on" data-tool="genarea" data-i="genarea" data-s="17" title="Область генерации (G)"><small>G</small></button>
+    <hr>
+    <button class="tool" data-tool="hand" data-i="hand" data-s="17" title="Рука (пробел)"></button>
+    <button class="tool" data-tool="zoom" data-i="zoom" data-s="17" title="Масштаб"></button>
+    <hr>
+    <input id="swatch" type="color" value="#e7c27a" title="Цвет кисти" style="width:28px;height:22px;border:0;background:transparent;padding:0">
+  </div>
+
+  <div class="left">
+    <div class="node" style="--c:#ff7a1a">
+      <div class="sock r"></div>
+      <div class="nh"><span class="d"></span>Модель<span class="r" id="model-sockets">MODEL · CLIP · VAE</span></div>
+      <div class="nb" style="gap:5px">
+        <div class="mode" id="mode">
+          <button type="button" data-pipe="create">Создание</button>
+          <button type="button" data-pipe="edit" class="on">Редактирование</button>
+        </div>
+        <div id="hint-list" style="display:flex;flex-direction:column;gap:5px"></div>
+        <div class="files" id="file-block"></div>
+        <details class="adv">
+          <summary>Параметры графа</summary>
+          <div class="files" id="graph-options" style="margin-top:6px"></div>
+        </details>
+      </div>
+    </div>
+    <div class="node" style="--c:#4aa8ff">
+      <div class="sock r"></div>
+      <div class="nh"><span class="d"></span>Референсы<span class="r" id="ref-cap">для Edit-моделей · 0</span></div>
+      <div class="nb">
+        <div class="refs" id="ref-list"></div>
+        <div class="mu" id="ref-hint" style="font-size:10.5px">Krea 2 Edit берёт исходный кроп и один дополнительный референс. Qwen Image 2.1 — до 16, в промте <span class="mono">&lt;image1&gt;</span>.</div>
+      </div>
+    </div>
+    <div class="node" style="--c:#b18cff;flex:1">
+      <div class="sock r"></div>
+      <div class="nh"><span class="d"></span>LoRA-менеджер<span class="r" id="lora-sum">0 активны</span></div>
+      <div class="nb" style="flex:1" id="lora-panel"></div>
+    </div>
+  </div>
+
+  <div class="center">
+    <div class="node" style="--c:#4aa8ff;flex:1">
+      <div class="nh"><span class="d"></span>Холст
+        <span class="r"><span class="mono" id="canvas-info">—</span>
+          <button class="b s" id="btn-open-image" data-i="open" data-s="12">Изображение</button>
+          <button class="b s" id="btn-canvas-size" data-i="crop" data-s="12">Размер холста</button>
+        </span>
+      </div>
+      <div class="stage" id="stage">
+        <div style="position:absolute;left:12px;top:12px;display:flex;flex-direction:column;gap:6px;align-items:flex-start;z-index:3;pointer-events:none">
+          <span class="tag tgr" id="mask-tag" style="font-size:10.5px;padding:3px 7px">Маска: нет</span>
+          <span class="tag to" id="context-tag" style="font-size:10.5px;padding:3px 7px">Контекст</span>
+          <label class="tag" style="pointer-events:auto;display:flex;align-items:center;gap:6px">Кисть <input id="brush-size" class="range" type="range" min="1" max="300" value="64" style="width:88px"></label>
+        </div>
+      </div>
+    </div>
+    <div class="node" style="--c:#e7c27a">
+      <div class="sock l" style="top:9px"></div>
+      <div class="nh"><span class="d"></span>Промт<span class="r" id="token-est">CONDITIONING</span></div>
+      <div style="display:flex;min-height:0">
+        <div class="nb" style="flex:1;border-right:1px solid var(--ln)">
+          <textarea id="prompt" class="prompt"></textarea>
+          <input id="negative" class="f" placeholder="Негативный промт" style="width:100%;font-family:inherit">
+          <div class="row" id="prompt-chips" style="flex-wrap:wrap;gap:5px"></div>
+          <div class="mu" id="prompt-final" style="font-size:10.5px"></div>
+          <div class="row" style="gap:5px;flex-wrap:wrap">
+            <span style="color:var(--vi);font-weight:700" data-i="spark" data-s="13"> LLM</span>
+            <button class="b s" id="llm-improve" data-i="wand" data-s="12">Улучшить</button>
+            <button class="b s" id="llm-extend" data-i="pen" data-s="12">Дописать</button>
+            <button class="b s" id="llm-describe" data-i="image" data-s="12">Описать изображение</button>
+            <select id="llm-preset" class="dd" style="width:140px"></select>
+            <button class="b s" id="btn-system" data-i="gear" data-s="12">Системный промт</button>
+          </div>
+        </div>
+        <div class="nb" style="width:300px">
+          <div class="kv" id="sampler-box"></div>
+          <div class="progress-line" id="gen-progress" style="display:none"><i></i></div>
+          <button class="gen" id="btn-gen" style="margin-top:auto"><span data-i="play" data-s="14"></span><span id="gen-label">Сгенерировать</span> <span class="mono" id="gen-batch" style="font-weight:500;font-size:11px;opacity:.75">×1 · Ctrl+↵</span></button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="right">
+    <div class="node" style="--c:#ff5c7a">
+      <div class="sock l"></div>
+      <div class="nh"><span class="d"></span>Инспектор · Область генерации</div>
+      <div class="nb" id="inspector"></div>
+    </div>
+    <div class="node" style="--c:#3ddc97">
+      <div class="nh"><span class="d"></span>Слои
+        <span class="r">
+          <button class="b s" id="btn-layer-add" data-i="plus" data-s="13" title="Пустой слой"></button>
+          <button class="b s" id="btn-layer-dup" data-i="layers" data-s="13" title="Дублировать"></button>
+          <button class="b s" id="btn-layer-del" data-i="trash" data-s="13" title="Удалить"></button>
+        </span>
+      </div>
+      <div class="nb" style="gap:3px">
+        <div class="row" style="margin-bottom:4px">
+          <select id="layer-blend" class="dd" style="flex:1"></select>
+          <span class="mu">Непрозр.</span>
+          <input id="layer-opacity" class="f" style="width:54px" value="100%">
+        </div>
+        <div id="layer-list" style="display:flex;flex-direction:column;gap:3px"></div>
+      </div>
+    </div>
+    <div class="node" style="--c:#4aa8ff;flex:1">
+      <div class="nh"><span class="d"></span>Галерея<span class="r" id="gal-sort-label">сортировка: новые</span></div>
+      <div class="nb">
+        <div class="row">
+          <select id="gal-model" class="dd" style="flex:1"></select>
+          <select id="gal-lora" class="dd" style="flex:1"></select>
+          <select id="gal-sort" class="dd" style="width:110px">
+            <option value="new">Сначала новые</option>
+            <option value="old">Сначала старые</option>
+          </select>
+        </div>
+        <div class="gal" id="gal"></div>
+        <div id="gal-legend" style="display:flex;gap:10px;font-size:10.5px;color:#7d8594;margin-top:2px;flex-wrap:wrap"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="full" id="view-presets">
+  <div class="node" style="--c:#e7c27a;flex:1;width:100%">
+    <div class="nh"><span class="d"></span>Пресеты</div>
+    <div class="nb" id="preset-page" style="flex:1"></div>
+  </div>
+</div>
+
+<div id="pop" class="pop" hidden></div>
+<div id="toast" class="toast" hidden></div>
+<input id="file-open" type="file" accept=".zip,.studio.zip,application/zip" hidden>
+<input id="file-ref" type="file" accept="image/*" multiple hidden>
+<input id="file-layer" type="file" accept="image/*" hidden>
+
+<div id="modal"></div>
+<script src="studio_app.js"></script>
+</body>
+</html>

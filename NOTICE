@@ -1,0 +1,10 @@
+studio_krea2edit.py is derived from lbouaraba/comfyui-krea2edit v2.0.0
+(commit 13ef60f20828949becada815d3cbc371eb5ccaab), Apache License 2.0.
+https://github.com/lbouaraba/comfyui-krea2edit
+
+The node class ids in this copy are StudioKrea2EditModelPatch and
+StudioKrea2EditGroundedEncode. The forward, RoPE placement, pixel-path fit,
+and grounded Qwen3-VL template are the upstream implementation.
+
+Krea 2 and the Identity Edit / General Edit LoRA weights are not included.
+Those weights are published separately under the Krea 2 Community License.
