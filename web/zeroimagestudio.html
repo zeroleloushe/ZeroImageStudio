@@ -184,12 +184,12 @@
           </div>
         </div>
         <div class="mu" id="prompt-final" style="font-size:10.5px"></div>
-        <div class="row" style="gap:5px;flex-wrap:wrap">
+        <div class="row llm-row" style="gap:5px">
           <span style="color:var(--vi);font-weight:700" data-i="spark" data-s="13"> LLM</span>
           <button class="b s" id="llm-improve" data-i="wand" data-s="12">Улучшить</button>
           <button class="b s" id="llm-extend" data-i="pen" data-s="12">Дописать</button>
           <button class="b s" id="llm-describe" data-i="image" data-s="12">Описать изображение</button>
-          <select id="llm-preset" class="dd" style="width:140px"></select>
+          <select id="llm-preset" class="dd" title="Пресет LLM"></select>
           <button class="b s" id="btn-system" data-i="gear" data-s="12">Системный промт</button>
         </div>
         <div class="progress-line" id="gen-progress" style="display:none"><i></i></div>
@@ -215,10 +215,10 @@
         </span>
       </div>
       <div class="nb" style="gap:3px">
-        <div class="row" style="margin-bottom:4px">
-          <select id="layer-blend" class="dd" style="flex:1"></select>
+        <div class="row layer-blend" style="margin-bottom:4px">
+          <select id="layer-blend" class="dd"></select>
           <span class="mu">Непрозр.</span>
-          <input id="layer-opacity" class="f" style="width:54px" value="100%">
+          <input id="layer-opacity" class="f" value="100%">
         </div>
         <div id="layer-list" style="display:flex;flex-direction:column;gap:3px"></div>
       </div>
@@ -226,12 +226,16 @@
     <div class="node" style="--c:#4aa8ff;flex:1">
       <div class="nh"><span class="d"></span>Галерея<span class="r" id="gal-sort-label">сортировка: новые</span></div>
       <div class="nb">
-        <div class="row">
-          <select id="gal-model" class="dd" style="flex:1"></select>
-          <select id="gal-lora" class="dd" style="flex:1"></select>
-          <select id="gal-sort" class="dd" style="width:110px">
-            <option value="new">Сначала новые</option>
-            <option value="old">Сначала старые</option>
+        <div class="gal-scope" id="gal-scope" role="group" aria-label="Чьи генерации показывать">
+          <button type="button" data-scope="all" class="on">Все генерации</button>
+          <button type="button" data-scope="project">Этот проект</button>
+        </div>
+        <div class="row gal-filters">
+          <select id="gal-model" class="dd" title="Фильтр по модели"></select>
+          <select id="gal-lora" class="dd" title="Фильтр по LoRA"></select>
+          <select id="gal-sort" class="dd" title="Сначала новые">
+            <option value="new">Новые</option>
+            <option value="old">Старые</option>
           </select>
         </div>
         <div class="gal" id="gal"></div>

@@ -40,6 +40,7 @@
     loraSelected: "",
     presets: [],
     gallery: [],
+    galleryScope: "all",
     settings: null,
     running: false,
     promptId: null,
@@ -891,7 +892,7 @@
     host.innerHTML = list.map((h) => {
       const on = h.id === state.hintId;
       const tags = hintTags(h, state.pipeline).map((t, i) => `<span class="tag ${on && i === 0 ? "to" : ""}">${escapeHtml(t)}</span>`).join("");
-      return `<button type="button" class="mrow ${on ? "on" : ""}" data-hint="${h.id}"><span class="rd"></span><b>${escapeHtml(h.name)}</b><span class="tg">${tags}</span></button>`;
+      return `<button type="button" class="mrow ${on ? "on" : ""}" data-hint="${h.id}" title="${escapeHtml(h.name)}"><span class="rd"></span><b>${escapeHtml(h.name)}</b><span class="tg">${tags}</span></button>`;
     }).join("") || '<div class="empty">Нет моделей для этого режима.</div>';
   }
 
@@ -1021,9 +1022,9 @@
     const detail = sel ? loraDetail(sel) : `<div class="empty">Выберите LoRA в списке. Список читается из папки loras ComfyUI.</div>`;
     $("lora-panel").innerHTML = `
       <div class="row"><input id="lora-search" class="f" style="flex:1;font-family:inherit" placeholder="Поиск: имя, тег, триггер…" value="${escapeHtml(state.loraQuery)}"></div>
-      <div class="row" style="align-items:flex-start;gap:8px;min-height:0">
-        <div class="tree" style="width:128px;border-right:1px solid var(--ln);padding-right:6px;max-height:180px;overflow:auto">${tree}</div>
-        <div style="flex:1;min-width:0;max-height:180px;overflow:auto">
+      <div class="lora-split">
+        <div class="tree">${tree}</div>
+        <div class="lora-table">
           <table class="lt"><tr><th></th><th>Имя</th><th>Сила</th><th>Триг.</th></tr>${rows || `<tr><td></td><td class="mu" colspan="3">${files.length ? "Ничего не найдено" : "Папка loras пуста"}</td></tr>`}</table>
         </div>
       </div>
@@ -1115,7 +1116,7 @@
     const a = state.area;
     const scale = (g.w > 0) ? (a.outW / g.w) : 1;
     $("inspector").innerHTML = `
-      <div class="kv" style="grid-template-columns:auto 1fr auto 1fr">
+      <div class="kv" style="grid-template-columns:auto minmax(0,1fr) auto minmax(0,1fr)">
         <span>X</span><input id="gx" class="f" value="${g.x}"><span>Y</span><input id="gy" class="f" value="${g.y}">
         <span>W</span><input id="gw" class="f" value="${g.w}"><span>H</span><input id="gh" class="f" value="${g.h}">
         <span>Выход</span><select id="gout" class="dd">${[[1024,1024],[768,768],[512,512],[1056,1056],[1280,720],[832,1216],[1536,1024]].map(([w,h]) => `<option ${a.outW===w&&a.outH===h?"selected":""} value="${w}x${h}">${w} × ${h}</option>`).join("")}<option value="custom" ${[[1024,1024],[768,768],[512,512],[1056,1056],[1280,720],[832,1216],[1536,1024]].some(([w,h])=>w===a.outW&&h===a.outH)?"":"selected"}>свои</option></select>
@@ -1595,37 +1596,58 @@
     $("preset-count").textContent = String(state.presets.length);
   }
 
+  function galleryInProject(it) {
+    const pid = state.projectId || "";
+    return !!pid && (it.meta.project_id || "") === pid;
+  }
+
   function renderGallery() {
     const host = $("gal");
-    let items = state.gallery.slice();
+    const scope = state.galleryScope === "project" ? "project" : "all";
+    document.querySelectorAll("#gal-scope button").forEach((b) => b.classList.toggle("on", b.dataset.scope === scope));
+    const allReal = state.gallery.filter((it) => !it.example);
+    const projectReal = allReal.filter(galleryInProject);
+    const scopeAll = $("gal-scope").querySelector('[data-scope="all"]');
+    const scopeProject = $("gal-scope").querySelector('[data-scope="project"]');
+    if (scopeAll) scopeAll.textContent = "Все генерации";
+    if (scopeProject) scopeProject.textContent = "Этот проект";
+    let items = (scope === "project" ? projectReal : allReal).slice();
     const model = $("gal-model").value;
     const lora = $("gal-lora").value;
     if (model) items = items.filter((it) => (it.meta.model_label || it.meta.unet || "") === model);
     if (lora) items = items.filter((it) => (it.meta.loras || []).some((l) => l.name === lora));
     if ($("gal-sort").value === "old") items.reverse();
-    const real = items.filter((it) => !it.example);
     const colors = { krea2_edit: "#ff7a1a", qwen_image_21: "#4aa8ff", create: "#b18cff" };
-    if (!real.length) {
-      if (new URLSearchParams(location.search).get("demo") === "1") {
+    const scopeNote = scope === "project"
+      ? "Только кадры этого проекта."
+      : "Общая галерея: все проекты.";
+    if (!items.length) {
+      if (scope === "all" && new URLSearchParams(location.search).get("demo") === "1" && !allReal.length) {
         const examples = ["portrait-copper.svg", "portrait-blond.svg", "portrait-blue.svg", "portrait.svg", "portrait-green.svg"];
         host.innerHTML = examples.map((s, i) => `<button type="button" class="g" data-example="1"><img src="assets/${s}" alt=""><s style="background:${["#ff7a1a","#b18cff","#4aa8ff","#7d8594","#3ddc97"][i]}"></s></button>`).join("");
         $("gal-legend").innerHTML = "<span>Демо-оформление (?demo=1), не генерации.</span>";
+      } else if (scope === "project") {
+        host.innerHTML = `<div class="empty-gal">В этом проекте ещё нет генераций. Общие кадры из других запусков — в «Все генерации».</div>`;
+        $("gal-legend").innerHTML = `<span>${scopeNote}</span>`;
       } else {
         host.innerHTML = `<div class="empty-gal">Галерея пуста. После генерации здесь будут ваши кадры с промтом и сидом.</div>`;
-        $("gal-legend").innerHTML = "";
+        $("gal-legend").innerHTML = `<span>${scopeNote}</span>`;
       }
     } else {
-      host.innerHTML = real.map((it) => {
+      host.innerHTML = items.map((it) => {
         const col = colors[it.meta.edit_method] || colors[it.meta.pipeline] || "#7d8594";
         return `<button type="button" class="g" data-gal="${it.id}"><img src="/view?filename=${encodeURIComponent(it.file.split("/").pop())}&type=output&subfolder=zeroimagestudio/gallery"><s style="background:${col}"></s></button>`;
       }).join("");
-      $("gal-legend").innerHTML = `<span><b style="color:#ff7a1a">▬</b> Krea Edit</span><span><b style="color:#b18cff">▬</b> Создание</span><span><b style="color:#4aa8ff">▬</b> Qwen</span>`;
+      $("gal-legend").innerHTML = `<span>${scopeNote}</span><span><b style="color:#ff7a1a">▬</b> Krea Edit</span><span><b style="color:#b18cff">▬</b> Создание</span><span><b style="color:#4aa8ff">▬</b> Qwen</span>`;
     }
-    $("gal-count").textContent = String(real.length);
-    const models = [...new Set(state.gallery.map((it) => it.meta.model_label || it.meta.unet).filter(Boolean))];
-    const loras = [...new Set(state.gallery.flatMap((it) => (it.meta.loras || []).map((l) => l.name)))];
-    fillSelect($("gal-model"), ["", ...models], model, "Модель: все");
-    fillSelect($("gal-lora"), ["", ...loras], lora, "LoRA: все");
+    $("gal-count").textContent = String(scope === "project" ? projectReal.length : allReal.length);
+    const pool = scope === "project" ? projectReal : allReal;
+    const models = [...new Set(pool.map((it) => it.meta.model_label || it.meta.unet).filter(Boolean))];
+    const loras = [...new Set(pool.flatMap((it) => (it.meta.loras || []).map((l) => l.name)))];
+    fillSelect($("gal-model"), ["", ...models], model, "Модель");
+    fillSelect($("gal-lora"), ["", ...loras], lora, "LoRA");
+    const sort = $("gal-sort");
+    if (sort) sort.title = sort.value === "old" ? "Сначала старые" : "Сначала новые";
   }
 
   function fillSelect(sel, values, current, placeholder) {
@@ -1918,6 +1940,7 @@
       loader: c.loader, unet: c.unet, clip: c.clip, vae: c.vae, checkpoint: c.checkpoint, clip_type: c.clip_type,
       loras: (c.loras || []).filter((l) => l.enabled).map((l) => ({ name: l.name, strength_model: l.strength_model, strength_clip: l.strength_clip })),
       width: spec.width, height: spec.height,
+      project_id: state.projectId || "",
       created: Math.floor(Date.now() / 1000),
     };
   }
@@ -2467,11 +2490,11 @@
   function renderPresetPage() {
     const host = $("preset-page");
     if (!host) return;
-    host.innerHTML = `<div class="row" style="align-items:flex-start;gap:16px">
-      <div style="flex:1"><b>Пресеты генерации</b><div class="mu">Модель, LoRA, сэмплер, область. Холст не входит.</div>
+    host.innerHTML = `<div class="preset-cols">
+      <div><b>Пресеты генерации</b><div class="mu">Модель, LoRA, сэмплер, область. Холст не входит.</div>
         ${state.presets.map((p) => `<div class="row" style="margin-top:6px"><button class="b" data-load-preset="${p.id}">${escapeHtml(p.name)}</button><button class="b s" data-del-preset="${p.id}">удалить</button></div>`).join("") || `<div class="empty">Пока пусто. «Сохранить как» в шапке.</div>`}
       </div>
-      <div style="flex:1"><b>Пресеты промта</b><div class="mu">Вставляются до или после текста только в момент генерации.</div>
+      <div><b>Пресеты промта</b><div class="mu">Вставляются до или после текста только в момент генерации.</div>
         ${state.promptPresets.map((p) => `<div class="row" style="margin-top:6px"><span class="tag">${p.position === "after" ? "ПОСЛЕ" : "ДО"}</span><input class="f" style="flex:1" data-pp-name="${p.id}" value="${escapeHtml(p.name)}"><button class="b s" data-pp-del="${p.id}">×</button></div><textarea class="f" style="height:48px;width:100%;margin-top:4px" data-pp-text="${p.id}">${escapeHtml(p.text)}</textarea>`).join("")}
       </div></div>`;
   }
@@ -2840,6 +2863,12 @@
       if (!b) return;
       const it = state.gallery.find((x) => x.id === b.dataset.gal);
       if (it) showPop(it, b);
+    };
+    $("gal-scope").onclick = (e) => {
+      const b = e.target.closest("[data-scope]");
+      if (!b || b.dataset.scope === state.galleryScope) return;
+      state.galleryScope = b.dataset.scope === "project" ? "project" : "all";
+      renderGallery();
     };
     $("gal-model").onchange = renderGallery;
     $("gal-lora").onchange = renderGallery;
