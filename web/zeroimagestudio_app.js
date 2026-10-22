@@ -1043,6 +1043,7 @@
       $("ref-hint").textContent = "В режиме Создание референсы не идут в модель. «Описать изображение» и «Улучшить» берут выбранные кадры (если ничего не выбрано — все).";
     }
     if (window.zeroImageStudioHydrateIcons) window.zeroImageStudioHydrateIcons(host);
+    sealCollapsed($("refs-node"));
   }
 
   function activeLoras() { return cfg().loras; }
@@ -1090,6 +1091,7 @@
       ${rows || `<div class="empty">В стеке пусто. Добавьте LoRA из папки models/loras — весь каталог здесь не показывается.</div>`}
     </div>`;
     if (window.zeroImageStudioHydrateIcons) window.zeroImageStudioHydrateIcons($("lora-panel"));
+    sealCollapsed($("lora-node"));
   }
 
   function loraListing(path, query) {
@@ -1932,6 +1934,7 @@
       </div>`;
     }).join("") || `<div class="empty">Нет слоёв. Загрузите изображение или сгенерируйте.</div>`;
     if (window.zeroImageStudioHydrateIcons) window.zeroImageStudioHydrateIcons(host);
+    sealCollapsed(node);
   }
 
   let ppEditingId = null;
@@ -2278,6 +2281,7 @@
     if (sort) sort.title = sort.value === "old" ? "Сначала старые" : "Сначала новые";
     const label = $("gal-sort-label");
     if (label && sort) label.textContent = "сортировка: " + (sort.value === "old" ? "старые" : "новые");
+    sealCollapsed($("gallery-node"));
   }
 
   function assetMeta(asset) {
@@ -2316,6 +2320,7 @@
     $("gal-count").textContent = String(items.length);
     const label = $("gal-sort-label");
     if (label) label.textContent = "ассеты";
+    sealCollapsed($("gallery-node"));
   }
 
   function openAssetMenu(x, y, id) {
@@ -4578,9 +4583,23 @@
       const gone = id !== "canvas" && !!(layout.hidden && layout.hidden[id]);
       node.classList.toggle("collapsed", on);
       node.classList.toggle("panel-hidden", gone);
+      sealCollapsed(node);
       const dot = node.querySelector(":scope > .nh .d");
       if (dot && id !== "canvas") dot.title = on ? "Развернуть" : "Свернуть";
     });
+  }
+
+  function sealCollapsed(node) {
+    if (!node || !node.classList) return;
+    const collapsed = node.classList.contains("collapsed") && node.dataset.panel !== "canvas";
+    for (const child of node.children) {
+      if (child.classList.contains("nh") || child.classList.contains("sock")) continue;
+      if (collapsed) {
+        if (!child.hasAttribute("hidden")) child.setAttribute("hidden", "");
+      } else if (child.hasAttribute("hidden")) {
+        child.removeAttribute("hidden");
+      }
+    }
   }
 
   function layoutFromDom() {
@@ -4705,6 +4724,13 @@
       if (!node || node.dataset.panel === "canvas") return;
       togglePanel(node.dataset.panel);
     });
+    const sealObs = new MutationObserver((records) => {
+      for (const rec of records) {
+        const node = rec.target.closest && rec.target.closest(".node.collapsed");
+        if (node) sealCollapsed(node);
+      }
+    });
+    sealObs.observe(cols, { subtree: true, childList: true, attributes: true, attributeFilter: ["hidden", "class"] });
   }
 
   function focusGraph() {
