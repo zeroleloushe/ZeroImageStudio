@@ -127,9 +127,15 @@ def _clean_layout(raw: dict) -> dict:
     collapsed_in = raw.get("collapsed") if isinstance(raw.get("collapsed"), dict) else {}
     collapsed = {}
     for key, value in collapsed_in.items():
-        if isinstance(key, str) and key != "canvas" and value:
+        if isinstance(key, str) and key != "canvas" and value and len(key) <= 40:
             collapsed[key] = True
+    hidden_in = raw.get("hidden") if isinstance(raw.get("hidden"), dict) else {}
+    hidden = {}
+    for key, value in hidden_in.items():
+        if isinstance(key, str) and key != "canvas" and value and len(key) <= 40:
+            hidden[key] = True
     cleaned["collapsed"] = collapsed
+    cleaned["hidden"] = hidden
     return cleaned
 
 

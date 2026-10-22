@@ -9,31 +9,83 @@
   <script src="icons.js"></script>
 </head>
 <body data-tab="canvas">
-<div class="top">
-  <div class="logo" title="ZeroImageStudio">Z</div>
-  <div class="brand">ZeroImageStudio</div>
-  <div class="project">
-    <input id="project-name" class="project-name" value="Новый проект" title="Имя проекта">
-    <div class="mu" id="project-sub">проект</div>
+<header class="chrome" id="chrome">
+  <div class="menu-bar">
+    <div class="logo" title="ZeroImageStudio">Z</div>
+    <div class="project">
+      <input id="project-name" class="project-name" value="Новый проект" title="Имя проекта">
+      <span class="mu" id="project-sub">проект</span>
+    </div>
+    <nav class="menubar" id="menubar" aria-label="Меню">
+      <div class="menu" data-menu="file">
+        <button type="button" class="menu-btn" aria-haspopup="true" aria-expanded="false">Файл</button>
+        <div class="menu-pop" role="menu" hidden>
+          <button type="button" role="menuitem" data-act="new">Новый проект<kbd>Ctrl+N</kbd></button>
+          <button type="button" role="menuitem" data-act="open-project">Открыть проект…</button>
+          <button type="button" role="menuitem" data-act="open-image">Открыть изображение…</button>
+          <hr>
+          <button type="button" role="menuitem" data-act="save">Сохранить<kbd>Ctrl+S</kbd></button>
+          <button type="button" role="menuitem" data-act="save-as">Сохранить как…</button>
+          <button type="button" role="menuitem" data-act="export-png">Экспорт PNG</button>
+          <hr>
+          <div class="menu-label">Недавние</div>
+          <div id="recent-projects"></div>
+        </div>
+      </div>
+      <div class="menu" data-menu="edit">
+        <button type="button" class="menu-btn" aria-haspopup="true" aria-expanded="false">Правка</button>
+        <div class="menu-pop" role="menu" hidden>
+          <button type="button" role="menuitem" data-act="undo">Отменить<kbd>Ctrl+Z</kbd></button>
+          <button type="button" role="menuitem" data-act="redo">Повторить<kbd>Ctrl+Shift+Z</kbd></button>
+          <hr>
+          <button type="button" role="menuitem" data-act="canvas-size">Размер холста…</button>
+        </div>
+      </div>
+      <div class="menu" data-menu="view">
+        <button type="button" class="menu-btn" aria-haspopup="true" aria-expanded="false">Вид</button>
+        <div class="menu-pop" role="menu" hidden>
+          <button type="button" role="menuitem" data-act="fit">Вписать<kbd>Ctrl+0</kbd></button>
+          <button type="button" role="menuitem" data-act="zoom100">100%<kbd>Ctrl+1</kbd></button>
+          <button type="button" role="menuitem" data-act="reset-layout">Сбросить раскладку</button>
+          <hr>
+          <div class="menu-label">Панели</div>
+          <div id="view-panels"></div>
+        </div>
+      </div>
+      <div class="menu" data-menu="settings">
+        <button type="button" class="menu-btn" aria-haspopup="true" aria-expanded="false">Настройки</button>
+        <div class="menu-pop" role="menu" hidden>
+          <button type="button" role="menuitem" data-act="settings">LLM и пути…</button>
+          <button type="button" role="menuitem" data-act="focus-graph">Открыть в графе ComfyUI</button>
+          <button type="button" role="menuitem" data-act="help">Горячие клавиши<kbd>?</kbd></button>
+        </div>
+      </div>
+      <div class="menu" data-menu="help">
+        <button type="button" class="menu-btn" aria-haspopup="true" aria-expanded="false">Справка</button>
+        <div class="menu-pop" role="menu" hidden>
+          <button type="button" role="menuitem" data-act="help">Горячие клавиши<kbd>?</kbd></button>
+        </div>
+      </div>
+    </nav>
+    <span class="menu-gap"></span>
+    <span class="sys-ind mu mono" id="sys-stats" title="GPU и очередь">…</span>
+    <button class="b ac" id="btn-collapse" type="button">Свернуть в ноду</button>
   </div>
-  <button class="b" id="btn-save" data-i="save" data-s="14" title="Сохранить"><span class="btn-label">Сохранить</span></button>
-  <button class="b" id="btn-load" data-i="open" data-s="14" title="Загрузить"><span class="btn-label">Загрузить</span></button>
-  <button class="b s" id="btn-undo" data-i="undo" data-s="13" title="Отменить (Ctrl+Z)"></button>
-  <button class="b s" id="btn-redo" data-i="redo" data-s="13" title="Повторить (Ctrl+Shift+Z)"></button>
-  <div class="tabs">
-    <button type="button" class="on" data-tab="canvas" data-i="image" data-s="14">Холст</button>
-    <button type="button" data-tab="gallery" data-i="grid" data-s="14">Галерея <em id="gal-count">0</em></button>
-    <button type="button" data-tab="lora" data-i="layers" data-s="14">LoRA <em id="lora-count">0</em></button>
-    <button type="button" data-tab="presets" data-i="star" data-s="14">Пресеты <em id="preset-count">0</em></button>
+  <div class="work-bar">
+    <div class="tabs">
+      <button type="button" class="on" data-tab="canvas" data-i="image" data-s="14">Холст</button>
+      <button type="button" data-tab="gallery" data-i="grid" data-s="14">Галерея <em id="gal-count">0</em></button>
+      <button type="button" data-tab="lora" data-i="layers" data-s="14">LoRA <em id="lora-count">0</em></button>
+      <button type="button" data-tab="presets" data-i="star" data-s="14">Пресеты <em id="preset-count">0</em></button>
+    </div>
+    <span class="work-gap"></span>
+    <button class="b s" id="btn-undo" data-i="undo" data-s="13" type="button" title="Отменить (Ctrl+Z)"></button>
+    <button class="b s" id="btn-redo" data-i="redo" data-s="13" type="button" title="Повторить (Ctrl+Shift+Z)"></button>
+    <span class="mu preset-label">Пресет</span>
+    <select id="preset-select" class="dd" title="Пресет"></select>
+    <button class="b s" id="btn-save-preset" type="button">Сохранить как</button>
   </div>
-  <div class="top-gap"></div>
-  <span class="mu preset-label">Пресет</span>
-  <select id="preset-select" class="dd" title="Пресет"></select>
-  <button class="b" id="btn-save-preset" data-i="plus" data-s="13" title="Сохранить как"><span class="btn-label">Сохранить как</span></button>
-  <button class="b" id="btn-settings" data-i="gear" data-s="14" title="Настройки"></button>
-  <button class="b ac" id="btn-collapse" data-i="collapse" data-s="14">Свернуть в ноду</button>
-  <span class="sys-ind mu mono" id="sys-stats" title="GPU и очередь">…</span>
-</div>
+</header>
 
 <div class="cols">
   <div class="toolcol" id="tools">
@@ -67,9 +119,12 @@
           <button type="button" data-pipe="edit" class="on">Редактирование</button>
         </div>
         <button type="button" class="model-sum" id="model-toggle" aria-expanded="false" aria-controls="model-drawer">
-          <span id="model-summary">Krea 2 Identity Edit 2.0 · diffusion · krea2</span>
+          <span id="model-summary">Krea 2 Edit V2 · diffusion · krea2</span>
           <span class="chev" data-i="chev" data-s="14"></span>
         </button>
+        <div class="mode krea-task" id="krea-task" role="group" aria-label="Режим Krea 2 Edit" hidden></div>
+        <div class="krea-tips" id="krea-tips" hidden></div>
+        <div id="model-warn"></div>
         <div class="model-drawer" id="model-drawer" inert>
           <div class="model-drawer-inner">
             <div id="hint-list"></div>

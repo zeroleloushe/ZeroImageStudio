@@ -40,6 +40,25 @@ class AssetTests(unittest.TestCase):
                 self.assertEqual(len(store.list_assets()), 1)
                 self.assertFalse(os.path.isfile(os.path.join(tmp, "assets", extra["id"] + ".png")))
 
+    def test_layout_keeps_hidden_panels(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(store, "user_root", return_value=tmp):
+                saved = store.save_settings({
+                    "layout": {
+                        "left": ["model", "refs"],
+                        "center": ["canvas", "prompt"],
+                        "right": ["gallery"],
+                        "collapsed": {"refs": True, "canvas": True},
+                        "hidden": {"gallery": True, "canvas": True, "lora": False},
+                        "extra": 1,
+                    }
+                })
+                layout = saved["layout"]
+                self.assertEqual(layout["hidden"], {"gallery": True})
+                self.assertEqual(layout["collapsed"], {"refs": True})
+                self.assertNotIn("canvas", layout["hidden"])
+                self.assertNotIn("extra", layout)
+
 
 if __name__ == "__main__":
     unittest.main()

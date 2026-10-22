@@ -182,6 +182,57 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(sampler["inputs"]["denoise"], 1.0)
         self.assertTrue(any("Denoise" in w for w in warnings))
 
+    def test_krea_general_drops_reference_and_warns_over_two_megapixels(self):
+        spec = _diff_spec(
+            pipeline="edit",
+            edit_method="krea2_edit",
+            image="zeroimagestudio/crop.png",
+            references=["zeroimagestudio/extra.png"],
+            prompt="удали лампу",
+            width=1600,
+            height=1280,
+            loras=[{"name": "krea2_general_edit_v2.safetensors", "enabled": True, "strength_model": 1, "strength_clip": 1}],
+            krea={"task": "general", "fit_mode": "fit", "grounding_px": 768, "impl": "internal", "ref_position": "aligned (trained)"},
+        )
+        prompt, warnings, built = build_workflow(spec)
+        self.assertEqual(built, "edit:krea2_edit")
+        patch = next(n for n in prompt.values() if n["class_type"] == "ZeroImageStudioKrea2EditModelPatch")
+        enc = next(n for n in prompt.values() if n["class_type"] == "ZeroImageStudioKrea2EditGroundedEncode")
+        self.assertNotIn("source_image_b", patch["inputs"])
+        self.assertNotIn("image_b", enc["inputs"])
+        self.assertEqual(enc["inputs"]["grounding_px"], 768)
+        self.assertEqual(patch["inputs"]["ref_position"], "aligned (trained)")
+        self.assertTrue(any("2 Мп" in w for w in warnings))
+        self.assertTrue(any("Raw" in w for w in warnings))
+        self.assertTrue(any("только холст" in w for w in warnings))
+
+    def test_krea_identity_keeps_subject_reference(self):
+        spec = _diff_spec(
+            pipeline="edit",
+            edit_method="krea2_edit",
+            image="zeroimagestudio/scene.png",
+            references=["zeroimagestudio/person.png", "zeroimagestudio/extra.png"],
+            loras=[{"name": "krea/krea2_identity_edit_v2.safetensors", "enabled": True, "strength_model": 1, "strength_clip": 1}],
+            krea={
+                "task": "identity",
+                "fit_mode": "fit",
+                "grounding_px": 1024,
+                "impl": "internal",
+                "ref_position": "beside (right of target)",
+                "ref_position_a": "aligned (trained)",
+            },
+        )
+        prompt, warnings, _built = build_workflow(spec)
+        patch = next(n for n in prompt.values() if n["class_type"] == "ZeroImageStudioKrea2EditModelPatch")
+        enc = next(n for n in prompt.values() if n["class_type"] == "ZeroImageStudioKrea2EditGroundedEncode")
+        self.assertIn("source_image_b", patch["inputs"])
+        self.assertIn("source_latent_b", patch["inputs"])
+        self.assertEqual(patch["inputs"]["ref_position"], "beside (right of target)")
+        self.assertEqual(patch["inputs"]["ref_position_a"], "aligned (trained)")
+        self.assertEqual(enc["inputs"]["grounding_px"], 1024)
+        self.assertTrue(any("Лишние" in w for w in warnings))
+        self.assertFalse(any("2 Мп" in w for w in warnings))
+
     def test_krea_external_class_names(self):
         spec = _diff_spec(pipeline="edit", edit_method="krea2_edit", image="a.png", krea={"impl": "external"})
         prompt, _w, _b = build_workflow(spec)

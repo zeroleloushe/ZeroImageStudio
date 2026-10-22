@@ -52,7 +52,38 @@
   };
   state.edit.method = "krea2_edit";
   state.edit.clip_type = "krea2";
-  state.edit.krea.grounding_px = 1024;
+
+  const KREA_TASKS = {
+    general: {
+      file: "krea2_general_edit_v2.safetensors",
+      url: "https://huggingface.co/conradlocke/krea2-identity-edit/blob/main/krea2_general_edit_v2.safetensors",
+      grounding: 768,
+    },
+    identity: {
+      file: "krea2_identity_edit_v2.safetensors",
+      url: "https://huggingface.co/conradlocke/krea2-identity-edit/blob/main/krea2_identity_edit_v2.safetensors",
+      grounding: 1024,
+    },
+  };
+  const KNOWN_WEIGHTS = {
+    "krea2_turbo_fp8_scaled.safetensors": {
+      folder: "models/diffusion_models/",
+      url: "https://huggingface.co/Comfy-Org/Krea-2/blob/main/diffusion_models/krea2_turbo_fp8_scaled.safetensors",
+    },
+    "qwen3vl_4b_fp8_scaled.safetensors": {
+      folder: "models/text_encoders/",
+      url: "https://huggingface.co/Comfy-Org/Krea-2/blob/main/text_encoders/qwen3vl_4b_fp8_scaled.safetensors",
+    },
+    "qwen_image_vae.safetensors": {
+      folder: "models/vae/",
+      url: "https://huggingface.co/Comfy-Org/Krea-2/blob/main/vae/qwen_image_vae.safetensors",
+    },
+  };
+  const RECENT_KEY = "zeroimagestudio.recent";
+  const PANEL_LABELS = {
+    model: "Модель", refs: "Референсы", lora: "LoRA", sampler: "Генерация",
+    prompt: "Промт", inspector: "Инспектор", layers: "Слои", gallery: "Галерея",
+  };
 
   function blankPipe(kind) {
     return {
@@ -559,14 +590,18 @@
       window.addEventListener("keydown", (e) => {
         if (document.querySelector(".modal-back")) return;
         if (e.code === "Space") { this.space = true; if (!/^(input|textarea|select)$/i.test((e.target.tagName || ""))) e.preventDefault(); }
+        if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+          const key = e.key.toLowerCase();
+          if (key === "z") { e.preventDefault(); e.shiftKey ? this.redo() : this.undo(); return; }
+          if (key === "y") { e.preventDefault(); this.redo(); return; }
+          if (e.key === "0") { e.preventDefault(); this.fit(); return; }
+          if (e.key === "1") { e.preventDefault(); this.zoom100(); return; }
+          if (key === "s") { e.preventDefault(); saveProject().then(() => toast("Проект сохранён.")).catch((err) => toast(err.message || String(err))); return; }
+          if (key === "n") { e.preventDefault(); newProject(); return; }
+        }
         const tag = (e.target.tagName || "").toLowerCase();
         if (tag === "input" || tag === "textarea" || tag === "select") return;
         const map = { KeyV: "move", KeyM: "select", KeyL: "lasso", KeyT: "transform", KeyC: "crop", KeyB: "brush", KeyE: "eraser", KeyI: "eyedrop", KeyQ: "mask", KeyG: "genarea", KeyH: "hand", KeyZ: "zoom" };
-        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") { e.preventDefault(); e.shiftKey ? this.redo() : this.undo(); return; }
-        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "y") { e.preventDefault(); this.redo(); return; }
-        if ((e.ctrlKey || e.metaKey) && e.key === "0") { e.preventDefault(); this.fit(); return; }
-        if ((e.ctrlKey || e.metaKey) && e.key === "1") { e.preventDefault(); this.zoom100(); return; }
-        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") { e.preventDefault(); saveProject().then(() => toast("Проект сохранён.")).catch((err) => toast(err.message || String(err))); return; }
         if (e.key === "?" || (e.shiftKey && e.code === "Slash")) { e.preventDefault(); toggleHelp(true); return; }
         if (e.ctrlKey || e.metaKey || e.altKey) return;
         if (e.key === "Delete" || e.key === "Backspace") { this.deleteActive(); return; }
@@ -869,6 +904,7 @@
     renderPresetSelect();
     renderTags();
     renderToolOptions();
+    renderKreaChrome();
     updateGenerateButton();
     renderModelSummary();
     $("prompt").value = state.prompt;
@@ -954,8 +990,8 @@
     const krea = c.krea || {};
     const kreaRow = state.pipeline === "edit" && c.method === "krea2_edit" ? `
       <label>Fit <select class="dd" data-krea="fit_mode" style="width:100%"><option ${krea.fit_mode === "fit" ? "selected" : ""}>fit</option><option ${krea.fit_mode === "crop (legacy)" ? "selected" : ""}>crop (legacy)</option></select></label>
-      <label>Позиция референса <select class="dd" data-krea="ref_position" style="width:100%">${["aligned (trained)", "beside (right of target)", "bag of features"].map((v) => `<option ${krea.ref_position === v ? "selected" : ""}>${v}</option>`).join("")}</select></label>
-      <label>Grounding, px <input class="f" data-krea="grounding_px" value="${krea.grounding_px}"></label>
+      <label>Позиция референса <select class="dd" data-krea="ref_position" style="width:100%" disabled title="Позицию задаёт режим Правка или Персонаж">${["aligned (trained)", "beside (right of target)", "bag of features"].map((v) => `<option ${krea.ref_position === v ? "selected" : ""}>${v}</option>`).join("")}</select></label>
+      <label>Grounding, px <input class="f" data-krea="grounding_px" value="${krea.grounding_px}" title="Ниже — сильнее инструкция, выше — сильнее сходство"></label>
       <label>Ноды <select class="dd" data-krea="impl" style="width:100%"><option value="internal" ${krea.impl !== "external" ? "selected" : ""}>встроенные</option><option value="external" ${krea.impl === "external" ? "selected" : ""}>пакет comfyui-krea2edit</option></select></label>` : "";
     const qwenUsesEncoder = (state.pipeline === "edit" && (c.method === "qwen_image_21" || c.method === "qwen")) || (c.encoder === "qwen_image_21" && usesSource());
     const qwenRow = qwenUsesEncoder
@@ -985,7 +1021,7 @@
       const method = cfg().method;
       $("ref-cap").textContent = `для модели · ${n}`;
       $("ref-hint").textContent = method === "krea2_edit"
-        ? "Для модели: исходный кроп и один дополнительный референс. Те же кадры может взять LLM. Клик по карточке выбирает кадр для LLM."
+        ? kreaRefHint()
         : (method === "qwen_image_21" || method === "qwen")
           ? "Для модели: до 16 референсов, в промте <image1>…. Те же кадры может взять LLM. Клик по карточке выбирает кадр для LLM."
           : "Кроп холста идёт в модель как область правки. Референсы здесь — для LLM. Клик по карточке выбирает кадр.";
@@ -999,6 +1035,7 @@
   function activeLoras() { return cfg().loras; }
 
   function renderLoras() {
+    syncKreaStack();
     const added = activeLoras();
     $("lora-count").textContent = String(added.length);
     if (document.body.dataset.tab === "lora") renderLoraLibrary();
@@ -1016,6 +1053,15 @@
         `<button type="button" class="tw ${t.enabled === false ? "" : "on"}" data-trig="${i}" data-lora-name="${escapeHtml(l.name)}">${t.enabled === false ? "" : "✓ "}${escapeHtml(t.text)}</button>`
       ).join(" ");
       const open = state.loraSelected === l.name;
+      if (l.system) {
+        return `<div class="lora-row system">
+          <span class="cb on" title="Системная LoRA режима"></span>
+          <span class="nm" title="${escapeHtml(l.name)}">${escapeHtml(base)}</span>
+          <span class="lock-tag">системная</span>
+          <input class="range" type="range" min="0" max="2" step="0.05" value="1" disabled title="Сила 1.0">
+          <input class="f" value="1.00" disabled title="Сила 1.0">
+        </div>`;
+      }
       return `<div class="lora-row ${l.enabled ? "" : "off"}">
         <button type="button" class="cb ${l.enabled ? "on" : ""}" data-lora-enable="${escapeHtml(l.name)}" title="Включить или выключить"></button>
         <button type="button" class="nm" data-lora-info="${escapeHtml(l.name)}" title="${escapeHtml(l.name)}">${escapeHtml(base)}</button>
@@ -1547,22 +1593,227 @@
     if (state.area.outputLinked !== false) syncOutputFromCanvas();
   }
 
-  function missingModelFiles() {
+  function isKreaEdit() {
+    return state.pipeline === "edit" && cfg().method === "krea2_edit";
+  }
+
+  function kreaTaskId() {
+    const task = cfg().krea && cfg().krea.task;
+    return task === "identity" ? "identity" : "general";
+  }
+
+  function basenameOf(name) {
+    return String(name || "").split("/").pop().toLowerCase();
+  }
+
+  function catalogHas(list, name) {
+    if (!name) return false;
+    const want = basenameOf(name);
+    return (list || []).some((n) => basenameOf(n) === want || String(n).toLowerCase() === String(name).toLowerCase());
+  }
+
+  function findInstalledLora(file) {
+    const want = basenameOf(file);
+    return (state.loras || []).find((n) => basenameOf(n) === want) || "";
+  }
+
+  function sceneOnCanvas() {
+    return !!(editor && editor.layers.some((l) => l.visible));
+  }
+
+  function applyKreaPlacement(taskId) {
+    const k = state.edit.krea;
+    if (!k) return;
+    const id = taskId === "identity" ? "identity" : "general";
+    k.task = id;
+    const scene = sceneOnCanvas();
+    if (id === "identity" && scene) k.ref_position = "beside (right of target)";
+    else k.ref_position = "aligned (trained)";
+    k.ref_position_a = "aligned (trained)";
+  }
+
+  function applyKreaTaskDefaults(taskId) {
+    const id = taskId === "identity" ? "identity" : "general";
+    const task = KREA_TASKS[id];
+    const k = state.edit.krea;
+    k.task = id;
+    k.grounding_px = task.grounding;
+    applyKreaPlacement(id);
+  }
+
+  function setKreaTask(taskId) {
+    applyKreaTaskDefaults(taskId);
+    syncKreaStack();
+    renderFiles();
+    renderKreaChrome();
+    renderRefs();
+    renderLoras();
+    renderPipe();
+    updateGenerateButton();
+  }
+
+  function syncKreaStack() {
+    const edit = state.edit;
+    if (!edit.krea) edit.krea = blankPipe("edit").krea;
+    const owned = new Set(Object.values(KREA_TASKS).map((t) => t.file.toLowerCase()));
+    edit.loras = (edit.loras || []).filter((l) => l && !l.system && !owned.has(basenameOf(l.name)));
+    if (state.pipeline !== "edit" || edit.method !== "krea2_edit") return;
+    const id = edit.krea.task === "identity" ? "identity" : "general";
+    edit.krea.task = id;
+    const task = KREA_TASKS[id];
+    const installed = findInstalledLora(task.file);
+    edit.loras.unshift({
+      name: installed || task.file,
+      strength_model: 1,
+      strength_clip: 1,
+      enabled: true,
+      trigger_mode: "off",
+      triggers: [],
+      system: true,
+    });
+  }
+
+  function kreaRefHint() {
+    applyKreaPlacement(kreaTaskId());
+    if (kreaTaskId() === "identity") {
+      return sceneOnCanvas()
+        ? "Холст — сцена, первый референс — человек (справа от кадра)."
+        : "Нет сцены на холсте: первый референс — единственный кадр человека.";
+    }
+    return "Холст — исходник правки. Дополнительный референс не отправляется.";
+  }
+
+  function renderKreaChrome() {
+    const host = $("krea-task");
+    const tips = $("krea-tips");
+    const on = isKreaEdit();
+    if (host) host.hidden = !on;
+    if (tips) tips.hidden = !on;
+    if (!on) {
+      renderModelWarn();
+      return;
+    }
+    const task = kreaTaskId();
+    if (host) {
+      host.innerHTML = `
+        <button type="button" data-krea-task="general" class="${task === "general" ? "on" : ""}" aria-pressed="${task === "general"}">Правка</button>
+        <button type="button" data-krea-task="identity" class="${task === "identity" ? "on" : ""}" aria-pressed="${task === "identity"}">Персонаж по референсу</button>`;
+    }
+    if (tips) {
+      const frame = editor ? generationSize() : { w: 0, h: 0 };
+      const mp = (frame.w * frame.h) / 1e6;
+      const over = mp > 2;
+      const removal = /удал|remove|erase|сотр|убер/i.test(state.prompt || "");
+      tips.innerHTML = `
+        <div class="${over ? "hot" : "mu"}">До 2 Мп для Krea Edit.${over ? ` Сейчас ${mp.toFixed(2)} — выше исходник может протекать, а объект двоиться.` : ""}</div>
+        <div class="${removal ? "hot" : "mu"}">Для удаления объекта — модель Raw, CFG около 3, около 20 шагов.</div>`;
+    }
+    renderModelWarn();
+  }
+
+  function fileIssues() {
+    const issues = [];
     const c = cfg();
+    const hint = state.hints.find((h) => h.id === state.hintId);
+    const sug = (hint && hint.defaults) || {};
     const loader = c.loader || "diffusion";
     if (loader === "checkpoint") {
-      return (c.checkpoint || "").trim() ? [] : ["Загрузчик checkpoint: не выбран файл checkpoint."];
+      const name = (c.checkpoint || "").trim();
+      if (!name) issues.push({ text: "Загрузчик checkpoint: не выбран файл checkpoint." });
+      else if (state.catalog && state.catalog.checkpoints && !catalogHas(state.catalog.checkpoints, name)) {
+        issues.push({ text: `Не найден checkpoint ${name}.`, file: basenameOf(name) || name, folder: "models/checkpoints/" });
+      }
+    } else {
+      const slots = [
+        ["unet", "UNET (diffusion-модель)", "models/diffusion_models/", state.catalog && state.catalog.unets],
+        ["clip", "CLIP (текстовый энкодер)", "models/text_encoders/", state.catalog && state.catalog.clips],
+        ["vae", "VAE", "models/vae/", state.catalog && state.catalog.vaes],
+      ];
+      for (const [key, label, folder, list] of slots) {
+        const name = (c[key] || "").trim();
+        const expected = name || sug[key] || "";
+        const known = KNOWN_WEIGHTS[basenameOf(expected)] || null;
+        if (!name) {
+          issues.push({
+            text: expected
+              ? `Загрузчик diffusion: не выбран ${label}. Ожидается ${expected}.`
+              : `Загрузчик diffusion: не выбран ${label}.`,
+            file: expected,
+            folder: (known && known.folder) || folder,
+            url: known && known.url,
+          });
+        } else if (list && !catalogHas(list, name)) {
+          const base = name.split("/").pop();
+          const hit = KNOWN_WEIGHTS[basenameOf(base)];
+          issues.push({
+            text: `Не найден файл ${base}.`,
+            file: base,
+            folder: (hit && hit.folder) || folder,
+            url: hit && hit.url,
+          });
+        }
+      }
     }
-    const labels = { unet: "UNET (diffusion-модель)", clip: "CLIP (текстовый энкодер)", vae: "VAE" };
-    return ["unet", "clip", "vae"].filter((k) => !(c[k] || "").trim()).map((k) => `Загрузчик diffusion: не выбран ${labels[k]}.`);
+    if (isKreaEdit()) {
+      const spec = KREA_TASKS[kreaTaskId()];
+      if (!findInstalledLora(spec.file)) {
+        issues.unshift({
+          text: `Не найдена LoRA ${spec.file} — без неё редактирование не работает.`,
+          file: spec.file,
+          folder: "models/loras/",
+          url: spec.url,
+        });
+      }
+    }
+    return issues;
+  }
+
+  function renderModelWarn() {
+    const host = $("model-warn");
+    if (!host) return;
+    const issues = fileIssues();
+    if (!issues.length) { host.innerHTML = ""; return; }
+    const blocks = issues.map((issue) => {
+      const bits = [`<div>${escapeHtml(issue.text)}</div>`];
+      if (issue.file) bits.push(`<div>Файл: <span class="mono">${escapeHtml(issue.file)}</span></div>`);
+      if (issue.folder) bits.push(`<div>Папка: <span class="mono">ComfyUI/${escapeHtml(issue.folder)}</span></div>`);
+      if (issue.url) bits.push(`<a class="b s" href="${escapeHtml(issue.url)}" target="_blank" rel="noopener">Скачать</a>`);
+      return `<div class="banner">${bits.join("")}</div>`;
+    }).join("");
+    host.innerHTML = blocks + `<div class="row"><button type="button" class="b s" data-rescan="1">Проверить снова</button></div>`;
+  }
+
+  async function rescanModels() {
+    try {
+      const [models, loras] = await Promise.all([
+        api("/zeroimagestudio/models"),
+        api("/zeroimagestudio/loras"),
+      ]);
+      state.catalog = models;
+      state.loras = loras.files || [];
+      syncKreaStack();
+      renderFiles();
+      renderKreaChrome();
+      renderLoras();
+      updateGenerateButton();
+      toast("Список моделей обновлён.");
+    } catch (err) {
+      toast(err.message || String(err));
+    }
   }
 
   function generateBlockReason() {
     if (state.running) return "";
     const reasons = [];
     if (!(state.prompt || "").trim()) reasons.push("Промт пустой.");
-    if (state.pipeline === "edit" && !(editor && editor.layers.some((l) => l.visible))) reasons.push("В правке нет изображения. Откройте фото.");
-    reasons.push(...missingModelFiles());
+    if (state.pipeline === "edit") {
+      const scene = sceneOnCanvas();
+      if (isKreaEdit() && kreaTaskId() === "identity") {
+        if (!scene && !state.references.length) reasons.push("Для «Персонаж по референсу» нужен референс человека или сцена на холсте.");
+        else if (scene && !state.references.length) reasons.push("Для «Персонаж по референсу» добавьте фото человека в Референсы.");
+      } else if (!scene) reasons.push("В правке нет изображения. Откройте фото.");
+    }
+    reasons.push(...fileIssues().map((issue) => issue.text));
     return reasons.join(" ");
   }
 
@@ -1626,7 +1877,8 @@
         <div>H рука · Z масштаб · Пробел+перетаскивание панорама</div>
         <div><kbd>[</kbd> <kbd>]</kbd> размер кисти · колесо — масштаб вокруг курсора</div>
         <div><kbd>Ctrl+0</kbd> вместить · <kbd>Ctrl+1</kbd> 100% · <kbd>Ctrl+Z</kbd> отмена · <kbd>Ctrl+Shift+Z</kbd> повтор</div>
-        <div><kbd>Ctrl+S</kbd> сохранить · <kbd>Ctrl+Enter</kbd> генерировать · <kbd>?</kbd> эта шпаргалка</div>`;
+        <div><kbd>Ctrl+S</kbd> сохранить · <kbd>Ctrl+N</kbd> новый проект · <kbd>Ctrl+Enter</kbd> генерировать · <kbd>?</kbd> эта шпаргалка</div>
+        <div><kbd>Alt</kbd> меню · стрелки по пунктам · <kbd>Esc</kbd> закрыть меню</div>`;
       document.body.appendChild(pop);
       pop.querySelector("#help-close").onclick = () => { pop.hidden = true; };
     }
@@ -1949,9 +2201,13 @@
       }
     } else {
       host.innerHTML = items.map((it) => {
-        const col = colors[it.meta.edit_method] || colors[it.meta.pipeline] || "#7d8594";
-        return `<button type="button" class="g" data-gal="${it.id}"><img src="/view?filename=${encodeURIComponent(it.file.split("/").pop())}&type=output&subfolder=zeroimagestudio/gallery"><s style="background:${col}"></s></button>`;
+        const m = it.meta || {};
+        const col = colors[m.edit_method] || colors[m.pipeline] || "#7d8594";
+        const id = escapeHtml(it.id);
+        const tip = [m.model_label || m.unet || m.checkpoint || "Генерация", m.width && m.height ? m.width + "×" + m.height : "", m.seed != null ? "seed " + m.seed : ""].filter(Boolean).join(" · ");
+        return `<div class="g" role="button" tabindex="0" data-gal="${id}" title="${escapeHtml(tip)}"><img src="/view?filename=${encodeURIComponent(it.file.split("/").pop())}&type=output&subfolder=zeroimagestudio/gallery" alt=""><s style="background:${col}"></s><span class="tile-actions"><button type="button" data-gal-apply="${id}" data-i="undo" data-s="13" title="Применить заново"></button><button type="button" data-gal-seed="${id}" data-i="dice" data-s="13" title="Взять сид"></button><button type="button" data-gal-lora="${id}" data-i="layers" data-s="13" title="Взять LoRA"></button></span></div>`;
       }).join("");
+      if (window.zeroImageStudioHydrateIcons) window.zeroImageStudioHydrateIcons(host);
       $("gal-legend").innerHTML = `<span>${scopeNote}</span><span><b style="color:#ff7a1a">▬</b> Krea Edit</span><span><b style="color:#b18cff">▬</b> Создание</span><span><b style="color:#4aa8ff">▬</b> Qwen</span>`;
     }
     $("gal-count").textContent = String(scope === "project" ? projectReal.length : allReal.length);
@@ -1989,11 +2245,10 @@
         return `<div class="g asset-tile" draggable="true" data-asset="${id}" title="${escapeHtml(name + " · " + meta)}">
           <img src="/zeroimagestudio/assets/${encodeURIComponent(asset.id)}/thumb" alt="">
           <span class="asset-badges">${badges}</span>
-          <span class="asset-hover">${escapeHtml(meta)}</span>
-          <span class="asset-actions">
-            <button type="button" data-asset-open="${id}" data-i="open" data-s="12" title="Открыть на холсте"></button>
-            <button type="button" data-asset-ref="${id}" data-i="image" data-s="12" title="Добавить как референс"></button>
-            <button type="button" data-asset-del="${id}" data-i="trash" data-s="12" title="Удалить"></button>
+          <span class="tile-actions">
+            <button type="button" data-asset-open="${id}" data-i="open" data-s="13" title="Открыть на холсте"></button>
+            <button type="button" data-asset-ref="${id}" data-i="image" data-s="13" title="Добавить как референс"></button>
+            <button type="button" data-asset-del="${id}" data-i="trash" data-s="13" title="Удалить"></button>
           </span>
         </div>`;
       }).join("");
@@ -2076,7 +2331,7 @@
       inpaint_mode: c.inpaint_mode,
       inpaint_grow: c.inpaint_grow,
       qwen_resolution: 0,
-      krea: c.krea,
+      krea: { ...(c.krea || {}) },
       loras: c.loras,
       prompt: state.prompt,
       negative: state.negative,
@@ -2214,7 +2469,7 @@
   async function generate() {
     if (state.running) { await fetch("/interrupt", { method: "POST" }); return; }
     const blocked = generateBlockReason();
-    if (blocked) { toast(blocked, { openModels: missingModelFiles().length > 0 }); if (missingModelFiles().length) openModelDrawer(); return; }
+    if (blocked) { toast(blocked, { openModels: fileIssues().length > 0 }); if (fileIssues().length) openModelDrawer(); return; }
     state.running = true;
     $("btn-gen").classList.add("stop");
     $("gen-label").textContent = "Отмена";
@@ -2229,22 +2484,53 @@
     try {
       syncDefaultArea();
       nextSeed();
-      const source = usesSource();
-      const expand = source && state.pipeline === "edit" ? state.area.context : (editor.maskArea() > 8 ? state.area.context : 0);
-      const crop = source ? editor.cropOf(expand) : null;
       const spec = specFromState();
-      spec.has_mask = !!(crop && editor.maskArea() > 8);
-      if (crop) {
-        const scaled = scaleCanvas(crop.canvas, spec.width, spec.height);
-        const scaledMask = scaleCanvas(crop.mask, spec.width, spec.height);
-        spec.image = await uploadCanvas(scaled, "crop.png");
-        if (spec.has_mask || state.pipeline === "edit") spec.mask = await uploadCanvas(scaledMask, "mask.png");
+      spec.krea = { ...(cfg().krea || {}) };
+      const kreaOn = isKreaEdit();
+      const task = kreaOn ? kreaTaskId() : "";
+      const scene = sceneOnCanvas();
+      let crop = null;
+      if (kreaOn && task === "identity" && !scene) {
+        const person = state.references[0];
+        const frame = generationSize();
+        spec.width = frame.w;
+        spec.height = frame.h;
+        spec.image = await uploadCanvas(scaleCanvas(person.canvas, frame.w, frame.h), "ref.png");
+        spec.references = [];
+        spec.has_mask = false;
+        spec.krea.task = "identity";
+        spec.krea.ref_position = "aligned (trained)";
+        spec.krea.ref_position_a = "aligned (trained)";
+        spec.krea.grounding_px = Number(spec.krea.grounding_px) || 1024;
+      } else {
+        const source = usesSource();
+        const expand = source && state.pipeline === "edit" ? state.area.context : (editor.maskArea() > 8 ? state.area.context : 0);
+        crop = source ? editor.cropOf(expand) : null;
+        spec.has_mask = !!(crop && editor.maskArea() > 8);
+        if (crop) {
+          const scaled = scaleCanvas(crop.canvas, spec.width, spec.height);
+          const scaledMask = scaleCanvas(crop.mask, spec.width, spec.height);
+          spec.image = await uploadCanvas(scaled, "crop.png");
+          if (spec.has_mask || state.pipeline === "edit") spec.mask = await uploadCanvas(scaledMask, "mask.png");
+        }
+        const refs = [];
+        if (state.pipeline === "edit" && !(kreaOn && task === "general")) {
+          const list = kreaOn && task === "identity" ? state.references.slice(0, 1) : state.references;
+          for (const ref of list) refs.push(await uploadCanvas(ref.canvas, "ref.png"));
+        }
+        spec.references = refs;
+        if (kreaOn && task === "general") {
+          spec.krea.task = "general";
+          spec.krea.ref_position = "aligned (trained)";
+          spec.krea.ref_position_a = "aligned (trained)";
+          spec.krea.grounding_px = Number(spec.krea.grounding_px) || 768;
+        } else if (kreaOn && task === "identity") {
+          spec.krea.task = "identity";
+          spec.krea.ref_position = "beside (right of target)";
+          spec.krea.ref_position_a = "aligned (trained)";
+          spec.krea.grounding_px = Number(spec.krea.grounding_px) || 1024;
+        }
       }
-      const refs = [];
-      if (state.pipeline === "edit") {
-        for (const ref of state.references) refs.push(await uploadCanvas(ref.canvas, "ref.png"));
-      }
-      spec.references = refs;
       const built = await api("/zeroimagestudio/build_workflow", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(spec) });
       if (built.warnings && built.warnings.length) toast(built.warnings[0]);
       const queued = await api("/prompt", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: built.workflow, client_id: clientId }) });
@@ -2493,6 +2779,7 @@
     state.projectId = saved.id;
     state.dirty = false;
     $("project-sub").textContent = (opts && opts.auto ? "автосохранение " : "сохранено ") + new Date().toLocaleTimeString();
+    rememberProject(saved.id, state.projectName);
     return saved.id;
   }
 
@@ -2550,6 +2837,7 @@
     if (!state.area.userPlaced) syncDefaultArea();
     editor.fit();
     state.dirty = false;
+    rememberProject(id, state.projectName);
     renderAll();
   }
 
@@ -3002,19 +3290,33 @@
     });
     if (state.pipeline === "edit" && h.edit_method) target.method = h.edit_method;
     if (h.qwen_resolution) target.qwen_resolution = h.qwen_resolution;
-    if (h.krea) target.krea = { ...target.krea, ...h.krea };
+    const keepTask = target.krea && target.krea.task;
+    if (h.krea) target.krea = { ...(target.krea || {}), ...h.krea };
+    if (keepTask && target.krea) target.krea.task = keepTask;
     if (h.sampler) Object.assign(state.sampler, h.sampler);
     syncDefaultArea();
-    if (h.lora && h.lora.name) {
+    if (h.lora && h.lora.name && target.method !== "krea2_edit") {
       const existing = target.loras.find((l) => l.name === h.lora.name);
       if (!existing) target.loras.push({ triggers: [], trigger_mode: "off", ...h.lora });
     }
+    if (target.method === "krea2_edit") {
+      if (!target.krea.task) target.krea.task = "general";
+      if (!keepTask) applyKreaTaskDefaults(target.krea.task);
+      else applyKreaPlacement(target.krea.task);
+    }
     // keep suggested filenames only if installed; otherwise clear so the user sees the empty select
     const cat = state.catalog || {};
-    if (target.unet && cat.unets && !cat.unets.includes(target.unet)) target.unet = "";
-    if (target.clip && cat.clips && !cat.clips.includes(target.clip)) target.clip = "";
-    if (target.vae && cat.vaes && !cat.vaes.includes(target.vae)) target.vae = "";
-    if (target.checkpoint && cat.checkpoints && !cat.checkpoints.includes(target.checkpoint)) target.checkpoint = "";
+    const resolveInstalled = (list, name) => {
+      if (!name) return "";
+      if (!list) return name;
+      if (list.includes(name)) return name;
+      const hit = list.find((n) => basenameOf(n) === basenameOf(name));
+      return hit || "";
+    };
+    if (cat.unets) target.unet = resolveInstalled(cat.unets, target.unet);
+    if (cat.clips) target.clip = resolveInstalled(cat.clips, target.clip);
+    if (cat.vaes) target.vae = resolveInstalled(cat.vaes, target.vae);
+    if (cat.checkpoints) target.checkpoint = resolveInstalled(cat.checkpoints, target.checkpoint);
     renderAll();
   }
 
@@ -3050,6 +3352,26 @@
     toast("Настройки кадра подставлены. Генерация не запускалась.");
   }
 
+  function useGalleryMeta(it, mode) {
+    const m = (it && it.meta) || {};
+    if (mode === "apply") {
+      applyMeta(m);
+      document.querySelectorAll(".tabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === "canvas"));
+      document.body.dataset.tab = "canvas";
+      if (editor) requestAnimationFrame(() => editor.resizeView());
+      return;
+    }
+    if (mode === "seed") {
+      if (m.seed != null) state.sampler.seed = m.seed;
+      renderSampler();
+      return;
+    }
+    if (mode === "lora" && m.loras) {
+      cfg().loras = m.loras.map((l) => ({ enabled: true, strength_clip: l.strength_model, trigger_mode: "end", triggers: [], ...l }));
+      renderLoras();
+    }
+  }
+
   function showPop(it, anchor) {
     const pop = $("pop");
     const m = it.meta || {};
@@ -3069,9 +3391,9 @@
     pop.style.left = Math.max(8, r.left - 280) + "px";
     pop.style.top = Math.max(8, r.bottom + 8) + "px";
     if (window.zeroImageStudioHydrateIcons) window.zeroImageStudioHydrateIcons(pop);
-    $("pop-apply").onclick = () => { applyMeta(m); pop.hidden = true; document.body.dataset.tab = "canvas"; };
-    $("pop-seed").onclick = () => { state.sampler.seed = m.seed || state.sampler.seed; renderSampler(); pop.hidden = true; };
-    $("pop-lora").onclick = () => { if (m.loras) { cfg().loras = m.loras.map((l) => ({ enabled: true, strength_clip: l.strength_model, trigger_mode: "end", triggers: [], ...l })); renderLoras(); } pop.hidden = true; };
+    $("pop-apply").onclick = () => { useGalleryMeta(it, "apply"); pop.hidden = true; };
+    $("pop-seed").onclick = () => { useGalleryMeta(it, "seed"); pop.hidden = true; };
+    $("pop-lora").onclick = () => { useGalleryMeta(it, "lora"); pop.hidden = true; };;
   }
 
   function jpegCanvas(canvas, maxSide) {
@@ -3232,6 +3554,272 @@
       </div></div>`;
   }
 
+  let menuName = null;
+  let menuIndex = 0;
+  let altDown = false;
+  let altUsed = false;
+
+  function menuRoot() {
+    return menuName ? document.querySelector(`.menu[data-menu="${menuName}"]`) : null;
+  }
+
+  function menuItems() {
+    const root = menuRoot();
+    if (!root) return [];
+    return [...root.querySelectorAll("[role='menuitem'], [role='menuitemcheckbox']")];
+  }
+
+  function paintMenuIndex() {
+    menuItems().forEach((el, i) => el.classList.toggle("on", i === menuIndex));
+  }
+
+  function closeMenus() {
+    menuName = null;
+    menuIndex = 0;
+    document.querySelectorAll(".menu-pop").forEach((pop) => { pop.hidden = true; });
+    document.querySelectorAll(".menu-btn").forEach((btn) => btn.setAttribute("aria-expanded", "false"));
+  }
+
+  function renderRecent() {
+    const host = $("recent-projects");
+    if (!host) return;
+    let list = [];
+    try { list = JSON.parse(localStorage.getItem(RECENT_KEY) || "[]"); } catch { list = []; }
+    if (!Array.isArray(list) || !list.length) {
+      host.innerHTML = `<div class="menu-label">нет</div>`;
+      return;
+    }
+    host.innerHTML = list.slice(0, 8).map((p) =>
+      `<button type="button" role="menuitem" data-act="recent" data-id="${escapeHtml(p.id)}">${escapeHtml(p.name || "Проект")}</button>`
+    ).join("");
+  }
+
+  function rememberProject(id, name) {
+    if (!id) return;
+    let list = [];
+    try { list = JSON.parse(localStorage.getItem(RECENT_KEY) || "[]"); } catch { list = []; }
+    if (!Array.isArray(list)) list = [];
+    list = [{ id, name: name || "Проект" }, ...list.filter((p) => p && p.id !== id)].slice(0, 8);
+    try { localStorage.setItem(RECENT_KEY, JSON.stringify(list)); } catch { /* private mode */ }
+    renderRecent();
+  }
+
+  function renderViewPanels() {
+    const host = $("view-panels");
+    if (!host) return;
+    const hidden = (state.layout && state.layout.hidden) || {};
+    host.innerHTML = Object.entries(PANEL_LABELS).map(([id, name]) => {
+      const on = !hidden[id];
+      return `<button type="button" role="menuitemcheckbox" aria-checked="${on ? "true" : "false"}" data-act="panel" data-panel="${id}">${on ? "✓ " : ""}${name}</button>`;
+    }).join("");
+  }
+
+  function openMenu(name, focus) {
+    closeMenus();
+    const root = document.querySelector(`.menu[data-menu="${name}"]`);
+    if (!root) return;
+    if (name === "file") renderRecent();
+    if (name === "view") renderViewPanels();
+    menuName = name;
+    const pop = root.querySelector(".menu-pop");
+    pop.hidden = false;
+    root.querySelector(".menu-btn").setAttribute("aria-expanded", "true");
+    menuIndex = 0;
+    paintMenuIndex();
+    if (focus) {
+      const btn = root.querySelector(".menu-btn");
+      if (btn) btn.focus();
+    }
+  }
+
+  function moveMenu(delta) {
+    const names = [...document.querySelectorAll(".menu")].map((el) => el.dataset.menu);
+    const at = Math.max(0, names.indexOf(menuName));
+    openMenu(names[(at + delta + names.length) % names.length], true);
+  }
+
+  function moveItem(delta) {
+    const items = menuItems();
+    if (!items.length) return;
+    menuIndex = (menuIndex + delta + items.length) % items.length;
+    paintMenuIndex();
+  }
+
+  function activateMenuItem(item) {
+    if (!item) return;
+    const act = item.dataset.act;
+    if (act !== "panel") closeMenus();
+    runMenuAction(act, item);
+  }
+
+  function toggleHiddenPanel(id) {
+    if (!state.layout || !PANEL_LABELS[id]) return;
+    state.layout.hidden = state.layout.hidden || {};
+    if (state.layout.hidden[id]) delete state.layout.hidden[id];
+    else state.layout.hidden[id] = true;
+    applyLayout(state.layout);
+    saveLayout();
+    renderViewPanels();
+    if (menuName === "view") {
+      const items = menuItems();
+      const at = items.findIndex((el) => el.dataset.panel === id);
+      if (at >= 0) menuIndex = at;
+      paintMenuIndex();
+    }
+  }
+
+  function newProject() {
+    if (state.dirty && !window.confirm("Есть несохранённые правки. Начать новый проект?")) return;
+    state.projectId = null;
+    state.projectName = "Новый проект";
+    state.prompt = "";
+    state.negative = "";
+    if ($("prompt")) $("prompt").value = "";
+    if ($("negative")) $("negative").value = "";
+    newCanvas(1024, 1024);
+    state.dirty = false;
+    $("project-name").value = state.projectName;
+    $("project-sub").textContent = "новый проект";
+    updateFinal();
+    updateGenerateButton();
+  }
+
+  async function saveProjectAs() {
+    const name = window.prompt("Имя проекта", state.projectName || "Новый проект");
+    if (!name) return;
+    state.projectName = name;
+    $("project-name").value = name;
+    state.projectId = null;
+    try {
+      const id = await saveProject();
+      const a = document.createElement("a");
+      a.href = "/zeroimagestudio/project/" + id + "/export";
+      a.download = name + ".zip";
+      a.click();
+      toast("Проект сохранён и скачан.");
+    } catch (err) {
+      toast(err.message || String(err));
+    }
+  }
+
+  function exportPng() {
+    const a = document.createElement("a");
+    a.href = editor.flatten().toDataURL("image/png");
+    a.download = (state.projectName || "zeroimagestudio") + ".png";
+    a.click();
+  }
+
+  function runMenuAction(act, item) {
+    if (act === "new") newProject();
+    else if (act === "open-project") $("file-open").click();
+    else if (act === "open-image") $("file-layer").click();
+    else if (act === "save") saveProject().then(() => toast("Проект сохранён.")).catch((err) => toast(err.message || String(err)));
+    else if (act === "save-as") saveProjectAs();
+    else if (act === "export-png") exportPng();
+    else if (act === "recent") loadProject(item.dataset.id).then(() => toast("Проект загружен.")).catch((err) => toast(err.message || String(err)));
+    else if (act === "undo") editor.undo();
+    else if (act === "redo") editor.redo();
+    else if (act === "canvas-size") openCanvasSize();
+    else if (act === "fit") editor.fit();
+    else if (act === "zoom100") editor.zoom100();
+    else if (act === "reset-layout") resetLayout();
+    else if (act === "settings") openSettings();
+    else if (act === "focus-graph") focusGraph();
+    else if (act === "help") toggleHelp(true);
+    else if (act === "panel") toggleHiddenPanel(item.dataset.panel);
+  }
+
+  function typingTarget(target) {
+    const tag = ((target && target.tagName) || "").toLowerCase();
+    return tag === "input" || tag === "textarea" || tag === "select" || (target && target.isContentEditable);
+  }
+
+  function onMenuKey(e) {
+    if (e.key === "Alt") {
+      if (typingTarget(e.target)) return;
+      e.preventDefault();
+      altDown = true;
+      return;
+    }
+    if (e.altKey && !e.ctrlKey && !e.metaKey && !typingTarget(e.target) && !e.repeat) {
+      const key = e.key.toLowerCase();
+      const map = { f: "file", ф: "file", e: "edit", p: "edit", п: "edit", v: "view", в: "view", n: "settings", н: "settings", h: "help", с: "help" };
+      if (map[key]) {
+        e.preventDefault();
+        altUsed = true;
+        openMenu(map[key], true);
+        return;
+      }
+    }
+    if (!menuName) return;
+    if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      closeMenus();
+      return;
+    }
+    if (e.key === "ArrowRight") { e.preventDefault(); e.stopPropagation(); moveMenu(1); return; }
+    if (e.key === "ArrowLeft") { e.preventDefault(); e.stopPropagation(); moveMenu(-1); return; }
+    if (e.key === "ArrowDown") { e.preventDefault(); e.stopPropagation(); moveItem(1); return; }
+    if (e.key === "ArrowUp") { e.preventDefault(); e.stopPropagation(); moveItem(-1); return; }
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      e.stopPropagation();
+      activateMenuItem(menuItems()[menuIndex]);
+      return;
+    }
+    if (!e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  }
+
+  function onMenuKeyUp(e) {
+    if (e.key !== "Alt") return;
+    if (altDown && !altUsed && !typingTarget(e.target)) {
+      if (menuName) closeMenus();
+      else openMenu("file", true);
+    }
+    altDown = false;
+    altUsed = false;
+  }
+
+  function bindMenus() {
+    const bar = $("menubar");
+    renderRecent();
+    renderViewPanels();
+    bar.addEventListener("click", (e) => {
+      const top = e.target.closest(".menu-btn");
+      if (top) {
+        const name = top.parentElement.dataset.menu;
+        if (menuName === name) closeMenus();
+        else openMenu(name, false);
+        return;
+      }
+      const item = e.target.closest("[data-act]");
+      if (!item || !bar.contains(item)) return;
+      activateMenuItem(item);
+    });
+    bar.addEventListener("pointerover", (e) => {
+      if (!menuName) return;
+      const menu = e.target.closest(".menu");
+      if (menu && menu.dataset.menu !== menuName) openMenu(menu.dataset.menu, false);
+    });
+    document.addEventListener("pointerdown", (e) => {
+      if (!menuName) return;
+      if (e.target.closest("#menubar")) return;
+      closeMenus();
+    });
+    window.addEventListener("keydown", onMenuKey, true);
+    window.addEventListener("keyup", onMenuKeyUp, true);
+    const model = $("model-node");
+    model.addEventListener("click", (e) => {
+      const task = e.target.closest("[data-krea-task]");
+      if (task) { setKreaTask(task.dataset.kreaTask); return; }
+      if (e.target.closest("[data-rescan]")) rescanModels();
+    });
+  }
+
   function bindStatic() {
     document.querySelectorAll(".tabs button").forEach((b) => b.onclick = () => {
       document.querySelectorAll(".tabs button").forEach((x) => x.classList.toggle("on", x === b));
@@ -3269,14 +3857,13 @@
     $("graph-options").addEventListener("change", onFileChange);
     $("tools").onclick = (e) => { const b = e.target.closest("[data-tool]"); if (b) setTool(b.dataset.tool); };
     $("swatch").oninput = () => { state.color = $("swatch").value; };
-    $("prompt").oninput = () => { state.prompt = $("prompt").value; state.dirty = true; updateFinal(); updateGenerateButton(); };
+    $("prompt").oninput = () => { state.prompt = $("prompt").value; state.dirty = true; updateFinal(); updateGenerateButton(); if (isKreaEdit()) renderKreaChrome(); };
     $("negative").oninput = () => { state.negative = $("negative").value; };
     $("project-name").onchange = () => { state.projectName = $("project-name").value || "zeroimagestudio"; };
     $("btn-gen").onclick = () => generate();
     $("btn-collapse").onclick = () => collapseZeroImageStudio();
     $("btn-gen-full").onclick = () => useWholeCanvas();
-    $("btn-save").onclick = async () => { try { await saveProject(); const id = state.projectId; const a = document.createElement("a"); a.href = "/zeroimagestudio/project/" + id + "/export"; a.download = state.projectName + ".zip"; a.click(); toast("Проект сохранён и скачан."); } catch (err) { toast(err.message); } };
-    $("btn-load").onclick = () => $("file-open").click();
+    bindMenus();
     $("file-open").onchange = async () => {
       const file = $("file-open").files[0];
       if (!file) return;
@@ -3285,12 +3872,12 @@
       try {
         const data = await api("/zeroimagestudio/import_project", { method: "POST", body: fd });
         await loadProject(data.id);
+        $("file-open").value = "";
         toast("Проект загружен.");
       } catch (err) { toast(err.message); }
     };
     $("btn-undo").onclick = () => editor.undo();
     $("btn-redo").onclick = () => editor.redo();
-    $("btn-settings").onclick = () => openSettings();
     $("btn-system").onclick = () => openSystem();
     $("btn-canvas-size").onclick = () => openCanvasSize();
     $("btn-open-image").onclick = () => $("file-layer").click();
@@ -3608,6 +4195,16 @@
     };
     $("btn-layer-del").onclick = () => editor.deleteActive();
     $("gal").onclick = async (e) => {
+      const genBtn = e.target.closest("[data-gal-apply], [data-gal-seed], [data-gal-lora]");
+      if (genBtn) {
+        const id = genBtn.dataset.galApply || genBtn.dataset.galSeed || genBtn.dataset.galLora;
+        const it = state.gallery.find((x) => x.id === id);
+        if (!it) return;
+        if (genBtn.dataset.galApply) useGalleryMeta(it, "apply");
+        else if (genBtn.dataset.galSeed) useGalleryMeta(it, "seed");
+        else useGalleryMeta(it, "lora");
+        return;
+      }
       const assetBtn = e.target.closest("[data-asset-open], [data-asset-ref], [data-asset-del]");
       if (assetBtn) {
         const id = assetBtn.dataset.assetOpen || assetBtn.dataset.assetRef || assetBtn.dataset.assetDel;
@@ -3625,6 +4222,14 @@
       const it = state.gallery.find((x) => x.id === b.dataset.gal);
       if (it) showPop(it, b);
     };
+    $("gal").addEventListener("keydown", (e) => {
+      if (e.key !== "Enter" && e.key !== " ") return;
+      if (e.target.closest(".tile-actions")) return;
+      const tile = e.target.closest("[data-gal]");
+      if (!tile) return;
+      e.preventDefault();
+      tile.click();
+    });
     $("gal").addEventListener("dragstart", (e) => {
       const card = e.target.closest("[data-asset]");
       if (!card) return;
@@ -3676,6 +4281,7 @@
     window.addEventListener("keydown", (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); generate(); }
       if (e.key === "Escape") {
+        if (menuName) { closeMenus(); return; }
         if (!$("pp-pop").hidden) { closePromptPop(); return; }
         if (document.querySelector(".modal-back")) return;
         collapseZeroImageStudio();
@@ -3711,11 +4317,17 @@
       const key = t.dataset.file;
       c[key] = key === "qwen_resolution" || key === "inpaint_grow" ? Number(t.value) : t.value;
       if (key === "loader" || key === "method" || key === "encoder") renderFiles();
+      if (key === "method" && c.method === "krea2_edit" && !(c.krea && c.krea.task)) applyKreaTaskDefaults("general");
     }
     if (t.dataset.krea) c.krea[t.dataset.krea] = t.dataset.krea === "grounding_px" ? Number(t.value) : t.value;
+    if (t.dataset.file === "method" || t.dataset.krea === "grounding_px") {
+      syncKreaStack();
+      renderKreaChrome();
+      renderRefs();
+      renderLoras();
+    }
     renderPipe();
     renderModelSummary();
-    if (t.dataset.file === "method") renderRefs();
     updateGenerateButton();
   }
 
@@ -3724,6 +4336,8 @@
     if (add) { openLoraPicker(); return; }
     const rm = e.target.closest("[data-lora-remove]");
     if (rm) {
+      const victim = activeLoras().find((l) => l.name === rm.dataset.loraRemove);
+      if (victim && victim.system) return;
       cfg().loras = activeLoras().filter((l) => l.name !== rm.dataset.loraRemove);
       if (state.loraSelected === rm.dataset.loraRemove) state.loraSelected = "";
       renderLoras(); renderPipe(); updateFinal();
@@ -3732,6 +4346,7 @@
     const en = e.target.closest("[data-lora-enable]");
     if (en) {
       const l = activeLoras().find((x) => x.name === en.dataset.loraEnable);
+      if (l && l.system) return;
       if (l) l.enabled = !l.enabled;
       renderLoras(); renderPipe(); updateFinal();
       return;
@@ -3744,6 +4359,7 @@
     if (toggle) {
       const name = toggle.dataset.loraToggle;
       const l = activeLoras().find((x) => x.name === name);
+      if (l && l.system) return;
       if (l && l.enabled) l.enabled = false;
       else ensureLora(name).enabled = true;
       state.loraSelected = name;
@@ -3783,14 +4399,14 @@
   function onLoraChange(e) {
     const name = e.target.dataset.loraName || state.loraSelected;
     const l = activeLoras().find((x) => x.name === name);
-    if (!l) return;
+    if (!l || l.system) return;
     if (e.target.dataset.trigMode) { l.trigger_mode = e.target.value; updateFinal(); }
   }
 
   function onLoraInput(e) {
     const name = e.target.dataset.loraName || state.loraSelected;
     const l = activeLoras().find((x) => x.name === name);
-    if (!l) return;
+    if (!l || l.system) return;
     if (e.target.dataset.str) {
       const v = parseFloat(e.target.value);
       if (e.target.dataset.str === "model") {
@@ -3844,7 +4460,11 @@
     for (const [id, on] of Object.entries(source.collapsed || {})) {
       if (known.has(id) && id !== "canvas" && on) collapsed[id] = true;
     }
-    return { left: cols.left, center: cols.center, right: cols.right, collapsed };
+    const hidden = {};
+    for (const [id, on] of Object.entries(source.hidden || {})) {
+      if (known.has(id) && id !== "canvas" && on) hidden[id] = true;
+    }
+    return { left: cols.left, center: cols.center, right: cols.right, collapsed, hidden };
   }
 
   function readLayout() {
@@ -3865,7 +4485,9 @@
     document.querySelectorAll("[data-panel]").forEach((node) => {
       const id = node.dataset.panel;
       const on = id !== "canvas" && !!layout.collapsed[id];
+      const gone = id !== "canvas" && !!(layout.hidden && layout.hidden[id]);
       node.classList.toggle("collapsed", on);
+      node.classList.toggle("panel-hidden", gone);
       const dot = node.querySelector(":scope > .nh .d");
       if (dot && id !== "canvas") dot.title = on ? "Развернуть" : "Свернуть";
     });
@@ -3878,6 +4500,7 @@
       center: read(".cols > .center"),
       right: read(".cols > .right"),
       collapsed: (state.layout && state.layout.collapsed) || {},
+      hidden: (state.layout && state.layout.hidden) || {},
     });
   }
 

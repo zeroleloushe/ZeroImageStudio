@@ -28,12 +28,12 @@
   },
   {
     "id": "krea2_identity_edit",
-    "name": "Krea 2 Identity Edit 2.0",
+    "name": "Krea 2 Edit V2",
     "pipeline": "edit",
     "pipelines": ["edit"],
     "edit_method": "krea2_edit",
-    "tags": { "edit": ["edit", "id-lock", "refs ≤2"] },
-    "note": "Тот же Krea 2 плюс LoRA krea2_identity_edit_v2 и встроенные ноды ZeroImageStudioKrea2Edit*. Для правки сцены вместо человека — krea2_general_edit_v2, одна LoRA за раз.",
+    "tags": { "edit": ["edit", "2 режима", "refs ≤1"] },
+    "note": "Krea 2 и встроенные ноды ZeroImageStudioKrea2Edit*. Два режима, одна LoRA за раз: Правка — krea2_general_edit_v2, Персонаж по референсу — krea2_identity_edit_v2.",
     "defaults": {
       "loader": "diffusion",
       "clip_type": "krea2",
@@ -44,21 +44,13 @@
       "clip": "qwen3vl_4b_fp8_scaled.safetensors",
       "vae": "qwen_image_vae.safetensors"
     },
-    "lora": {
-      "name": "krea2_identity_edit_v2.safetensors",
-      "strength_model": 1.0,
-      "strength_clip": 1.0,
-      "enabled": true,
-      "trigger_mode": "off",
-      "triggers": []
-    },
     "krea": {
       "fit_mode": "fit",
       "ref_boost": 1.0,
       "ref_boost_a": 1.0,
       "ref_position": "aligned (trained)",
       "ref_position_a": "aligned (trained)",
-      "grounding_px": 1024,
+      "grounding_px": 768,
       "impl": "internal"
     },
     "sampler": {

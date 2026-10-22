@@ -372,19 +372,35 @@ def _build_qwen(g, spec, warnings, model, clip, vae, prompt, negative, include_i
 def build_krea_edit(spec: dict, warnings: list[str]) -> dict:
     g = _Graph()
     model, clip, vae = _add_loaders(g, spec)
+    krea = spec.get("krea") or {}
+    task = (krea.get("task") or "").strip()
+    expected_lora = {
+        "general": "krea2_general_edit_v2.safetensors",
+        "identity": "krea2_identity_edit_v2.safetensors",
+    }.get(task)
     if not _enabled_loras(spec):
-        warnings.append(
-            "Krea 2 Edit обучен как LoRA (krea2_identity_edit_v2 или krea2_general_edit_v2). "
-            "Без неё ноды отработают, но идентичность и инструкция почти не держатся."
-        )
+        if expected_lora:
+            warnings.append(
+                f"Krea 2 Edit в этом режиме ждёт LoRA {expected_lora}. "
+                "Без неё ноды отработают, но правка почти не держится."
+            )
+        else:
+            warnings.append(
+                "Krea 2 Edit обучен как LoRA (krea2_identity_edit_v2 или krea2_general_edit_v2). "
+                "Без неё ноды отработают, но идентичность и инструкция почти не держатся."
+            )
     prompt = spec.get("final_prompt")
     if prompt is None:
         prompt = assemble_prompt(spec.get("prompt") or "", spec.get("prompt_presets"), spec.get("loras"))
     negative = spec.get("negative") or ""
+    low = (prompt or "").lower()
+    if any(word in low for word in ("удал", "remove", "erase", "сотр", "убер")):
+        warnings.append(
+            "Для удаления объекта лучше модель Raw, CFG около 3 и около 20 шагов. "
+            "Turbo при CFG 1 обычно перерисовывает объект."
+        )
     if not spec.get("image"):
         raise WorkflowError("Редактирование Krea 2 требует кроп области (исходное изображение).")
-
-    krea = spec.get("krea") or {}
     impl = krea.get("impl") or "internal"
     if impl == "external":
         patch_cls = "Krea2EditModelPatch"
@@ -394,11 +410,21 @@ def build_krea_edit(spec: dict, warnings: list[str]) -> dict:
         enc_cls = "ZeroImageStudioKrea2EditGroundedEncode"
 
     w, h, batch = _size(spec, 16)
+    if w * h > 2_000_000:
+        warnings.append(
+            f"Krea Edit лучше держать до 2 Мп (сейчас {w * h / 1_000_000:.2f}). "
+            "Выше исходник может протекать, а объект — двоиться."
+        )
     src = _load_image(g, spec["image"], "Source")
     refs = [r for r in (spec.get("references") or []) if r]
-    ref_node = _load_image(g, refs[0], "Reference") if refs else None
-    if len(refs) > 1:
+    if task == "general":
+        if refs:
+            warnings.append("Режим «Правка» отправляет только холст. Дополнительный референс не использован.")
+        refs = []
+    elif len(refs) > 1:
         warnings.append("Krea 2 Edit в этой версии принимает исходник и один дополнительный референс (image_b). Лишние референсы не отправлены.")
+        refs = refs[:1]
+    ref_node = _load_image(g, refs[0], "Reference") if refs else None
 
     latent = g.add(
         "EmptySD3LatentImage",
