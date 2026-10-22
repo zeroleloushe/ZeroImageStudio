@@ -103,8 +103,34 @@ def save_settings(data: dict) -> dict:
                 current["llm_systems"][mode] = text
     if isinstance(data.get("llm_presets"), list):
         current["llm_presets"] = data["llm_presets"][:40]
+    if isinstance(data.get("layout"), dict):
+        current["layout"] = _clean_layout(data["layout"])
     _write_json(settings_path(), current)
     return current
+
+
+def _clean_layout(raw: dict) -> dict:
+    columns = ("left", "center", "right")
+    cleaned = {col: [] for col in columns}
+    seen = set()
+    for col in columns:
+        values = raw.get(col)
+        if not isinstance(values, list):
+            continue
+        for item in values:
+            if not isinstance(item, str) or item in seen or len(item) > 40:
+                continue
+            if item == "canvas" and col != "center":
+                continue
+            seen.add(item)
+            cleaned[col].append(item)
+    collapsed_in = raw.get("collapsed") if isinstance(raw.get("collapsed"), dict) else {}
+    collapsed = {}
+    for key, value in collapsed_in.items():
+        if isinstance(key, str) and key != "canvas" and value:
+            collapsed[key] = True
+    cleaned["collapsed"] = collapsed
+    return cleaned
 
 
 def _collection(name: str) -> str:
@@ -317,6 +343,122 @@ def civitai_get(file_hash: str) -> dict | None:
     cache = _read_json(civitai_cache_path(), {})
     item = cache.get(file_hash)
     return item if isinstance(item, dict) else None
+
+
+_ASSET_EXT = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
+
+
+def assets_dir() -> str:
+    path = os.path.join(user_root(), "assets")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def _assets_index() -> str:
+    return os.path.join(assets_dir(), "index.json")
+
+
+def list_assets() -> list[dict]:
+    data = _read_json(_assets_index(), [])
+    return data if isinstance(data, list) else []
+
+
+def _asset_ext(name: str, mime: str) -> str:
+    ext = os.path.splitext(name or "")[1].lower()
+    if ext in _ASSET_EXT:
+        return ".jpg" if ext == ".jpeg" else ext
+    if "png" in (mime or ""):
+        return ".png"
+    if "webp" in (mime or ""):
+        return ".webp"
+    if "gif" in (mime or ""):
+        return ".gif"
+    return ".jpg"
+
+
+def _valid_asset_id(value: str) -> bool:
+    return isinstance(value, str) and len(value) == 64 and all(c in "0123456789abcdef" for c in value)
+
+
+def save_asset(data: bytes, name: str, mime: str, role: str, project_id: str | None, import_settings: dict | None) -> dict:
+    digest = hashlib.sha256(data).hexdigest()
+    ext = _asset_ext(name, mime)
+    folder = assets_dir()
+    original = os.path.join(folder, digest + ext)
+    if not os.path.isfile(original):
+        with open(original, "wb") as handle:
+            handle.write(data)
+    width = height = 0
+    try:
+        with Image.open(io.BytesIO(data)) as image:
+            width, height = image.size
+            thumb = image.convert("RGB")
+            thumb.thumbnail((256, 256))
+            thumb.save(os.path.join(folder, digest + ".thumb.jpg"), format="JPEG", quality=80)
+    except Exception:
+        width = height = 0
+    items = list_assets()
+    found = next((item for item in items if item.get("sha256") == digest), None)
+    if found is None:
+        found = {
+            "id": digest,
+            "sha256": digest,
+            "name": name or digest[:12],
+            "mime": mime or "application/octet-stream",
+            "width": width,
+            "height": height,
+            "bytes": len(data),
+            "created": int(time.time()),
+            "roles": [],
+            "project_ids": [],
+            "import": None,
+            "ext": ext,
+        }
+        items.insert(0, found)
+    else:
+        if width and height:
+            found["width"] = width
+            found["height"] = height
+        found["bytes"] = len(data)
+    if name:
+        found["name"] = name
+    if role in ("canvas", "reference") and role not in found["roles"]:
+        found["roles"].append(role)
+    if project_id and project_id not in found.get("project_ids", []):
+        found.setdefault("project_ids", []).append(str(project_id))
+    if isinstance(import_settings, dict):
+        found["import"] = import_settings
+    _write_json(_assets_index(), items)
+    return found
+
+
+def asset_path(asset_id: str, thumb: bool = False) -> str | None:
+    if not _valid_asset_id(asset_id):
+        return None
+    if thumb:
+        path = os.path.join(assets_dir(), asset_id + ".thumb.jpg")
+        return path if os.path.isfile(path) else None
+    item = next((row for row in list_assets() if row.get("id") == asset_id), None)
+    if not item:
+        return None
+    path = os.path.join(assets_dir(), asset_id + str(item.get("ext") or ""))
+    return path if os.path.isfile(path) else None
+
+
+def delete_asset(asset_id: str) -> None:
+    if not _valid_asset_id(asset_id):
+        return
+    items = [item for item in list_assets() if item.get("id") != asset_id]
+    _write_json(_assets_index(), items)
+    folder = assets_dir()
+    for name in os.listdir(folder):
+        if name == "index.json":
+            continue
+        if name.startswith(asset_id):
+            try:
+                os.remove(os.path.join(folder, name))
+            except OSError:
+                pass
 
 
 def civitai_put(file_hash: str, payload: dict) -> None:

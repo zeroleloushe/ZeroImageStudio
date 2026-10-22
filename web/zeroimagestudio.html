@@ -30,15 +30,9 @@
   <span class="mu preset-label">Пресет</span>
   <select id="preset-select" class="dd" title="Пресет"></select>
   <button class="b" id="btn-save-preset" data-i="plus" data-s="13" title="Сохранить как"><span class="btn-label">Сохранить как</span></button>
-  <button class="b" id="btn-settings" data-i="gear" data-s="14" title="LLM и Civitai"></button>
+  <button class="b" id="btn-settings" data-i="gear" data-s="14" title="Настройки"></button>
   <button class="b ac" id="btn-collapse" data-i="collapse" data-s="14">Свернуть в ноду</button>
-</div>
-<div class="pipe" id="pipe">
-  <span class="mu pipe-label">Граф генерации:</span>
-  <div id="pipe-steps" class="row"></div>
-  <div class="top-gap"></div>
-  <span class="mu mono" id="sys-stats">GPU … · очередь …</span>
-  <button class="b s" id="btn-focus" data-i="link" data-s="12" title="Открыть в графе ComfyUI">Открыть в графе ComfyUI</button>
+  <span class="sys-ind mu mono" id="sys-stats" title="GPU и очередь">…</span>
 </div>
 
 <div class="cols">
@@ -64,7 +58,7 @@
   </div>
 
   <div class="left">
-    <div class="node" id="model-node" style="--c:#ff7a1a">
+    <div class="node" id="model-node" data-panel="model" style="--c:#ff7a1a">
       <div class="sock r"></div>
       <div class="nh"><span class="d"></span>Модель<span class="r" id="model-sockets">MODEL · CLIP · VAE</span></div>
       <div class="nb" style="gap:5px">
@@ -99,7 +93,7 @@
         }
       } catch (e) {}
     </script>
-    <div class="node" style="--c:#4aa8ff">
+    <div class="node" id="refs-node" data-panel="refs" style="--c:#4aa8ff">
       <div class="sock r"></div>
       <div class="nh"><span class="d"></span>Референсы<span class="r" id="ref-cap">для Edit-моделей · 0</span></div>
       <div class="nb">
@@ -107,12 +101,12 @@
         <div class="mu" id="ref-hint" style="font-size:10.5px">Krea 2 Edit берёт исходный кроп и один дополнительный референс. Qwen Image 2.1 — до 16, в промте <span class="mono">&lt;image1&gt;</span>.</div>
       </div>
     </div>
-    <div class="node lora-node" style="--c:#b18cff">
+    <div class="node lora-node" id="lora-node" data-panel="lora" style="--c:#b18cff">
       <div class="sock r"></div>
       <div class="nh"><span class="d"></span>LoRA-менеджер<span class="r" id="lora-sum">0 активны</span></div>
       <div class="nb" id="lora-panel"></div>
     </div>
-    <div class="node" style="--c:#e7c27a">
+    <div class="node" id="sampler-node" data-panel="sampler" style="--c:#e7c27a">
       <div class="sock r"></div>
       <div class="nh"><span class="d"></span>Настройки генерации</div>
       <div class="nb">
@@ -122,7 +116,7 @@
   </div>
 
   <div class="center">
-    <div class="node" style="--c:#4aa8ff;flex:1">
+    <div class="node" id="canvas-node" data-panel="canvas" style="--c:#4aa8ff;flex:1">
       <div class="nh canvas-head"><span class="d"></span><span class="ht">Холст</span>
         <span class="mono" id="canvas-info" title="RGB 8 бит">—</span>
         <span class="zoombar">
@@ -138,19 +132,9 @@
         </span>
       </div>
       <div class="opts" id="tool-options"></div>
-      <div class="stage" id="stage">
-        <div class="empty-stage" id="empty-stage">
-          <div class="empty-card">
-            <b>Откройте изображение, перетащите или вставьте Ctrl+V</b>
-            <div class="mu">Пиксели не уменьшаются. Холст можно подогнать под кадр.</div>
-            <button type="button" class="b ac" id="empty-open" data-i="open" data-s="14">Открыть изображение</button>
-            <div class="mu" id="empty-new-label">Новый холст</div>
-            <div class="row empty-sizes" id="empty-sizes"></div>
-          </div>
-        </div>
-      </div>
+      <div class="stage" id="stage"></div>
     </div>
-    <div class="node" style="--c:#e7c27a">
+    <div class="node" id="prompt-node" data-panel="prompt" style="--c:#e7c27a">
       <div class="sock l" style="top:9px"></div>
       <div class="nh"><span class="d"></span>Промт<span class="r" id="token-est">CONDITIONING</span></div>
       <div class="nb">
@@ -201,12 +185,17 @@
   </div>
 
   <div class="right">
-    <div class="node" style="--c:#ff5c7a">
+    <div class="node" id="inspector-node" data-panel="inspector" style="--c:#ff5c7a">
       <div class="sock l"></div>
-      <div class="nh"><span class="d"></span>Инспектор · Область генерации</div>
+      <div class="nh">
+        <span class="d" title="Свернуть"></span>
+        <span class="ht">Инспектор</span>
+        <span class="r" id="insp-meta">весь холст</span>
+        <button type="button" class="b s icon-btn" id="btn-gen-full" data-i="expand" data-s="13" title="Весь холст" aria-pressed="true"></button>
+      </div>
       <div class="nb" id="inspector"></div>
     </div>
-    <div class="node" id="layers-node" style="--c:#3ddc97">
+    <div class="node" id="layers-node" data-panel="layers" style="--c:#3ddc97">
       <div class="nh"><span class="d"></span>Слои
         <span class="r">
           <button class="b s" id="btn-layer-add" data-i="plus" data-s="13" title="Пустой слой"></button>
@@ -224,11 +213,15 @@
         <div id="layer-list" style="display:flex;flex-direction:column;gap:3px"></div>
       </div>
     </div>
-    <div class="node" style="--c:#4aa8ff;flex:1">
+    <div class="node" id="gallery-node" data-panel="gallery" data-kind="gens" style="--c:#4aa8ff;flex:1">
       <div class="nh"><span class="d"></span>Галерея<span class="r" id="gal-sort-label">сортировка: новые</span></div>
       <div class="nb">
-        <div class="gal-scope" id="gal-scope" role="group" aria-label="Чьи генерации показывать">
-          <button type="button" data-scope="all" class="on">Все генерации</button>
+        <div class="gal-kind" id="gal-kind" role="group" aria-label="Генерации или ассеты">
+          <button type="button" data-kind="gens" class="on">Генерации</button>
+          <button type="button" data-kind="assets">Ассеты</button>
+        </div>
+        <div class="gal-scope" id="gal-scope" role="group" aria-label="Все или этот проект">
+          <button type="button" data-scope="all" class="on">Все</button>
           <button type="button" data-scope="project">Этот проект</button>
         </div>
         <div class="row gal-filters">

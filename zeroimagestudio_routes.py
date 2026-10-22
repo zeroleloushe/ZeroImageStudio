@@ -356,6 +356,50 @@ async def gallery_list(_request):
     return _json({"items": store.list_gallery()})
 
 
+async def asset_list(_request):
+    return _json({"items": store.list_assets()})
+
+
+async def asset_save(request):
+    data = await request.post()
+    blob = _file_bytes(data, "file")
+    upload = data.get("file")
+    name = getattr(upload, "filename", "") or ""
+    mime = getattr(upload, "content_type", "") or ""
+    role = str(data.get("role") or "")
+    if role not in ("canvas", "reference"):
+        role = ""
+    project_id = str(data.get("project_id") or "")
+    imported = None
+    raw = data.get("import")
+    if isinstance(raw, str) and raw.strip():
+        try:
+            parsed = json.loads(raw)
+            imported = parsed if isinstance(parsed, dict) else None
+        except Exception:
+            imported = None
+    return _json(store.save_asset(blob, name, mime, role, project_id or None, imported))
+
+
+async def asset_file(request):
+    path = store.asset_path(request.match_info.get("asset_id", ""))
+    if not path:
+        return _json({"error": "Ассет не найден."}, 404)
+    return web.FileResponse(path)
+
+
+async def asset_thumb(request):
+    path = store.asset_path(request.match_info.get("asset_id", ""), thumb=True)
+    if not path:
+        return _json({"error": "Превью не найдено."}, 404)
+    return web.FileResponse(path)
+
+
+async def asset_delete(request):
+    store.delete_asset(request.match_info.get("asset_id", ""))
+    return _json({"ok": True})
+
+
 async def gallery_save(request):
     data = await request.post()
     image = _file_bytes(data, "image")
@@ -540,6 +584,11 @@ def register(krea_import_error=None):
     add("POST", "/zeroimagestudio/commit", commit)
     add("GET", "/zeroimagestudio/gallery", gallery_list)
     add("POST", "/zeroimagestudio/gallery", gallery_save)
+    add("GET", "/zeroimagestudio/assets", asset_list)
+    add("POST", "/zeroimagestudio/assets", asset_save)
+    add("GET", "/zeroimagestudio/assets/{asset_id}/file", asset_file)
+    add("GET", "/zeroimagestudio/assets/{asset_id}/thumb", asset_thumb)
+    add("DELETE", "/zeroimagestudio/assets/{asset_id}", asset_delete)
     add("POST", "/zeroimagestudio/project", project_put)
     add("POST", "/zeroimagestudio/project/{project_id}", project_put)
     add("GET", "/zeroimagestudio/project/{project_id}", project_get)

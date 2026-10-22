@@ -28,7 +28,7 @@
     create: blankPipe("create"),
     edit: blankPipe("edit"),
     references: [],
-    area: { outW: 1024, outH: 1024, aspect: "free", context: 0.15, feather: 48, paste: "poisson", colorMatch: true, userPlaced: false, outputLinked: true, mp: 1 },
+    area: { outW: 1024, outH: 1024, aspect: "free", context: 0.15, feather: 48, paste: "poisson", colorMatch: true, userPlaced: false, outputLinked: true, mp: 1, pasteOpen: false },
     tool: "genarea",
     color: "#e7c27a",
     brush: { size: 64, hardness: 0.3, opacity: 1 },
@@ -43,6 +43,9 @@
     presets: [],
     gallery: [],
     galleryScope: "all",
+    galleryKind: "gens",
+    assets: [],
+    layout: null,
     settings: null,
     running: false,
     promptId: null,
@@ -275,9 +278,10 @@
       ctx.save();
       ctx.translate(this.panX, this.panY);
       ctx.scale(this.zoom, this.zoom);
-      ctx.fillStyle = "rgba(0,0,0,.45)";
-      ctx.fillRect(10, 14, this.doc.w, this.doc.h);
-      ctx.strokeStyle = "#000";
+      ctx.fillStyle = "#1c2028";
+      ctx.fillRect(0, 0, this.doc.w, this.doc.h);
+      ctx.strokeStyle = "#c5ccd8";
+      ctx.lineWidth = Math.max(1, 1 / this.zoom);
       ctx.strokeRect(0.5, 0.5, this.doc.w - 1, this.doc.h - 1);
       let first = true;
       for (const layer of this.layers) {
@@ -553,6 +557,7 @@
         this.zoomBy(factor, e.clientX, e.clientY);
       }, { passive: false });
       window.addEventListener("keydown", (e) => {
+        if (document.querySelector(".modal-back")) return;
         if (e.code === "Space") { this.space = true; if (!/^(input|textarea|select)$/i.test((e.target.tagName || ""))) e.preventDefault(); }
         const tag = (e.target.tagName || "").toLowerCase();
         if (tag === "input" || tag === "textarea" || tag === "select") return;
@@ -844,6 +849,8 @@
     state.tool = name;
     document.querySelectorAll(".tool").forEach((b) => b.classList.toggle("on", b.dataset.tool === name));
     renderToolOptions();
+    const meta = $("insp-meta");
+    if (meta && editor) meta.textContent = inspectorContext();
     const cursors = { brush: "crosshair", eraser: "crosshair", mask: "crosshair", hand: "grab", zoom: "zoom-in", move: "move", genarea: "crosshair", crop: "crosshair", select: "crosshair", lasso: "crosshair", eyedrop: "crosshair", transform: "move" };
     editor.canvas.style.cursor = cursors[name] || "default";
     editor.requestDraw();
@@ -862,7 +869,6 @@
     renderPresetSelect();
     renderTags();
     renderToolOptions();
-    renderEmpty();
     updateGenerateButton();
     renderModelSummary();
     $("prompt").value = state.prompt;
@@ -1083,7 +1089,7 @@
           <input id="lora-pick-search" class="f" style="width:100%;font-family:inherit" placeholder="Поиск по всем папкам" value="${escapeHtml(q)}">
           <div class="lora-crumbs">${crumbs}</div>
           <div class="lora-pick-list">${dirs}${rows || `<div class="empty">В этой папке пусто.</div>`}</div>
-          <div class="mu">Стек слева хранит только добавленные LoRA. Папки — как в выборе файла у LoRA Loader Pixaroma: крошки, вложенные каталоги, поиск по всему дереву. Превью Civitai показывается, если оно уже известно.</div>`;
+          <div class="mu">Выберите файл, чтобы добавить его в стек.</div>`;
         const search = $("lora-pick-search");
         search.oninput = () => {
           state.loraPickQuery = search.value;
@@ -1359,54 +1365,131 @@
     paintStatus();
   }
 
+  function inspectorContext() {
+    const layer = editor && editor.activeLayer && editor.activeLayer();
+    if (state.tool !== "genarea" && layer) return layer.name;
+    return coversWholeCanvas() ? "весь холст" : "область";
+  }
+
+  function applyOutputSize(w, h) {
+    state.area.outputLinked = false;
+    state.area.outW = snapSize(w);
+    state.area.outH = snapSize(h);
+    state.area.mp = nearestMp(state.area.outW, state.area.outH);
+    if (editor) editor.requestDraw();
+    renderInspector();
+    renderPipe();
+    paintStatus();
+  }
+
   function renderInspector() {
     const frame = generationSize();
     const g = editor.gen;
     const a = state.area;
-    const scale = (g.w > 0) ? (frame.w / g.w) : 1;
-    const linked = a.outputLinked !== false && coversWholeCanvas();
+    const aspect = matchAspect(frame.w, frame.h);
+    const known = ASPECTS.some(([n]) => n === aspect);
+    const mpOn = activeMp(frame.w, frame.h);
+    const exact = ((frame.w * frame.h) / 1e6).toFixed(2);
+    const aspectOpts = ASPECTS.map(([n]) => `<option value="${n}" ${aspect === n ? "selected" : ""}>${n}</option>`).join("")
+      + (known ? "" : `<option value="${escapeHtml(aspect)}" selected>${escapeHtml(aspect)}</option>`);
+    const mpOpts = MPS.map((m) => `<option value="${m}" ${m === mpOn ? "selected" : ""}>${m}</option>`).join("")
+      + `<option value="custom" ${mpOn == null ? "selected" : ""}>Своё</option>`;
+    const customMp = ((frame.w * frame.h) / 1e6).toFixed(2);
+    const meta = $("insp-meta");
+    if (meta) meta.textContent = inspectorContext();
+    const full = $("btn-gen-full");
+    if (full) {
+      const on = coversWholeCanvas() && a.outputLinked !== false;
+      full.setAttribute("aria-pressed", on ? "true" : "false");
+      full.title = "Весь холст";
+    }
+    const hint = replacesCanvas() ? "Весь холст → новая картинка" : "→ новый слой";
     $("inspector").innerHTML = `
-      <div class="kv" style="grid-template-columns:auto minmax(0,1fr) auto minmax(0,1fr)">
-        <span>X</span><input id="gx" class="f" value="${g.x}"><span>Y</span><input id="gy" class="f" value="${g.y}">
-        <span>W</span><input id="gw" class="f" value="${g.w}"><span>H</span><input id="gh" class="f" value="${g.h}">
-        <span>Аспект</span><b class="mono" id="area-ratio">${ratioText(g.w, g.h)}</b><span></span><span></span>
-        <span>Вклейка</span><select id="gpaste" class="dd"><option value="poisson" ${a.paste==="poisson"?"selected":""}>Poisson</option><option value="feather" ${a.paste==="feather"?"selected":""}>Растушёвка</option><option value="hard" ${a.paste==="hard"?"selected":""}>Жёстко</option></select>
-        <span>Шов</span><input id="gfeather" class="f" value="${a.feather}">
-      </div>
-      <div class="mu">Разрешение генерации${linked ? " · как холст" : ""}</div>
-      ${resolutionPickerHtml(frame.w, frame.h)}
-      <div class="row" style="gap:6px"><span class="mu">Контекст</span><input id="gcontext" class="f" style="width:64px" value="${Math.round(a.context*100)}"><span class="mu">%</span>
-        <label class="row" style="gap:4px"><input id="gcolor" type="checkbox" ${a.colorMatch?"checked":""}> цвет. подгон</label></div>
-      <div class="row" style="gap:5px;flex-wrap:wrap">
-        <span class="tag ${editor.maskArea()>8?"tgr":""}">маска ${editor.maskArea()>8?"✓":"—"}</span>
-        <span class="tag ${a.colorMatch?"tbl":""}">цвет. подгон ${a.colorMatch?"✓":"—"}</span>
-        <span class="tag">масштаб ×${scale.toFixed(2)}</span>
-        <span class="tag to">${replacesCanvas() ? "→ заменить холст" : "→ новый слой"}</span>
-        <button type="button" class="b s" id="btn-gen-full">Как холст</button>
-      </div>
-      <div class="banner">${linked
-        ? `Весь холст: генерация ${frame.w}×${frame.h}, кратно 16, по размеру холста ${editor.doc.w}×${editor.doc.h}.`
-        : `Область ${Math.round(g.w)}×${Math.round(g.h)} (${ratioText(g.w, g.h)}), выход модели ${frame.w}×${frame.h}.`}</div>`;
-    const num = (id, fn) => $(id).onchange = () => { state.area.userPlaced = true; fn(parseFloat($(id).value)); editor.requestDraw(); renderInspector(); renderLayers(); };
+      <div class="insp">
+        <section class="insp-sec">
+          <div class="insp-h">Область</div>
+          <div class="insp-grid">
+            <span class="lbl">X</span><input id="gx" class="f" value="${Math.round(g.x)}" inputmode="numeric" aria-label="X">
+            <span class="lbl">Y</span><input id="gy" class="f" value="${Math.round(g.y)}" inputmode="numeric" aria-label="Y">
+            <span class="lbl">W</span><input id="gw" class="f" value="${Math.round(g.w)}" inputmode="numeric" aria-label="Ширина области">
+            <span class="lbl">H</span><input id="gh" class="f" value="${Math.round(g.h)}" inputmode="numeric" aria-label="Высота области">
+          </div>
+        </section>
+        <section class="insp-sec">
+          <div class="insp-h">Разрешение генерации</div>
+          <div class="insp-grid">
+            <span class="lbl">Аспект</span>
+            <div class="insp-span insp-inline">
+              <select id="g-aspect" class="dd" aria-label="Соотношение сторон">${aspectOpts}</select>
+              <button type="button" class="b s icon-btn" id="g-swap" title="Портрет или альбом">⇄</button>
+            </div>
+            <span class="lbl">МП</span>
+            <div class="insp-span insp-inline">
+              <select id="g-mp" class="dd" aria-label="Мегапиксели">${mpOpts}</select>
+              <input id="g-mp-custom" class="f" inputmode="decimal" aria-label="Своё значение в мегапикселях" value="${customMp}" ${mpOn == null ? "" : "hidden"} style="width:72px;flex:0 0 72px">
+            </div>
+          </div>
+          <div class="insp-result">${frame.w}×${frame.h} · ${exact} МП</div>
+        </section>
+        <details class="insp-adv" id="insp-paste" ${a.pasteOpen ? "open" : ""}>
+          <summary>Вклейка</summary>
+          <div class="insp-grid">
+            <span class="lbl">Режим</span>
+            <select id="gpaste" class="dd insp-span" aria-label="Режим вклейки">
+              <option value="poisson" ${a.paste === "poisson" ? "selected" : ""}>Poisson</option>
+              <option value="feather" ${a.paste === "feather" ? "selected" : ""}>Растушёвка</option>
+              <option value="hard" ${a.paste === "hard" ? "selected" : ""}>Жёстко</option>
+            </select>
+            <span class="lbl">Шов</span><input id="gfeather" class="f" value="${a.feather}" inputmode="numeric" aria-label="Шов, пиксели">
+            <span class="lbl">Контекст</span>
+            <div class="insp-inline"><input id="gcontext" class="f" value="${Math.round(a.context * 100)}" inputmode="numeric" aria-label="Контекст, проценты" style="width:72px;flex:0 0 72px"><span class="mu">%</span></div>
+            <span class="lbl">Цвет</span>
+            <label class="insp-span insp-check"><input id="gcolor" type="checkbox" ${a.colorMatch ? "checked" : ""}> подгон</label>
+          </div>
+        </details>
+        <div class="insp-hint">${hint}</div>
+      </div>`;
+    const num = (id, fn) => $(id).onchange = () => { state.area.userPlaced = true; fn(parseFloat($(id).value)); editor.requestDraw(); renderInspector(); renderLayers(); paintStatus(); };
     num("gx", (v) => { editor.gen.x = clamp(v || 0, 0, editor.doc.w - 8); });
     num("gy", (v) => { editor.gen.y = clamp(v || 0, 0, editor.doc.h - 8); });
     num("gw", (v) => { editor.gen.w = Math.max(16, v || 16); });
     num("gh", (v) => { editor.gen.h = Math.max(16, v || 16); });
-    bindResolutionPicker($("inspector").querySelector(".res-pick"), (w, h) => {
-      state.area.outputLinked = false;
-      state.area.outW = w;
-      state.area.outH = h;
-      state.area.mp = nearestMp(w, h);
-      editor.requestDraw();
-      renderInspector();
-      renderPipe();
-    });
+    const currentMp = () => {
+      const sel = $("g-mp");
+      if (sel && sel.value === "custom") return Math.max(0.25, parseFloat($("g-mp-custom").value) || 1);
+      return parseFloat(sel && sel.value) || nearestMp(frame.w, frame.h);
+    };
+    $("g-aspect").onchange = () => {
+      const name = $("g-aspect").value;
+      const hit = ASPECTS.find((item) => item[0] === name);
+      const ratio = hit ? hit[1] / hit[2] : (frame.w / frame.h || 1);
+      const pixels = currentMp() * 1e6;
+      const h = Math.sqrt(pixels / ratio);
+      applyOutputSize(snapSize(h * ratio), snapSize(h));
+    };
+    $("g-mp").onchange = () => {
+      if ($("g-mp").value === "custom") {
+        $("g-mp-custom").hidden = false;
+        $("g-mp-custom").focus();
+        return;
+      }
+      const ratio = frame.w / frame.h || 1;
+      const pixels = Math.max(0.25, parseFloat($("g-mp").value) || 1) * 1e6;
+      const h = Math.sqrt(pixels / ratio);
+      applyOutputSize(snapSize(h * ratio), snapSize(h));
+    };
+    $("g-mp-custom").onchange = () => {
+      const ratio = frame.w / frame.h || 1;
+      const pixels = Math.max(0.25, parseFloat($("g-mp-custom").value) || 1) * 1e6;
+      const h = Math.sqrt(pixels / ratio);
+      applyOutputSize(snapSize(h * ratio), snapSize(h));
+    };
+    $("g-swap").onclick = () => applyOutputSize(frame.h, frame.w);
+    $("insp-paste").addEventListener("toggle", () => { state.area.pasteOpen = $("insp-paste").open; });
     $("gpaste").onchange = () => { state.area.paste = $("gpaste").value; };
-    $("gfeather").onchange = () => { state.area.feather = Math.max(0, parseInt($("gfeather").value, 10) || 0); renderTags(); };
-    $("gcontext").onchange = () => { state.area.context = Math.max(0, (parseFloat($("gcontext").value) || 0) / 100); renderTags(); };
-    $("gcolor").onchange = () => { state.area.colorMatch = $("gcolor").checked; renderInspector(); };
-    const full = $("btn-gen-full");
-    if (full) full.onclick = () => useWholeCanvas();
+    $("gfeather").onchange = () => { state.area.feather = Math.max(0, parseInt($("gfeather").value, 10) || 0); };
+    $("gcontext").onchange = () => { state.area.context = Math.max(0, (parseFloat($("gcontext").value) || 0) / 100); };
+    $("gcolor").onchange = () => { state.area.colorMatch = $("gcolor").checked; };
   }
 
   function renderTags() { /* status lives in the tool options bar */ }
@@ -1428,19 +1511,7 @@
       $("brush-op").oninput = () => { state.brush.opacity = Math.min(1, (parseInt($("brush-op").value, 10) || 1) / 100); paintStatus(); };
       paintStatus();
     } else if (tool === "genarea") {
-      const a = state.area;
-      host.innerHTML = `<b>Область</b>
-        <label>Контекст <input id="opt-context" class="f" style="width:52px" value="${Math.round(a.context * 100)}" title="Запас вокруг области, %"> %</label>
-        <label>Шов <input id="opt-feather" class="f" style="width:48px" value="${a.feather}" title="Растушёвка, пиксели"> px</label>
-        <select id="opt-paste" class="dd" title="Способ вклейки"><option value="poisson" ${a.paste === "poisson" ? "selected" : ""}>Poisson</option><option value="feather" ${a.paste === "feather" ? "selected" : ""}>Растушёвка</option><option value="hard" ${a.paste === "hard" ? "selected" : ""}>Жёстко</option></select>
-        <label title="Подгон цвета по краю"><input id="opt-color" type="checkbox" ${a.colorMatch ? "checked" : ""}> цвет</label>
-        <button type="button" class="b s" id="opt-full" title="Область на весь холст">Весь холст</button>
-        <span class="mu" id="opt-status"></span>`;
-      $("opt-context").onchange = () => { state.area.context = Math.max(0, (parseFloat($("opt-context").value) || 0) / 100); renderInspector(); paintStatus(); };
-      $("opt-feather").onchange = () => { state.area.feather = Math.max(0, parseInt($("opt-feather").value, 10) || 0); renderInspector(); };
-      $("opt-paste").onchange = () => { state.area.paste = $("opt-paste").value; renderInspector(); };
-      $("opt-color").onchange = () => { state.area.colorMatch = $("opt-color").checked; renderInspector(); };
-      $("opt-full").onclick = () => useWholeCanvas();
+      host.innerHTML = `<b>Область</b><span class="mu" id="opt-status"></span>`;
       paintStatus();
     } else {
       const hints = {
@@ -1523,27 +1594,6 @@
     node.scrollIntoView({ block: "nearest" });
   }
 
-  const CANVAS_PRESETS = [[512, 512], [768, 768], [1024, 1024], [832, 1216], [1216, 832], [1536, 1024]];
-
-  function renderEmpty() {
-    const el = $("empty-stage");
-    if (!el || !editor) return;
-    el.hidden = editor.layers.length > 0;
-    const sizes = $("empty-sizes");
-    if (sizes && !sizes.dataset.ready) {
-      sizes.dataset.ready = "1";
-      sizes.innerHTML = CANVAS_PRESETS.map(([w, h]) => `<button type="button" class="b s" data-size="${w}x${h}" title="Новый холст ${w}×${h}">${w}×${h}</button>`).join("") + `<button type="button" class="b s" data-custom="1">Своё…</button>`;
-      sizes.onclick = (e) => {
-        const custom = e.target.closest("[data-custom]");
-        if (custom) { openCanvasSize(); return; }
-        const b = e.target.closest("[data-size]");
-        if (!b) return;
-        const [w, h] = b.dataset.size.split("x").map(Number);
-        newCanvas(w, h);
-      };
-    }
-  }
-
   function newCanvas(w, h) {
     if (editor.layers.length) editor.pushUndo(editor.fullSnapshot());
     editor.doc = { w, h };
@@ -1556,7 +1606,6 @@
     editor.fit();
     state.dirty = true;
     renderLayers();
-    renderEmpty();
     renderInspector();
     renderPipe();
     paintStatus();
@@ -1632,7 +1681,6 @@
         <button data-lock="${l.id}" data-i="lock" data-s="13" type="button" title="${l.locked ? "Разблокировать" : "Заблокировать"}" style="color:${l.locked ? "var(--ac)" : "var(--mu)"}"></button>
       </div>`;
     }).join("") || `<div class="empty">Нет слоёв. Загрузите изображение или сгенерируйте.</div>`;
-    renderEmpty();
     if (window.zeroImageStudioHydrateIcons) window.zeroImageStudioHydrateIcons(host);
   }
 
@@ -1829,21 +1877,7 @@
   }
 
   function renderPipe() {
-    const c = cfg();
-    const frame = generationSize();
-    const loras = activeLoras().filter((l) => l.enabled);
-    const built = state.pipeline === "edit" ? "edit:" + (c.method || "inpaint") : "create";
-    const steps = [
-      { text: `Область ${frame.w}×${frame.h}`, color: "#4aa8ff" },
-      { text: c.loader === "checkpoint" ? "Checkpoint" : "UNET + CLIP + VAE", color: "#ff7a1a" },
-      { text: loras.length ? `LoRA ×${loras.length}` : "без LoRA", color: "#b18cff" },
-      { text: "Промт + пресеты + LLM", color: "#e7c27a" },
-      { text: `KSampler · ${state.sampler.steps} / ${state.sampler.cfg}`, color: "#3ddc97" },
-      { text: built.startsWith("edit") ? "Бесшовная вклейка → новый слой" : (replacesCanvas() ? "Генерация на весь холст" : "Генерация в область → новый слой"), color: "#ff5c7a" },
-    ];
-    $("pipe-steps").innerHTML = steps.map((s, i) =>
-      `<span class="pn" style="--c:${s.color}">${escapeHtml(s.text)}</span>` + (i < steps.length - 1 ? `<span class="pw" style="--c:${s.color}"></span>` : "")
-    ).join("");
+    generationSize();
   }
 
   function renderPresetSelect() {
@@ -1859,16 +1893,38 @@
     return !!pid && (it.meta.project_id || "") === pid;
   }
 
+  function assetInProject(asset) {
+    const pid = state.projectId || "";
+    return !!pid && (asset.project_ids || []).includes(pid);
+  }
+
+  function formatBytes(n) {
+    const v = Number(n) || 0;
+    if (v < 1024) return v + " Б";
+    if (v < 1024 * 1024) return Math.round(v / 1024) + " КБ";
+    return (v / 1024 / 1024).toFixed(1) + " МБ";
+  }
+
+  function formatWhen(ts) {
+    const d = new Date((Number(ts) || 0) * 1000);
+    if (!Number(ts)) return "";
+    return d.toLocaleDateString("ru-RU", { day: "numeric", month: "short" });
+  }
+
   function renderGallery() {
     const host = $("gal");
     const scope = state.galleryScope === "project" ? "project" : "all";
+    const kind = state.galleryKind === "assets" ? "assets" : "gens";
+    const node = $("gallery-node");
+    if (node) node.dataset.kind = kind;
     document.querySelectorAll("#gal-scope button").forEach((b) => b.classList.toggle("on", b.dataset.scope === scope));
+    document.querySelectorAll("#gal-kind button").forEach((b) => b.classList.toggle("on", b.dataset.kind === kind));
+    if (kind === "assets") {
+      renderAssetGallery(host, scope);
+      return;
+    }
     const allReal = state.gallery.filter((it) => !it.example);
     const projectReal = allReal.filter(galleryInProject);
-    const scopeAll = $("gal-scope").querySelector('[data-scope="all"]');
-    const scopeProject = $("gal-scope").querySelector('[data-scope="project"]');
-    if (scopeAll) scopeAll.textContent = "Все генерации";
-    if (scopeProject) scopeProject.textContent = "Этот проект";
     let items = (scope === "project" ? projectReal : allReal).slice();
     const model = $("gal-model").value;
     const lora = $("gal-lora").value;
@@ -1885,7 +1941,7 @@
         host.innerHTML = examples.map((s, i) => `<button type="button" class="g" data-example="1"><img src="assets/${s}" alt=""><s style="background:${["#ff7a1a","#b18cff","#4aa8ff","#7d8594","#3ddc97"][i]}"></s></button>`).join("");
         $("gal-legend").innerHTML = "<span>Демо-оформление (?demo=1), не генерации.</span>";
       } else if (scope === "project") {
-        host.innerHTML = `<div class="empty-gal">В этом проекте ещё нет генераций. Общие кадры из других запусков — в «Все генерации».</div>`;
+        host.innerHTML = `<div class="empty-gal">В этом проекте ещё нет генераций. Общие кадры — во «Все».</div>`;
         $("gal-legend").innerHTML = `<span>${scopeNote}</span>`;
       } else {
         host.innerHTML = `<div class="empty-gal">Галерея пуста. После генерации здесь будут ваши кадры с промтом и сидом.</div>`;
@@ -1906,6 +1962,39 @@
     fillSelect($("gal-lora"), ["", ...loras], lora, "LoRA");
     const sort = $("gal-sort");
     if (sort) sort.title = sort.value === "old" ? "Сначала старые" : "Сначала новые";
+    const label = $("gal-sort-label");
+    if (label && sort) label.textContent = "сортировка: " + (sort.value === "old" ? "старые" : "новые");
+  }
+
+  function renderAssetGallery(host, scope) {
+    const all = state.assets || [];
+    const items = (scope === "project" ? all.filter(assetInProject) : all.slice())
+      .sort((a, b) => (b.created || 0) - (a.created || 0));
+    const note = scope === "project" ? "Только ассеты этого проекта." : "Все загруженные изображения.";
+    if (!items.length) {
+      host.innerHTML = `<div class="empty-gal">${scope === "project" ? "В этом проекте ещё нет ассетов." : "Ассетов пока нет. Сюда попадают импорт на холст и референсы."}</div>`;
+    } else {
+      host.innerHTML = `<div class="assets">${items.map((asset) => {
+        const badges = (asset.roles || []).map((role) => `<span class="tag ${role === "reference" ? "tvi" : "tbl"}">${role === "reference" ? "Референс" : "Холст"}</span>`).join("");
+        return `<div class="asset" draggable="true" data-asset="${escapeHtml(asset.id)}">
+          <img src="/zeroimagestudio/assets/${encodeURIComponent(asset.id)}/thumb" alt="">
+          <div>
+            <b class="nm" title="${escapeHtml(asset.name || "")}">${escapeHtml(asset.name || "Изображение")}</b>
+            <div class="badges">${badges}</div>
+            <div class="mu">${asset.width || "?"}×${asset.height || "?"} · ${formatBytes(asset.bytes)} · ${formatWhen(asset.created)}</div>
+            <div class="acts">
+              <button type="button" class="b s" data-asset-open="${escapeHtml(asset.id)}">Открыть на холсте</button>
+              <button type="button" class="b s" data-asset-ref="${escapeHtml(asset.id)}">Добавить как референс</button>
+              <button type="button" class="b s" data-asset-del="${escapeHtml(asset.id)}">Удалить</button>
+            </div>
+          </div>
+        </div>`;
+      }).join("")}</div>`;
+    }
+    $("gal-legend").innerHTML = `<span>${note}</span>`;
+    $("gal-count").textContent = String(items.length);
+    const label = $("gal-sort-label");
+    if (label) label.textContent = "ассеты";
   }
 
   function fillSelect(sel, values, current, placeholder) {
@@ -2114,11 +2203,6 @@
       spec.references = refs;
       const built = await api("/zeroimagestudio/build_workflow", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(spec) });
       if (built.warnings && built.warnings.length) toast(built.warnings[0]);
-      if (built.pipe) {
-        $("pipe-steps").innerHTML = built.pipe.map((s, i) =>
-          `<span class="pn" style="--c:${s.color}">${escapeHtml(s.text)}</span>` + (i < built.pipe.length - 1 ? `<span class="pw" style="--c:${s.color}"></span>` : "")
-        ).join("");
-      }
       const queued = await api("/prompt", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: built.workflow, client_id: clientId }) });
       if (queued.node_errors && Object.keys(queued.node_errors).length) {
         const first = Object.values(queued.node_errors)[0];
@@ -2165,7 +2249,6 @@
         editor.active = 0;
         editor.thumb(layer);
         editor.pushUndo(snap);
-        renderEmpty();
         toast("Готово, холст заменён. Сид " + spec.seed + ". Прошлый кадр в отмене и в галерее.");
       } else {
         const n = editor.layers.filter((l) => l.name.startsWith(state.pipeline === "edit" ? "Правка" : "Генерация")).length + 1;
@@ -2182,7 +2265,6 @@
           editor.addLayer(layer);
         }
         editor.pushUndo(snap);
-        renderEmpty();
         toast("Готово, новый слой. Сид " + spec.seed + ".");
       }
     } catch (err) {
@@ -2427,59 +2509,372 @@
     renderAll();
   }
 
-  function placeImportedImage(img, name, fit) {
-    const w = img.naturalWidth || img.width;
-    const h = img.naturalHeight || img.height;
+  function placeImportedCanvas(canvas, name, asNew) {
     editor.pushUndo(editor.fullSnapshot());
-    const demo = editor.layers.length === 1 && editor.layers[0].locked && editor.layers[0].name === "Оригинал";
-    const c = document.createElement("canvas");
-    c.width = w;
-    c.height = h;
-    c.getContext("2d").drawImage(img, 0, 0);
-    if (fit) {
-      editor.doc = { w, h };
+    const layer = editor.makeLayer(String(name || "Фото").replace(/\.[^.]+$/, ""), canvas);
+    if (asNew) {
+      editor.doc = { w: canvas.width, h: canvas.height };
       editor.resizeMask();
-      editor.maskCtx.clearRect(0, 0, w, h);
-      state.area.userPlaced = false;
-      syncDefaultArea();
-    }
-    const layer = editor.makeLayer(String(name || "Фото").replace(/\.[^.]+$/, ""), c);
-    if (demo || !editor.layers.length) {
+      editor.maskCtx.clearRect(0, 0, canvas.width, canvas.height);
       editor.layers = [layer];
       editor.active = 0;
+      state.area.userPlaced = false;
+      syncDefaultArea();
     } else {
+      layer.x = 0;
+      layer.y = 0;
       editor.addLayer(layer);
     }
     editor.thumb(layer);
     editor.fit();
+    state.dirty = true;
     editor.requestDraw();
     renderLayers();
     renderInspector();
     renderPipe();
     paintStatus();
     updateGenerateButton();
-    toast(fit ? `Холст ${w} × ${h}. Слой в полном размере, без уменьшения.` : "Слой добавлен в полном размере, холст не менялся.");
+    toast(asNew ? `Холст ${canvas.width} × ${canvas.height}.` : "Слой добавлен, холст не менялся.");
   }
 
-  function offerImportImage(img, name) {
-    const w = img.naturalWidth || img.width;
-    const h = img.naturalHeight || img.height;
+  function readImportMp() {
+    let raw = "off";
+    try { raw = localStorage.getItem("zeroimagestudio.importMp") || "off"; } catch (err) { /* private mode */ }
+    if (raw === "off") return { mode: "off", value: 0, key: "off" };
+    if (String(raw).startsWith("custom:")) {
+      const value = Math.max(0.1, parseFloat(String(raw).slice(7)) || 1);
+      return { mode: "custom", value, key: "custom" };
+    }
+    const value = parseFloat(raw);
+    return Number.isFinite(value) ? { mode: "preset", value, key: String(value) } : { mode: "off", value: 0, key: "off" };
+  }
+
+  function writeImportMp(mp) {
+    const raw = mp.mode === "off" ? "off" : mp.mode === "custom" ? "custom:" + mp.value : String(mp.value);
+    try { localStorage.setItem("zeroimagestudio.importMp", raw); } catch (err) { /* private mode */ }
+  }
+
+  function snapDown16(v) {
+    if (v < 16) return Math.max(1, Math.round(v));
+    return Math.floor(v / 16) * 16;
+  }
+
+  function importOutputSize(cropW, cropH, mp) {
+    let w = cropW;
+    let h = cropH;
+    if (mp && mp.mode !== "off" && mp.value > 0) {
+      const pixels = cropW * cropH;
+      const budget = mp.value * 1e6;
+      if (pixels > budget) {
+        const scale = Math.sqrt(budget / pixels);
+        w *= scale;
+        h *= scale;
+      }
+    }
+    return { w: snapDown16(Math.min(w, cropW)), h: snapDown16(Math.min(h, cropH)) };
+  }
+
+  function upsertAsset(asset) {
+    if (!asset || !asset.id) return;
+    const rest = (state.assets || []).filter((item) => item.id !== asset.id);
+    state.assets = [asset, ...rest];
+    if (state.galleryKind === "assets") renderGallery();
+  }
+
+  async function rememberAsset(file, role, importSettings) {
+    const body = file instanceof File ? file : new File([file], "image.png", { type: file.type || "image/png" });
+    const fd = new FormData();
+    fd.append("file", body, body.name || "image.png");
+    fd.append("role", role);
+    if (state.projectId) fd.append("project_id", state.projectId);
+    if (importSettings) fd.append("import", JSON.stringify(importSettings));
+    const saved = await api("/zeroimagestudio/assets", { method: "POST", body: fd });
+    upsertAsset(saved);
+    return saved;
+  }
+
+  async function blobForAsset(id) {
+    const res = await fetch("/zeroimagestudio/assets/" + encodeURIComponent(id) + "/file");
+    if (!res.ok) throw new Error("Не удалось открыть ассет.");
+    return res.blob();
+  }
+
+  async function openAssetOnCanvas(id) {
+    const asset = (state.assets || []).find((item) => item.id === id);
+    const blob = await blobForAsset(id);
+    const img = await loadImage(URL.createObjectURL(blob));
+    const file = new File([blob], (asset && asset.name) || "asset.png", { type: blob.type || "image/png" });
+    await offerImportImage(img, file.name, file, asset && asset.import);
+  }
+
+  async function addAssetAsReference(id) {
+    const asset = (state.assets || []).find((item) => item.id === id);
+    const blob = await blobForAsset(id);
+    const img = await loadImage(URL.createObjectURL(blob));
+    const c = document.createElement("canvas");
+    c.width = img.width;
+    c.height = img.height;
+    c.getContext("2d").drawImage(img, 0, 0);
+    state.references.push({ id: "r" + Math.random().toString(36).slice(2, 7), name: (asset && asset.name) || ("#" + (state.references.length + 1)), canvas: c, url: c.toDataURL("image/png") });
+    renderRefs();
+    const file = new File([blob], (asset && asset.name) || "ref.png", { type: blob.type || "image/png" });
+    try { await rememberAsset(file, "reference", asset && asset.import); }
+    catch (err) { toast(err.message || String(err)); }
+  }
+
+  async function deleteAsset(id) {
+    const asset = (state.assets || []).find((item) => item.id === id);
+    const name = (asset && asset.name) || "ассет";
+    if (!window.confirm("Удалить ассет «" + name + "»? Холст не изменится.")) return;
+    await api("/zeroimagestudio/assets/" + encodeURIComponent(id), { method: "DELETE" });
+    state.assets = (state.assets || []).filter((item) => item.id !== id);
+    renderGallery();
+  }
+
+  function offerImportImage(img, name, sourceFile, preset) {
+    const imgW = img.naturalWidth || img.width;
+    const imgH = img.naturalHeight || img.height;
+    const locks = [["free", "Свободно"], ["source", "Исходное"], ["1:1", "1:1"], ["2:3", "2:3"], ["3:2", "3:2"], ["3:4", "3:4"], ["4:3", "4:3"], ["9:16", "9:16"], ["16:9", "16:9"]];
+    const mpPresets = [["off", "Без ограничения"], ["1", "1"], ["1.5", "1.5"], ["2", "2"], ["4", "4"], ["8", "8"], ["custom", "Своё"]];
+    let lock = (preset && locks.some(([id]) => id === preset.aspect) && preset.aspect) || "free";
+    let swapped = false;
+    let mp = preset && preset.mp ? readStoredMp(preset.mp) : readImportMp();
+    const minW = Math.min(16, imgW);
+    const minH = Math.min(16, imgH);
+    const clampCrop = (c) => {
+      let x = c.x, y = c.y, w = c.w, h = c.h;
+      if (w < 0) { x += w; w = -w; }
+      if (h < 0) { y += h; h = -h; }
+      w = Math.max(minW, Math.min(w, imgW));
+      h = Math.max(minH, Math.min(h, imgH));
+      x = Math.max(0, Math.min(x, imgW - w));
+      y = Math.max(0, Math.min(y, imgH - h));
+      return { x, y, w, h };
+    };
+    let crop = clampCrop(preset && preset.w > 8 && preset.h > 8
+      ? { x: preset.x || 0, y: preset.y || 0, w: preset.w, h: preset.h }
+      : { x: 0, y: 0, w: imgW, h: imgH });
+    const currentRatio = () => {
+      if (lock === "free") return Math.max(crop.w, 1) / Math.max(crop.h, 1);
+      if (lock === "source") return swapped ? imgH / imgW : imgW / imgH;
+      const [a, b] = lock.split(":").map(Number);
+      const ratio = a / b;
+      return swapped ? 1 / ratio : ratio;
+    };
+    const fitRatio = (ratio) => {
+      let w = imgW;
+      let h = w / ratio;
+      if (h > imgH) { h = imgH; w = h * ratio; }
+      return clampCrop({ x: (imgW - w) / 2, y: (imgH - h) / 2, w, h });
+    };
+    const asNewDefault = editor.layers.length === 0 && editor.doc.w === 1024 && editor.doc.h === 1024;
     return new Promise((resolve) => {
       const back = document.createElement("div");
       back.className = "modal-back";
-      back.innerHTML = `<div class="modal"><h3>Открыть изображение</h3>
-        <div class="mu">${escapeHtml(name || "изображение")} · ${w} × ${h}. Можно подогнать холст под полный размер. Пиксели не уменьшаются.</div>
-        <div class="row" style="flex-wrap:wrap">
-          <button class="b ac" type="button" data-fit="1">Подогнать холст</button>
-          <button class="b" type="button" data-add="1">Добавить слоем</button>
-          <button class="b" type="button" data-cancel="1">Отмена</button>
-        </div></div>`;
-      const close = (mode) => { back.remove(); resolve(mode); };
-      back.querySelector("[data-fit]").onclick = () => close("fit");
-      back.querySelector("[data-add]").onclick = () => close("add");
-      back.querySelector("[data-cancel]").onclick = () => close(null);
+      back.innerHTML = `<div class="modal import" role="dialog" aria-modal="true" aria-labelledby="import-title">
+        <h3 id="import-title">Импорт изображения</h3>
+        <div class="mu">${escapeHtml(name || "изображение")} · исходник ${imgW}×${imgH}. Файл на диске не меняется.</div>
+        <div class="import-stage"><canvas id="import-view"></canvas></div>
+        <div class="mu">Кадр</div>
+        <div class="import-aspects" id="import-aspects">${locks.map(([id, label]) => `<button type="button" class="b s" data-lock="${id}">${label}</button>`).join("")}<button type="button" class="b s" data-swap="1" title="Портрет или альбом">⇄</button></div>
+        <div class="mu">Максимум, мегапиксели. Только уменьшение, кратно 16.</div>
+        <div class="import-mps" id="import-mps">${mpPresets.map(([id, label]) => `<button type="button" class="b s" data-mp="${id}">${label}</button>`).join("")}<input id="import-custom" class="f" inputmode="decimal" style="width:72px" hidden></div>
+        <div class="mu" id="import-live"></div>
+        <div class="row">
+          <label class="row"><input type="radio" name="import-place" value="new"> Как новый холст</label>
+          <label class="row"><input type="radio" name="import-place" value="layer"> Слоем на текущий холст</label>
+        </div>
+        <div class="row" style="justify-content:flex-end">
+          <button type="button" class="b" data-cancel="1">Отмена</button>
+          <button type="button" class="b ac" data-ok="1">Импорт</button>
+        </div>
+      </div>`;
+      const canvas = back.querySelector("#import-view");
+      const maxW = Math.min(760, window.innerWidth - 80);
+      const fit = Math.min(maxW / imgW, 360 / imgH, 4);
+      canvas.width = Math.max(1, Math.round(imgW * fit));
+      canvas.height = Math.max(1, Math.round(imgH * fit));
+      let drag = null;
+      const paint = () => {
+        const g = canvas.getContext("2d");
+        g.clearRect(0, 0, canvas.width, canvas.height);
+        g.drawImage(img, 0, 0, canvas.width, canvas.height);
+        const sx = canvas.width / imgW;
+        const sy = canvas.height / imgH;
+        const x = crop.x * sx, y = crop.y * sy, w = crop.w * sx, h = crop.h * sy;
+        g.fillStyle = "rgba(0,0,0,.55)";
+        g.beginPath();
+        g.rect(0, 0, canvas.width, canvas.height);
+        g.rect(x, y, w, h);
+        g.fill("evenodd");
+        g.strokeStyle = "#ff7a1a";
+        g.lineWidth = 2;
+        g.strokeRect(x + 1, y + 1, Math.max(0, w - 2), Math.max(0, h - 2));
+        g.fillStyle = "#ff7a1a";
+        [[x, y], [x + w / 2, y], [x + w, y], [x + w, y + h / 2], [x + w, y + h], [x + w / 2, y + h], [x, y + h], [x, y + h / 2]].forEach(([hx, hy]) => {
+          g.fillRect(hx - 4, hy - 4, 8, 8);
+        });
+        back.querySelectorAll("[data-lock]").forEach((b) => b.classList.toggle("on", b.dataset.lock === lock));
+        back.querySelectorAll("[data-mp]").forEach((b) => b.classList.toggle("on", b.dataset.mp === mp.key));
+        const custom = back.querySelector("#import-custom");
+        custom.hidden = mp.mode !== "custom";
+        if (mp.mode === "custom" && document.activeElement !== custom) custom.value = String(mp.value);
+        const out = importOutputSize(crop.w, crop.h, mp);
+        const mpText = ((out.w * out.h) / 1e6).toFixed(2);
+        back.querySelector("#import-live").textContent = `Источник ${imgW}×${imgH} → ${out.w}×${out.h} · ${mpText} МП`;
+      };
+      const point = (ev) => {
+        const r = canvas.getBoundingClientRect();
+        return {
+          x: ((ev.clientX - r.left) / r.width) * imgW,
+          y: ((ev.clientY - r.top) / r.height) * imgH,
+        };
+      };
+      const hit = (ev) => {
+        const r = canvas.getBoundingClientRect();
+        const px = ev.clientX - r.left;
+        const py = ev.clientY - r.top;
+        const sx = r.width / imgW;
+        const sy = r.height / imgH;
+        const x = crop.x * sx, y = crop.y * sy, w = crop.w * sx, h = crop.h * sy;
+        const pts = { nw: [x, y], n: [x + w / 2, y], ne: [x + w, y], e: [x + w, y + h / 2], se: [x + w, y + h], s: [x + w / 2, y + h], sw: [x, y + h], w: [x, y + h / 2] };
+        for (const [name, pos] of Object.entries(pts)) {
+          if (Math.abs(px - pos[0]) <= 8 && Math.abs(py - pos[1]) <= 8) return name;
+        }
+        if (px >= x && px <= x + w && py >= y && py <= y + h) return "move";
+        return null;
+      };
+      canvas.addEventListener("pointerdown", (ev) => {
+        const handle = hit(ev);
+        if (!handle) return;
+        drag = { handle, p: point(ev), crop: { ...crop } };
+        canvas.setPointerCapture(ev.pointerId);
+      });
+      canvas.addEventListener("pointermove", (ev) => {
+        if (!drag) {
+          const handle = hit(ev);
+          canvas.style.cursor = handle === "move" ? "move" : handle ? "crosshair" : "default";
+          return;
+        }
+        const p = point(ev);
+        if (drag.handle === "move") {
+          crop = clampCrop({ x: drag.crop.x + (p.x - drag.p.x), y: drag.crop.y + (p.y - drag.p.y), w: drag.crop.w, h: drag.crop.h });
+        } else {
+          const start = drag.crop;
+          let x1 = start.x, y1 = start.y, x2 = start.x + start.w, y2 = start.y + start.h;
+          if (drag.handle.includes("w")) x1 = p.x;
+          if (drag.handle.includes("e")) x2 = p.x;
+          if (drag.handle.includes("n")) y1 = p.y;
+          if (drag.handle.includes("s")) y2 = p.y;
+          let w = x2 - x1, h = y2 - y1;
+          if (lock !== "free") {
+            const ratio = currentRatio();
+            const edge = drag.handle.length === 1;
+            if (edge && (drag.handle === "n" || drag.handle === "s")) w = Math.abs(h) * ratio * Math.sign(w || 1);
+            else if (edge) h = Math.abs(w) / ratio * Math.sign(h || 1);
+            else if (Math.abs(w) / ratio > Math.abs(h)) h = Math.abs(w) / ratio * Math.sign(h || 1);
+            else w = Math.abs(h) * ratio * Math.sign(w || 1);
+            if (drag.handle.includes("w")) x1 = x2 - w; else x2 = x1 + w;
+            if (drag.handle.includes("n")) y1 = y2 - h; else y2 = y1 + h;
+            if (drag.handle === "n" || drag.handle === "s") {
+              const cx = start.x + start.w / 2;
+              x1 = cx - w / 2; x2 = x1 + w;
+            }
+            if (drag.handle === "e" || drag.handle === "w") {
+              const cy = start.y + start.h / 2;
+              y1 = cy - h / 2; y2 = y1 + h;
+            }
+          }
+          crop = clampCrop({ x: x1, y: y1, w: x2 - x1, h: y2 - y1 });
+        }
+        paint();
+      });
+      canvas.addEventListener("pointerup", () => { drag = null; });
+      const finish = (ok) => {
+        const picked = back.querySelector('input[name="import-place"]:checked');
+        const asNew = !picked || picked.value === "new";
+        window.removeEventListener("keydown", onKey, true);
+        back.remove();
+        resolve(ok ? asNew : null);
+      };
+      const doImport = () => {
+        const custom = back.querySelector("#import-custom");
+        if (mp.mode === "custom" && custom) mp = { mode: "custom", value: Math.max(0.1, parseFloat(custom.value) || mp.value), key: "custom" };
+        finish(true);
+      };
+      const onKey = (ev) => {
+        if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); finish(false); }
+        if (ev.key === "Enter") { ev.preventDefault(); ev.stopPropagation(); doImport(); }
+      };
+      window.addEventListener("keydown", onKey, true);
+      back.addEventListener("click", (ev) => {
+        const lockBtn = ev.target.closest("[data-lock]");
+        const mpBtn = ev.target.closest("[data-mp]");
+        if (lockBtn) {
+          lock = lockBtn.dataset.lock;
+          swapped = false;
+          if (lock !== "free") crop = fitRatio(currentRatio());
+          paint();
+        } else if (ev.target.closest("[data-swap]")) {
+          if (lock === "free") {
+            const cx = crop.x + crop.w / 2, cy = crop.y + crop.h / 2;
+            crop = clampCrop({ x: cx - crop.h / 2, y: cy - crop.w / 2, w: crop.h, h: crop.w });
+          } else {
+            swapped = !swapped;
+            crop = fitRatio(currentRatio());
+          }
+          paint();
+        } else if (mpBtn) {
+          const id = mpBtn.dataset.mp;
+          if (id === "off") mp = { mode: "off", value: 0, key: "off" };
+          else if (id === "custom") {
+            mp = { mode: "custom", value: mp.mode === "custom" ? mp.value : 1, key: "custom" };
+            const custom = back.querySelector("#import-custom");
+            custom.hidden = false;
+            custom.value = String(mp.value);
+            custom.focus();
+          } else mp = { mode: "preset", value: parseFloat(id), key: id };
+          writeImportMp(mp);
+          paint();
+        } else if (ev.target.closest("[data-cancel]")) finish(false);
+        else if (ev.target.closest("[data-ok]")) doImport();
+      });
+      back.querySelector("#import-custom").addEventListener("change", (ev) => {
+        mp = { mode: "custom", value: Math.max(0.1, parseFloat(ev.target.value) || 1), key: "custom" };
+        writeImportMp(mp);
+        paint();
+      });
+      const radios = back.querySelectorAll('input[name="import-place"]');
+      radios.forEach((radio) => { radio.checked = asNewDefault ? radio.value === "new" : radio.value === "layer"; });
       document.body.appendChild(back);
-    }).then((mode) => { if (mode) placeImportedImage(img, name, mode === "fit"); });
+      paint();
+      back.querySelector("[data-ok]").focus();
+    }).then(async (asNew) => {
+      if (asNew == null) return;
+      writeImportMp(mp);
+      const out = importOutputSize(crop.w, crop.h, mp);
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, out.w);
+      canvas.height = Math.max(1, out.h);
+      canvas.getContext("2d").drawImage(img, crop.x, crop.y, crop.w, crop.h, 0, 0, canvas.width, canvas.height);
+      placeImportedCanvas(canvas, name, asNew);
+      if (sourceFile) {
+        const settings = {
+          x: Math.round(crop.x), y: Math.round(crop.y), w: Math.round(crop.w), h: Math.round(crop.h),
+          aspect: lock, mp: mp.mode === "off" ? "off" : mp.mode === "custom" ? "custom:" + mp.value : String(mp.value),
+          out_w: canvas.width, out_h: canvas.height,
+        };
+        try { await rememberAsset(sourceFile, "canvas", settings); }
+        catch (err) { toast(err.message || String(err)); }
+      }
+    });
+  }
+
+  function readStoredMp(raw) {
+    if (raw === "off") return { mode: "off", value: 0, key: "off" };
+    if (String(raw).startsWith("custom:")) return { mode: "custom", value: Math.max(0.1, parseFloat(String(raw).slice(7)) || 1), key: "custom" };
+    const value = parseFloat(raw);
+    return Number.isFinite(value) ? { mode: "preset", value, key: String(value) } : readImportMp();
   }
 
   async function loadExample() {
@@ -2694,7 +3089,13 @@
       <div class="mu">Имя модели</div>
       <input id="set-model" type="text" value="${escapeHtml(s.llm_model || "")}" placeholder="qwen2.5:7b">
       <div class="mu">Ключ, если сервер его требует</div>
-      <input id="set-key" type="password" value="${escapeHtml(s.llm_key || "")}">`, async (box, close) => {
+      <input id="set-key" type="password" value="${escapeHtml(s.llm_key || "")}">
+      <div class="row" style="flex-wrap:wrap">
+        <button type="button" class="b" id="set-focus">Открыть в графе ComfyUI</button>
+        <button type="button" class="b" id="set-layout">Сбросить раскладку</button>
+      </div>`, async (box, close) => {
+      box.querySelector("#set-focus").onclick = () => focusGraph();
+      box.querySelector("#set-layout").onclick = () => { resetLayout(); close(); };
       box.querySelector("[data-ok]").onclick = async () => {
         state.settings = await api("/zeroimagestudio/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
           civitai_token: $("set-civ").value, llm_base: $("set-base").value, llm_model: $("set-model").value, llm_key: $("set-key").value,
@@ -2828,7 +3229,7 @@
     $("project-name").onchange = () => { state.projectName = $("project-name").value || "zeroimagestudio"; };
     $("btn-gen").onclick = () => generate();
     $("btn-collapse").onclick = () => collapseZeroImageStudio();
-    $("btn-focus").onclick = () => { if (window.parent !== window) window.parent.postMessage({ type: "zeroimagestudio-focus" }, "*"); else toast("Кнопка возвращает к ноде, когда ZeroImageStudio открыт из графа."); };
+    $("btn-gen-full").onclick = () => useWholeCanvas();
     $("btn-save").onclick = async () => { try { await saveProject(); const id = state.projectId; const a = document.createElement("a"); a.href = "/zeroimagestudio/project/" + id + "/export"; a.download = state.projectName + ".zip"; a.click(); toast("Проект сохранён и скачан."); } catch (err) { toast(err.message); } };
     $("btn-load").onclick = () => $("file-open").click();
     $("file-open").onchange = async () => {
@@ -2848,7 +3249,6 @@
     $("btn-system").onclick = () => openSystem();
     $("btn-canvas-size").onclick = () => openCanvasSize();
     $("btn-open-image").onclick = () => $("file-layer").click();
-    $("empty-open").onclick = () => $("file-layer").click();
     $("btn-help").onclick = () => toggleHelp();
     const stageMid = () => {
       const r = $("stage").getBoundingClientRect();
@@ -3004,6 +3404,7 @@
         c.getContext("2d").drawImage(layer.canvas, 0, 0);
         state.references.push({ id: "r" + Date.now(), name: "#" + (state.references.length + 1), canvas: c, url: c.toDataURL("image/png") });
         renderRefs();
+        canvasBlob(c).then((blob) => rememberAsset(new File([blob], layer.name + ".png", { type: "image/png" }), "reference", null)).catch((err) => toast(err.message || String(err)));
         return;
       }
       const del = e.target.closest("[data-ref-del]");
@@ -3020,8 +3421,11 @@
         const c = document.createElement("canvas");
         c.width = img.width; c.height = img.height;
         c.getContext("2d").drawImage(img, 0, 0);
-        state.references.push({ id: "r" + Math.random().toString(36).slice(2, 7), name: "#" + (state.references.length + 1), canvas: c, url: c.toDataURL("image/png") });
+        state.references.push({ id: "r" + Math.random().toString(36).slice(2, 7), name: file.name || ("#" + (state.references.length + 1)), canvas: c, url: c.toDataURL("image/png") });
+        try { await rememberAsset(file, "reference", null); }
+        catch (err) { toast(err.message || String(err)); }
       }
+      $("file-ref").value = "";
       renderRefs();
     };
     $("file-layer").onchange = async () => {
@@ -3029,16 +3433,30 @@
       $("file-layer").value = "";
       if (!file) return;
       const img = await loadImage(URL.createObjectURL(file));
-      await offerImportImage(img, file.name);
+      await offerImportImage(img, file.name, file);
     };
     const stage = $("stage");
-    stage.addEventListener("dragover", (e) => { e.preventDefault(); });
+    stage.addEventListener("dragenter", (e) => { e.preventDefault(); stage.classList.add("dropping"); });
+    stage.addEventListener("dragover", (e) => { e.preventDefault(); stage.classList.add("dropping"); });
+    stage.addEventListener("dragleave", (e) => { if (e.target === stage) stage.classList.remove("dropping"); });
     stage.addEventListener("drop", async (e) => {
       e.preventDefault();
+      stage.classList.remove("dropping");
+      const assetId = e.dataTransfer && e.dataTransfer.getData("text/zis-asset");
+      if (assetId) { await openAssetOnCanvas(assetId); return; }
       const files = [...(e.dataTransfer && e.dataTransfer.files || [])].filter((f) => f.type.startsWith("image/"));
       if (!files.length) return;
       const img = await loadImage(URL.createObjectURL(files[0]));
-      await offerImportImage(img, files[0].name);
+      await offerImportImage(img, files[0].name, files[0]);
+    });
+    $("ref-list").addEventListener("dragover", (e) => {
+      if (e.dataTransfer && [...e.dataTransfer.types].includes("text/zis-asset")) e.preventDefault();
+    });
+    $("ref-list").addEventListener("drop", async (e) => {
+      const assetId = e.dataTransfer && e.dataTransfer.getData("text/zis-asset");
+      if (!assetId) return;
+      e.preventDefault();
+      await addAssetAsReference(assetId);
     });
     window.addEventListener("paste", async (e) => {
       if (e.target && /^(input|textarea|select)$/i.test(e.target.tagName)) return;
@@ -3047,7 +3465,7 @@
       if (!file) return;
       e.preventDefault();
       const img = await loadImage(URL.createObjectURL(file));
-      await offerImportImage(img, "Буфер обмена");
+      await offerImportImage(img, "Буфер обмена", file);
     });
     $("lora-panel").addEventListener("click", onLoraClick);
     $("lora-panel").addEventListener("change", onLoraChange);
@@ -3144,13 +3562,35 @@
       editor.addLayer(copy);
     };
     $("btn-layer-del").onclick = () => editor.deleteActive();
-    $("gal").onclick = (e) => {
+    $("gal").onclick = async (e) => {
+      const assetBtn = e.target.closest("[data-asset-open], [data-asset-ref], [data-asset-del]");
+      if (assetBtn) {
+        const id = assetBtn.dataset.assetOpen || assetBtn.dataset.assetRef || assetBtn.dataset.assetDel;
+        try {
+          if (assetBtn.dataset.assetOpen) await openAssetOnCanvas(id);
+          else if (assetBtn.dataset.assetRef) await addAssetAsReference(id);
+          else await deleteAsset(id);
+        } catch (err) { toast(err.message || String(err)); }
+        return;
+      }
       const ex = e.target.closest("[data-example]");
       if (ex) { toast("Это пример оформления, не результат генерации."); return; }
       const b = e.target.closest("[data-gal]");
       if (!b) return;
       const it = state.gallery.find((x) => x.id === b.dataset.gal);
       if (it) showPop(it, b);
+    };
+    $("gal").addEventListener("dragstart", (e) => {
+      const card = e.target.closest("[data-asset]");
+      if (!card) return;
+      e.dataTransfer.setData("text/zis-asset", card.dataset.asset);
+      e.dataTransfer.effectAllowed = "copy";
+    });
+    $("gal-kind").onclick = (e) => {
+      const b = e.target.closest("[data-kind]");
+      if (!b || b.dataset.kind === state.galleryKind) return;
+      state.galleryKind = b.dataset.kind === "assets" ? "assets" : "gens";
+      renderGallery();
     };
     $("gal-scope").onclick = (e) => {
       const b = e.target.closest("[data-scope]");
@@ -3315,10 +3755,205 @@
     }
   }
 
+  const LAYOUT_KEY = "zeroimagestudio.layout";
+  const DEFAULT_LAYOUT = {
+    left: ["model", "refs", "lora", "sampler"],
+    center: ["canvas", "prompt"],
+    right: ["inspector", "layers", "gallery"],
+    collapsed: {},
+  };
+
+  function normalizeLayout(raw) {
+    const def = DEFAULT_LAYOUT;
+    const known = new Set([...def.left, ...def.center, ...def.right]);
+    const used = new Set();
+    const cols = { left: [], center: [], right: [] };
+    const source = raw && typeof raw === "object" ? raw : {};
+    for (const col of ["left", "center", "right"]) {
+      for (const id of source[col] || []) {
+        if (typeof id !== "string" || !known.has(id) || used.has(id)) continue;
+        if (id === "canvas" && col !== "center") continue;
+        used.add(id);
+        cols[col].push(id);
+      }
+    }
+    if (!used.has("canvas")) cols.center.unshift("canvas");
+    used.add("canvas");
+    for (const id of known) {
+      if (used.has(id)) continue;
+      const home = def.left.includes(id) ? "left" : def.right.includes(id) ? "right" : "center";
+      cols[home].push(id);
+    }
+    const at = cols.center.indexOf("canvas");
+    if (at > 0) {
+      cols.center.splice(at, 1);
+      cols.center.unshift("canvas");
+    }
+    const collapsed = {};
+    for (const [id, on] of Object.entries(source.collapsed || {})) {
+      if (known.has(id) && id !== "canvas" && on) collapsed[id] = true;
+    }
+    return { left: cols.left, center: cols.center, right: cols.right, collapsed };
+  }
+
+  function readLayout() {
+    try { return normalizeLayout(JSON.parse(localStorage.getItem(LAYOUT_KEY) || "null")); }
+    catch { return normalizeLayout(null); }
+  }
+
+  function applyLayout(layout) {
+    state.layout = layout;
+    for (const col of ["left", "center", "right"]) {
+      const host = document.querySelector(".cols > ." + col);
+      if (!host) continue;
+      for (const id of layout[col]) {
+        const node = document.querySelector(`[data-panel="${id}"]`);
+        if (node) host.appendChild(node);
+      }
+    }
+    document.querySelectorAll("[data-panel]").forEach((node) => {
+      const id = node.dataset.panel;
+      const on = id !== "canvas" && !!layout.collapsed[id];
+      node.classList.toggle("collapsed", on);
+      const dot = node.querySelector(":scope > .nh .d");
+      if (dot && id !== "canvas") dot.title = on ? "Развернуть" : "Свернуть";
+    });
+  }
+
+  function layoutFromDom() {
+    const read = (sel) => [...document.querySelector(sel).children].filter((n) => n.dataset && n.dataset.panel).map((n) => n.dataset.panel);
+    return normalizeLayout({
+      left: read(".cols > .left"),
+      center: read(".cols > .center"),
+      right: read(".cols > .right"),
+      collapsed: (state.layout && state.layout.collapsed) || {},
+    });
+  }
+
+  function saveLayout() {
+    const layout = state.layout || normalizeLayout(null);
+    state.layout = layout;
+    try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout)); } catch (err) { /* private mode */ }
+    clearTimeout(saveLayout._t);
+    saveLayout._t = setTimeout(() => {
+      api("/zeroimagestudio/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ layout }),
+      }).then((saved) => { if (saved) state.settings = saved; }).catch(() => {});
+    }, 250);
+  }
+
+  function resetLayout() {
+    try { localStorage.removeItem(LAYOUT_KEY); } catch (err) { /* private mode */ }
+    applyLayout(normalizeLayout(null));
+    saveLayout();
+    toast("Раскладка сброшена.");
+  }
+
+  function togglePanel(id) {
+    if (!state.layout || id === "canvas") return;
+    if (state.layout.collapsed[id]) delete state.layout.collapsed[id];
+    else state.layout.collapsed[id] = true;
+    applyLayout(state.layout);
+    saveLayout();
+  }
+
+  function placeDropLine(x, y, node) {
+    const hit = document.elementFromPoint(x, y);
+    const col = hit && hit.closest && hit.closest(".cols > .left, .cols > .center, .cols > .right");
+    if (!col) return;
+    let line = $("drop-line");
+    if (!line) {
+      line = document.createElement("div");
+      line.id = "drop-line";
+      line.className = "drop-line";
+    }
+    const panels = [...col.querySelectorAll(":scope > [data-panel]")].filter((p) => p !== node && p !== line);
+    let before = null;
+    for (const panel of panels) {
+      const rect = panel.getBoundingClientRect();
+      if (y < rect.top + rect.height / 2) { before = panel; break; }
+    }
+    if (before) col.insertBefore(line, before);
+    else col.appendChild(line);
+  }
+
+  function commitDrop(node) {
+    const line = $("drop-line");
+    if (!line || !line.parentElement) return;
+    line.parentElement.insertBefore(node, line);
+    line.remove();
+    applyLayout(layoutFromDom());
+    saveLayout();
+  }
+
+  function bindPanelChrome() {
+    const cols = document.querySelector(".cols");
+    if (!cols || cols.dataset.panels) return;
+    cols.dataset.panels = "1";
+    let drag = null;
+    cols.addEventListener("pointerdown", (e) => {
+      const header = e.target.closest(".nh");
+      if (!header || !cols.contains(header)) return;
+      const node = header.closest("[data-panel]");
+      if (!node || node.dataset.panel === "canvas") return;
+      if (e.target.closest("button, input, select, textarea, a, .d")) return;
+      const startX = e.clientX;
+      const startY = e.clientY;
+      const move = (ev) => {
+        if (!drag && Math.hypot(ev.clientX - startX, ev.clientY - startY) < 4) return;
+        if (!drag) {
+          drag = node;
+          node.classList.add("dragging");
+        }
+        placeDropLine(ev.clientX, ev.clientY, node);
+      };
+      const up = () => {
+        header.removeEventListener("pointermove", move);
+        header.removeEventListener("pointerup", up);
+        header.removeEventListener("pointercancel", up);
+        node.classList.remove("dragging");
+        if (drag) commitDrop(node);
+        const line = $("drop-line");
+        if (line) line.remove();
+        drag = null;
+      };
+      header.addEventListener("pointermove", move);
+      header.addEventListener("pointerup", up);
+      header.addEventListener("pointercancel", up);
+      try { header.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+    });
+    cols.addEventListener("click", (e) => {
+      const dot = e.target.closest(".nh .d");
+      if (!dot || !cols.contains(dot)) return;
+      const node = dot.closest("[data-panel]");
+      if (!node || node.dataset.panel === "canvas") return;
+      e.preventDefault();
+      e.stopPropagation();
+      togglePanel(node.dataset.panel);
+    });
+    cols.addEventListener("dblclick", (e) => {
+      const header = e.target.closest(".nh");
+      if (!header || !cols.contains(header)) return;
+      if (e.target.closest("button, input, select, textarea, a, .d")) return;
+      const node = header.closest("[data-panel]");
+      if (!node || node.dataset.panel === "canvas") return;
+      togglePanel(node.dataset.panel);
+    });
+  }
+
+  function focusGraph() {
+    if (window.parent !== window) window.parent.postMessage({ type: "zeroimagestudio-focus" }, "*");
+    else toast("Команда возвращает к ноде, когда ZeroImageStudio открыт из графа.");
+  }
+
   let booted = false;
   let pendingGraphOpen = null;
 
   async function boot() {
+    applyLayout(readLayout());
+    bindPanelChrome();
     editor = new Editor($("stage"));
     editor.onChange = () => {
       state.dirty = true;
@@ -3345,8 +3980,13 @@
         state.promptPresets = state.promptPresets.map((p, i) => normalizePreset(p, i));
         for (const preset of state.promptPresets) await persistPreset(preset);
       }
+      if (settings && settings.layout) applyLayout(normalizeLayout(settings.layout));
       if (models.krea_import_error) toast("Встроенные ноды Krea 2 Edit не загрузились: " + models.krea_import_error);
       fillLlmPresets();
+      try {
+        const assets = await api("/zeroimagestudio/assets");
+        state.assets = assets.items || [];
+      } catch (err) { state.assets = []; }
     } catch (err) {
       toast("ComfyUI API недоступен: " + err.message);
     }
@@ -3384,9 +4024,12 @@
       const used = total ? (total - free) : 0;
       const name = (dev.name || "CPU").replace("cuda:0 ", "");
       const pending = ((queue.queue_running || []).length + (queue.queue_pending || []).length);
-      $("sys-stats").textContent = total
+      const detail = total
         ? `${name} · VRAM ${used.toFixed(1)}/${total.toFixed(0)} ГБ · очередь ${pending}`
         : `${name} · очередь ${pending}`;
+      const shortName = total ? `${used.toFixed(1)}/${Math.round(total)} ГБ` : (name || "CPU").slice(0, 12);
+      $("sys-stats").textContent = pending ? `${shortName} · ${pending}` : shortName;
+      $("sys-stats").title = detail;
     } catch { /* studio opened outside ComfyUI */ }
     setTimeout(pollStats, 4000);
   }
