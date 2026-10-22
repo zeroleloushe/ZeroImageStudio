@@ -223,9 +223,23 @@ input.range::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; heigh
   display: flex; align-items: center; justify-content: center;
 }
 .modal {
-  width: min(560px, calc(100vw - 32px)); background: #22262e; border: 1px solid #3a404c; border-radius: 10px;
+  width: min(560px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow: auto;
+  background: #22262e; border: 1px solid #3a404c; border-radius: 10px;
   box-shadow: 0 24px 60px rgba(0, 0, 0, .55); padding: 14px; display: flex; flex-direction: column; gap: 8px;
 }
+.dl-models { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--ln); padding-top: 8px; }
+.dl-head { font-size: 13px; font-weight: 700; }
+.dl-group h4 { font-size: 12px; margin: 6px 0 2px; }
+.dl-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; gap: 8px; align-items: center;
+  font-size: 11px; padding: 4px 0; border-top: 1px solid #2a2e36; min-width: 0;
+}
+.dl-row .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 10.5px; }
+.dl-row .dir { color: var(--mu); font-size: 10px; white-space: nowrap; }
+.dl-row .st { font-size: 10.5px; white-space: nowrap; }
+.dl-row .st.ok { color: var(--gr); }
+.dl-row .st.no { color: var(--mu); }
+.dl-row a { color: #ff7a1a; font-weight: 700; text-decoration: underline; text-underline-offset: 2px; white-space: nowrap; }
 .modal h3 { font-size: 14px; }
 .modal textarea, .modal input[type="text"], .modal input[type="password"], .modal input[type="number"] {
   width: 100%; background: #101216; border: 1px solid var(--ln); border-radius: 5px; padding: 6px 8px; color: var(--tx);

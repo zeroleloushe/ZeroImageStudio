@@ -65,20 +65,32 @@
       grounding: 1024,
     },
   };
-  const KNOWN_WEIGHTS = {
-    "krea2_turbo_fp8_scaled.safetensors": {
-      folder: "models/diffusion_models/",
-      url: "https://huggingface.co/Comfy-Org/Krea-2/blob/main/diffusion_models/krea2_turbo_fp8_scaled.safetensors",
+  const MODEL_DOWNLOADS = [
+    {
+      title: "Krea 2",
+      files: [
+        { name: "krea2_turbo_fp8_scaled.safetensors", folder: "models/diffusion_models/", kind: "unets", url: "https://huggingface.co/Comfy-Org/Krea-2/blob/main/diffusion_models/krea2_turbo_fp8_scaled.safetensors" },
+        { name: "qwen3vl_4b_fp8_scaled.safetensors", folder: "models/text_encoders/", kind: "clips", url: "https://huggingface.co/Comfy-Org/Krea-2/blob/main/text_encoders/qwen3vl_4b_fp8_scaled.safetensors" },
+        { name: "qwen_image_vae.safetensors", folder: "models/vae/", kind: "vaes", url: "https://huggingface.co/Comfy-Org/Krea-2/blob/main/vae/qwen_image_vae.safetensors" },
+      ],
     },
-    "qwen3vl_4b_fp8_scaled.safetensors": {
-      folder: "models/text_encoders/",
-      url: "https://huggingface.co/Comfy-Org/Krea-2/blob/main/text_encoders/qwen3vl_4b_fp8_scaled.safetensors",
+    {
+      title: "Krea 2 Edit V2",
+      note: "База — те же UNET, CLIP и VAE, что у Krea 2. Для правки нужна LoRA выбранного режима.",
+      files: [
+        { name: KREA_TASKS.general.file, folder: "models/loras/", kind: "loras", url: KREA_TASKS.general.url },
+        { name: KREA_TASKS.identity.file, folder: "models/loras/", kind: "loras", url: KREA_TASKS.identity.url },
+      ],
     },
-    "qwen_image_vae.safetensors": {
-      folder: "models/vae/",
-      url: "https://huggingface.co/Comfy-Org/Krea-2/blob/main/vae/qwen_image_vae.safetensors",
+    {
+      title: "Qwen Image 2.1",
+      files: [
+        { name: "qwen_image_2.1_bf16.safetensors", folder: "models/diffusion_models/", kind: "unets", url: "https://huggingface.co/Comfy-Org/Qwen-Image-2.1/blob/main/diffusion_models/qwen_image_2.1_bf16.safetensors" },
+        { name: "qwen3vl_8b_bf16.safetensors", folder: "models/text_encoders/", kind: "clips", url: "https://huggingface.co/Comfy-Org/Qwen-Image-2.1/blob/main/text_encoders/qwen3vl_8b_bf16.safetensors" },
+        { name: "qwen_image_2.1_vae_bf16.safetensors", folder: "models/vae/", kind: "vaes", url: "https://huggingface.co/Comfy-Org/Qwen-Image-2.1/blob/main/vae/qwen_image_2.1_vae_bf16.safetensors" },
+      ],
     },
-  };
+  ];
   const RECENT_KEY = "zeroimagestudio.recent";
   const PANEL_LABELS = {
     model: "Модель", refs: "Референсы", lora: "LoRA", sampler: "Генерация",
@@ -892,7 +904,6 @@
   }
 
   function renderAll() {
-    adoptInstalledWeights();
     renderHints();
     renderFiles();
     renderRefs();
@@ -984,7 +995,7 @@
       <label style="${c.loader === "diffusion" ? "" : "display:none"}">Тип CLIP ${sel("clip_type", cat.clip_types, c.clip_type)}</label>
       <label style="${c.loader === "diffusion" ? "" : "display:none"}">VAE ${sel("vae", cat.vaes, c.vae)}</label>
       <label>dtype ${sel("weight_dtype", cat.weight_dtypes, c.weight_dtype)}</label>
-      ${sug.unet ? `<div class="mu">Подсказка: ${escapeHtml(sug.unet)} · ${escapeHtml(sug.clip || "")} · ${escapeHtml(sug.vae || "")}</div>` : ""}
+      ${sug.unet ? `<div class="mu">Можно любой совместимый файл. Часто ставят ${escapeHtml([sug.unet, sug.clip, sug.vae].filter(Boolean).join(" · "))}.</div>` : ""}
     `;
     const methodRow = state.pipeline === "edit"
       ? `<label>Способ <select class="dd" data-file="method" style="width:100%">${["inpaint", "krea2_edit", "qwen_image_21", "qwen_image"].map((m) => `<option ${c.method === m ? "selected" : ""} value="${m}">${methodLabel(m)}</option>`).join("")}</select></label>`
@@ -1713,137 +1724,59 @@
     renderModelWarn();
   }
 
-  function slotList(key) {
-    const cat = state.catalog || {};
-    return { unet: cat.unets, clip: cat.clips, vae: cat.vaes, checkpoint: cat.checkpoints }[key] || null;
+  function missingKreaLora() {
+    if (!isKreaEdit()) return null;
+    const spec = KREA_TASKS[kreaTaskId()];
+    if (findInstalledLora(spec.file)) return null;
+    return spec;
   }
 
-  function installedPath(list, name) {
-    if (!name || !list) return "";
-    const want = basenameOf(name);
-    return list.find((n) => basenameOf(n) === want) || "";
-  }
-
-  function shortFolder(folder) {
-    return String(folder || "models/").replace(/^models\//, "");
-  }
-
-  function adoptInstalledWeights() {
-    const c = cfg();
-    const hint = state.hints.find((h) => h.id === state.hintId);
-    const sug = (hint && hint.defaults) || {};
-    const slots = (c.loader || "diffusion") === "checkpoint"
-      ? [["checkpoint", "checkpoints"]]
-      : [["unet", "unets"], ["clip", "clips"], ["vae", "vaes"]];
-    const cat = state.catalog || {};
-    for (const [key, listName] of slots) {
-      const list = cat[listName];
-      if (!list || !list.length) continue;
-      const current = (c[key] || "").trim();
-      if (current && installedPath(list, current)) {
-        c[key] = installedPath(list, current);
-        continue;
-      }
-      if (!current) {
-        const hit = installedPath(list, sug[key]);
-        if (hit) c[key] = hit;
-      }
-    }
-  }
-
-  function weightIssue(key, label, folder) {
-    const c = cfg();
-    const hint = state.hints.find((h) => h.id === state.hintId);
-    const sug = (hint && hint.defaults) || {};
-    const list = slotList(key);
-    const name = (c[key] || "").trim();
-    const expected = (name || sug[key] || "").split("/").pop();
-    if (!expected && !name) {
-      return { file: "", folder, detail: `Не выбран ${label}.`, pick: "" };
-    }
-    if (name && (!list || installedPath(list, name))) return null;
-    const known = KNOWN_WEIGHTS[basenameOf(expected)] || null;
-    const onDisk = !!(list && installedPath(list, expected));
-    if (!name && onDisk) {
-      return {
-        file: expected,
-        folder: (known && known.folder) || folder,
-        detail: `${label} есть в каталоге, но не выбран.`,
-        pick: key,
-      };
-    }
-    if (onDisk && name && !installedPath(list, name)) {
-      return {
-        file: name.split("/").pop(),
-        folder: (known && known.folder) || folder,
-        detail: `Не найден файл ${name.split("/").pop()}.`,
-        url: known && known.url,
-      };
-    }
-    return {
-      file: expected,
-      folder: (known && known.folder) || folder,
-      detail: name
-        ? `Не найден файл ${name.split("/").pop()}.`
-        : `Нет файла ${expected}.`,
-      url: known && known.url,
-    };
-  }
-
-  function fileIssues() {
-    const issues = [];
+  function emptyWeightReasons() {
     const c = cfg();
     if ((c.loader || "diffusion") === "checkpoint") {
-      const issue = weightIssue("checkpoint", "checkpoint", "models/checkpoints/");
-      if (issue) issues.push(issue);
-    } else {
-      const slots = [
-        ["unet", "UNET", "models/diffusion_models/"],
-        ["clip", "CLIP", "models/text_encoders/"],
-        ["vae", "VAE", "models/vae/"],
-      ];
-      for (const slot of slots) {
-        const issue = weightIssue(...slot);
-        if (issue) issues.push(issue);
-      }
+      return (c.checkpoint || "").trim() ? [] : ["Выберите чекпоинт"];
     }
-    if (isKreaEdit()) {
-      const spec = KREA_TASKS[kreaTaskId()];
-      if (!findInstalledLora(spec.file)) {
-        issues.unshift({
-          file: spec.file,
-          folder: "models/loras/",
-          lora: true,
-          detail: `Не найдена LoRA ${spec.file} — без неё редактирование не работает.`,
-          url: spec.url,
-        });
-      }
-    }
-    return issues.filter((issue) => issue.file || issue.detail);
+    const out = [];
+    if (!(c.unet || "").trim()) out.push("Выберите UNET");
+    if (!(c.clip || "").trim()) out.push("Выберите CLIP");
+    if (!(c.vae || "").trim()) out.push("Выберите VAE");
+    return out;
   }
 
   function renderModelWarn() {
     const host = $("model-warn");
     if (!host) return;
-    const issues = fileIssues();
-    if (!issues.length) { host.innerHTML = ""; return; }
-    const lines = issues.map((issue) => {
-      const action = issue.pick
-        ? `<button type="button" class="dl" data-pick-file="${escapeHtml(issue.pick)}">Выбрать</button>`
-        : (issue.url ? `<a class="dl" href="${escapeHtml(issue.url)}" target="_blank" rel="noopener">Скачать</a>` : "");
-      return `<div class="miss-line${issue.lora ? " lora" : ""}">
-        <span class="nm" title="${escapeHtml(issue.file)}">${escapeHtml(issue.file || "файл")}</span>
-        <span class="dir">${escapeHtml(shortFolder(issue.folder))}</span>
-        ${action}
-      </div>`;
-    }).join("");
-    const details = issues.map((issue) => `<div>${escapeHtml(issue.detail)} Папка ComfyUI/${escapeHtml(issue.folder || "models/")}.</div>`).join("");
+    const spec = missingKreaLora();
+    if (!spec) { host.innerHTML = ""; return; }
     host.innerHTML = `<div class="miss-card">
-      <div class="miss-head">Не хватает файлов: ${issues.length}</div>
-      ${lines}
-      <details class="miss-more"><summary>Подробнее</summary>${details}</details>
+      <div class="miss-line lora">
+        <span class="nm" title="${escapeHtml(spec.file)}">${escapeHtml(spec.file)}</span>
+        <span class="dir">models/loras/</span>
+        <a class="dl" href="${escapeHtml(spec.url)}" target="_blank" rel="noopener">Скачать</a>
+      </div>
       <button type="button" class="b s" data-rescan="1">Проверить снова</button>
     </div>`;
+  }
+
+  function weightInstalled(kind, name) {
+    if (kind === "loras") return !!findInstalledLora(name);
+    return catalogHas((state.catalog || {})[kind], name);
+  }
+
+  function modelDownloadsHtml() {
+    return MODEL_DOWNLOADS.map((group) => {
+      const rows = group.files.map((file) => {
+        const on = weightInstalled(file.kind, file.name);
+        return `<div class="dl-row">
+          <span class="nm" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</span>
+          <span class="dir">${escapeHtml(file.folder)}</span>
+          <span class="st ${on ? "ok" : "no"}">${on ? "установлен" : "не установлен"}</span>
+          <a href="${escapeHtml(file.url)}" target="_blank" rel="noopener">Скачать</a>
+        </div>`;
+      }).join("");
+      const note = group.note ? `<div class="mu">${escapeHtml(group.note)}</div>` : "";
+      return `<section class="dl-group"><h4>${escapeHtml(group.title)}</h4>${note}${rows}</section>`;
+    }).join("");
   }
 
   async function rescanModels() {
@@ -1854,7 +1787,6 @@
       ]);
       state.catalog = models;
       state.loras = loras.files || [];
-      adoptInstalledWeights();
       syncKreaStack();
       renderFiles();
       renderKreaChrome();
@@ -1877,7 +1809,9 @@
         else if (scene && !state.references.length) reasons.push("Для «Персонаж по референсу» добавьте фото человека в Референсы.");
       } else if (!scene) reasons.push("В правке нет изображения. Откройте фото.");
     }
-    reasons.push(...fileIssues().map((issue) => issue.detail || issue.file));
+    reasons.push(...emptyWeightReasons());
+    const lora = missingKreaLora();
+    if (lora) reasons.push("Нет LoRA режима: " + lora.file);
     return reasons.join(" ");
   }
 
@@ -2593,7 +2527,12 @@
   async function generate() {
     if (state.running) { await fetch("/interrupt", { method: "POST" }); return; }
     const blocked = generateBlockReason();
-    if (blocked) { toast(blocked, { openModels: fileIssues().length > 0 }); if (fileIssues().length) openModelDrawer(); return; }
+    if (blocked) {
+      const needsModel = emptyWeightReasons().length || missingKreaLora();
+      toast(blocked, { openModels: !!needsModel });
+      if (needsModel) openModelDrawer();
+      return;
+    }
     state.running = true;
     $("btn-gen").classList.add("stop");
     $("gen-label").textContent = "Отмена";
@@ -3409,8 +3348,12 @@
     state.hintByMode[state.pipeline] = state.hintId;
     const target = cfg();
     const d = h.defaults || {};
-    ["loader", "clip_type", "weight_dtype", "latent_mode", "encoder", "unet", "clip", "vae", "checkpoint"].forEach((k) => {
+    ["loader", "clip_type", "weight_dtype", "latent_mode", "encoder"].forEach((k) => {
       if (d[k] != null) target[k] = d[k];
+    });
+    ["unet", "clip", "vae", "checkpoint"].forEach((k) => {
+      if (d[k] == null || (target[k] || "").trim()) return;
+      target[k] = d[k];
     });
     if (state.pipeline === "edit" && h.edit_method) target.method = h.edit_method;
     if (h.qwen_resolution) target.qwen_resolution = h.qwen_resolution;
@@ -3428,20 +3371,21 @@
       if (!keepTask) applyKreaTaskDefaults(target.krea.task);
       else applyKreaPlacement(target.krea.task);
     }
-    // keep suggested filenames only if installed; otherwise clear so the user sees the empty select
+    // A suggested name that is not on disk stays empty. A file the user already chose stays.
     const cat = state.catalog || {};
-    const resolveInstalled = (list, name) => {
+    const resolveInstalled = (list, name, suggested) => {
       if (!name) return "";
       if (!list) return name;
       if (list.includes(name)) return name;
       const hit = list.find((n) => basenameOf(n) === basenameOf(name));
-      return hit || "";
+      if (hit) return hit;
+      if (suggested && basenameOf(name) === basenameOf(suggested)) return "";
+      return name;
     };
-    if (cat.unets) target.unet = resolveInstalled(cat.unets, target.unet);
-    if (cat.clips) target.clip = resolveInstalled(cat.clips, target.clip);
-    if (cat.vaes) target.vae = resolveInstalled(cat.vaes, target.vae);
-    if (cat.checkpoints) target.checkpoint = resolveInstalled(cat.checkpoints, target.checkpoint);
-    adoptInstalledWeights();
+    if (cat.unets) target.unet = resolveInstalled(cat.unets, target.unet, d.unet);
+    if (cat.clips) target.clip = resolveInstalled(cat.clips, target.clip, d.clip);
+    if (cat.vaes) target.vae = resolveInstalled(cat.vaes, target.vae, d.vae);
+    if (cat.checkpoints) target.checkpoint = resolveInstalled(cat.checkpoints, target.checkpoint, d.checkpoint);
     renderAll();
   }
 
@@ -3584,9 +3528,20 @@
       <div class="row" style="flex-wrap:wrap">
         <button type="button" class="b" id="set-focus">Открыть в графе ComfyUI</button>
         <button type="button" class="b" id="set-layout">Сбросить раскладку</button>
+      </div>
+      <div class="dl-models">
+        <div class="dl-head">Модели и загрузки</div>
+        <div class="mu">Рекомендуемые файлы. Это справка, не проверка: подойдут другие версии, файнтюны и свои модели. «Установлен» значит, что это имя уже есть в каталоге.</div>
+        <div id="dl-models-list">${modelDownloadsHtml()}</div>
+        <button type="button" class="b s" id="set-rescan">Проверить снова</button>
       </div>`, async (box, close) => {
+      box.classList.add("wide");
       box.querySelector("#set-focus").onclick = () => focusGraph();
       box.querySelector("#set-layout").onclick = () => { resetLayout(); close(); };
+      box.querySelector("#set-rescan").onclick = () => rescanModels().then(() => {
+        const list = box.querySelector("#dl-models-list");
+        if (list) list.innerHTML = modelDownloadsHtml();
+      });
       box.querySelector("[data-ok]").onclick = async () => {
         state.settings = await api("/zeroimagestudio/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
           civitai_token: $("set-civ").value, llm_base: $("set-base").value, llm_model: $("set-model").value, llm_key: $("set-key").value,
@@ -3942,18 +3897,6 @@
     model.addEventListener("click", (e) => {
       const task = e.target.closest("[data-krea-task]");
       if (task) { setKreaTask(task.dataset.kreaTask); return; }
-      const pick = e.target.closest("[data-pick-file]");
-      if (pick) {
-        const key = pick.dataset.pickFile;
-        const hint = state.hints.find((h) => h.id === state.hintId);
-        const expected = hint && hint.defaults ? hint.defaults[key] : "";
-        const hit = installedPath(slotList(key), expected);
-        if (hit) cfg()[key] = hit;
-        renderFiles();
-        renderModelWarn();
-        updateGenerateButton();
-        return;
-      }
       if (e.target.closest("[data-rescan]")) rescanModels();
     });
   }
