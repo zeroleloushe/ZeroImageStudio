@@ -114,7 +114,17 @@ function onMessage(ev, frame) {
       if (img && msg.preview) img.src = msg.preview;
       const meta = node._zisMeta;
       if (meta && msg.info) {
-        meta.innerHTML = `<b>${msg.name || "ZeroImageStudio"}</b><span>Слои: ${msg.info.layers}</span><span>Холст ${msg.info.doc.w} × ${msg.info.doc.h}</span><span>${msg.info.preset || ""}</span>`;
+        const doc = msg.info.doc || {};
+        meta.replaceChildren();
+        const title = document.createElement("b");
+        title.textContent = msg.name || "ZeroImageStudio";
+        const layers = document.createElement("span");
+        layers.textContent = "Слои: " + (Number(msg.info.layers) || 0);
+        const size = document.createElement("span");
+        size.textContent = "Холст " + (Number(doc.w) || 0) + " × " + (Number(doc.h) || 0);
+        const preset = document.createElement("span");
+        preset.textContent = msg.info.preset || "";
+        meta.append(title, layers, size, preset);
       }
     }
     if (overlay) overlay.style.display = "none";

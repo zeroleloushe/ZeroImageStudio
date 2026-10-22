@@ -98,10 +98,6 @@ select.dd { appearance: none; min-width: 0; max-width: 100%; }
 .nh .r { margin-left: auto; display: flex; gap: 8px; align-items: center; color: var(--mu); font-weight: 500; font-size: 11px; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .nh .ht { flex: none; }
 .nh button, .nh input, .nh select, .nh a { cursor: pointer; }
-.sock { position: absolute; width: 11px; height: 11px; border-radius: 50%; background: var(--c); border: 2px solid var(--bg); top: 9px; z-index: 2; pointer-events: none; }
-.sock.l { left: 5px; } .sock.r { right: 5px; }
-.node:has(> .sock.l) > .nh { padding-left: 22px; }
-.node:has(> .sock.r) > .nh { padding-right: 22px; }
 .node.collapsed {
   display: block !important;
   flex: 0 0 auto !important;
@@ -114,8 +110,8 @@ select.dd { appearance: none; min-width: 0; max-width: 100%; }
   box-shadow: none !important;
   overflow: hidden !important;
 }
-.node.collapsed > :not(.nh):not(.sock),
-.node.collapsed > :not(.nh):not(.sock) * {
+.node.collapsed > :not(.nh),
+.node.collapsed > :not(.nh) * {
   display: none !important;
   height: 0 !important;
   min-height: 0 !important;

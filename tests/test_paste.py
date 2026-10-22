@@ -63,6 +63,26 @@ class PasteTests(unittest.TestCase):
         self.assertEqual(int(out[3, 3, 3]), 255)
         self.assertEqual(int(out[0, 0, 3]), 0)
 
+    def test_color_match_clamps_std_ratio(self):
+        src = np.full((8, 8, 3), 0.5, dtype=np.float32)
+        src[0, 0, 0] = 0.51
+        dst = np.full((8, 8, 3), 0.1, dtype=np.float32)
+        dst[0, 0, 0] = 1.0
+        mask = np.ones((8, 8), dtype=np.float32)
+        raw = float(src[..., 0].max() - src[..., 0].min())
+        out = color_match(src.copy(), dst, mask)
+        spread = float(out[..., 0].max() - out[..., 0].min())
+        self.assertLessEqual(spread, raw * 2.0 + 1e-4)
+
+    def test_poisson_skips_color_match(self):
+        result = Image.new("RGB", (24, 24), (255, 0, 0))
+        original = Image.new("RGB", (24, 24), (0, 0, 255))
+        mask = Image.new("L", (24, 24), 0)
+        mask.paste(255, (6, 6, 18, 18))
+        colored = paste(result, original, mask, mode="poisson", feather=1, color=True)
+        plain = paste(result, original, mask, mode="poisson", feather=1, color=False)
+        self.assertTrue(np.array_equal(np.asarray(colored), np.asarray(plain)))
+
 
 if __name__ == "__main__":
     unittest.main()

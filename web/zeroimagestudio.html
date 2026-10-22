@@ -111,8 +111,7 @@
 
   <div class="left">
     <div class="node" id="model-node" data-panel="model" style="--c:#ff7a1a">
-      <div class="sock r"></div>
-      <div class="nh"><span class="d"></span>Модель<span class="r" id="model-sockets">MODEL · CLIP · VAE</span></div>
+      <div class="nh"><span class="d"></span>Модель</div>
       <div class="nb" style="gap:5px">
         <div class="mode" id="mode">
           <button type="button" data-pipe="create">Создание</button>
@@ -149,7 +148,6 @@
       } catch (e) {}
     </script>
     <div class="node" id="refs-node" data-panel="refs" style="--c:#4aa8ff">
-      <div class="sock r"></div>
       <div class="nh"><span class="d"></span>Референсы<span class="r" id="ref-cap">для Edit-моделей · 0</span></div>
       <div class="nb">
         <div class="refs" id="ref-list"></div>
@@ -157,12 +155,10 @@
       </div>
     </div>
     <div class="node lora-node" id="lora-node" data-panel="lora" style="--c:#b18cff">
-      <div class="sock r"></div>
       <div class="nh"><span class="d"></span>LoRA-менеджер<span class="r" id="lora-sum">0 активны</span></div>
       <div class="nb" id="lora-panel"></div>
     </div>
     <div class="node" id="sampler-node" data-panel="sampler" style="--c:#e7c27a">
-      <div class="sock r"></div>
       <div class="nh"><span class="d"></span>Настройки генерации</div>
       <div class="nb">
         <div class="kv" id="sampler-box"></div>
@@ -190,7 +186,7 @@
       <div class="stage" id="stage"></div>
     </div>
     <div class="node" id="prompt-node" data-panel="prompt" data-prompt="compact" style="--c:#e7c27a">
-      <div class="nh"><span class="d"></span><span class="ht">Промт</span><span class="r"><span id="token-est">CONDITIONING</span><span id="prompt-fold-slot"></span></span></div>
+      <div class="nh"><span class="d"></span><span class="ht">Промт</span><span class="r"><span id="token-est">0 симв.</span><span id="prompt-fold-slot"></span></span></div>
       <div class="nb">
         <textarea id="prompt" class="prompt" rows="2"></textarea>
         <button type="button" class="prompt-fold" id="prompt-fold" data-i="chev" data-s="16" title="Развернуть: негатив, стили, LLM" aria-expanded="false" aria-controls="prompt-extra"></button>
@@ -290,6 +286,7 @@
           </select>
         </div>
         <div class="gal" id="gal"></div>
+        <button type="button" class="b s" id="gal-more" hidden>Ещё</button>
         <div id="gal-legend" style="display:flex;gap:10px;font-size:10.5px;color:#7d8594;margin-top:2px;flex-wrap:wrap"></div>
       </div>
     </div>
@@ -318,6 +315,7 @@ try {
 } catch (e) {}
 </script>
 <script src="zeroimagestudio_size.js"></script>
+<script src="zeroimagestudio_util.js"></script>
 <script src="zeroimagestudio_app.js"></script>
 </body>
 </html>

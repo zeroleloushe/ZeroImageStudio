@@ -70,7 +70,12 @@ def color_match(src: np.ndarray, dst: np.ndarray, mask: np.ndarray) -> np.ndarra
         d = dst[..., c][border]
         ss = float(s.std())
         sd = float(d.std())
-        src[..., c] = (src[..., c] - float(s.mean())) * (sd / (ss + 1e-5)) + float(d.mean())
+        ratio = sd / (ss + 1e-5)
+        if ratio < 0.5:
+            ratio = 0.5
+        elif ratio > 2.0:
+            ratio = 2.0
+        src[..., c] = (src[..., c] - float(s.mean())) * ratio + float(d.mean())
     return np.clip(src, 0.0, 1.0)
 
 
@@ -166,9 +171,10 @@ def paste(
     src = _resize_rgb(result, size)
     dst = _resize_rgb(original, size)
     m = _mask_float(mask, size)
-    if color:
-        src = color_match(src, dst, m)
     mode = (mode or "feather").lower()
+    # Poisson already carries the destination colour. A second transfer blows out the ratio.
+    if color and mode != "poisson":
+        src = color_match(src, dst, m)
     if mode == "poisson":
         solved = poisson_blend(src, dst, m)
         # Keep a one-pixel feather at the crop border so a partial crop doesn't ring.

@@ -8,12 +8,18 @@ import json
 import os
 import urllib.error
 import urllib.request
+from urllib.parse import urlparse
 
 from aiohttp import web
 
-import zeroimagestudio_paste
-import zeroimagestudio_storage as store
-import zeroimagestudio_workflows as wf
+try:
+    from . import zeroimagestudio_paste
+    from . import zeroimagestudio_storage as store
+    from . import zeroimagestudio_workflows as wf
+except ImportError:
+    import zeroimagestudio_paste
+    import zeroimagestudio_storage as store
+    import zeroimagestudio_workflows as wf
 
 KREA_IMPORT_ERROR = None
 HINTS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hints", "models.json")
@@ -82,19 +88,24 @@ def _model_lists() -> dict:
 
 
 def _lora_tree(names: list[str]) -> dict:
+    """Group on forward slashes. The file entry stays the name ComfyUI returned."""
     root: dict = {"name": "", "path": "", "children": {}, "files": []}
     for name in names:
-        parts = name.split("/")
+        normalized = str(name).replace("\\", "/")
+        parts = [part for part in normalized.split("/") if part]
+        if not parts:
+            continue
         node = root
         for folder in parts[:-1]:
             node = node["children"].setdefault(folder, {"name": folder, "path": "", "children": {}, "files": []})
-        node["files"].append(parts[-1])
-    # fill paths
+        node["files"].append(name)
+
     def walk(node, prefix):
         node["path"] = prefix
         for child_name, child in node["children"].items():
             child_prefix = f"{prefix}/{child_name}" if prefix else child_name
             walk(child, child_prefix)
+
     walk(root, "")
     return root
 
@@ -224,8 +235,7 @@ async def lora_civitai(request):
 
 
 async def get_settings(_request):
-    data = store.load_settings()
-    return _json(data)
+    return _json(store.public_settings())
 
 
 async def post_settings(request):
@@ -297,14 +307,16 @@ async def paste(request):
     except Exception as exc:
         return _json({"error": str(exc)}, 400)
     mode = str(data.get("mode") or "feather")
+    raw_feather = data.get("feather")
     try:
-        feather = int(data.get("feather") or 48)
+        feather = 48 if raw_feather is None or raw_feather == "" else int(raw_feather)
     except Exception:
         feather = 48
-    color = str(data.get("color_match") or "1") not in ("0", "false", "False")
-    from PIL import Image
+    color = str(data.get("color_match") if data.get("color_match") not in (None, "") else "1") not in ("0", "false", "False")
 
-    try:
+    def _paste_job():
+        from PIL import Image
+
         out = zeroimagestudio_paste.paste(
             Image.open(io.BytesIO(result)),
             Image.open(io.BytesIO(original)),
@@ -313,11 +325,16 @@ async def paste(request):
             feather=feather,
             color=color,
         )
+        buf = io.BytesIO()
+        out.save(buf, format="PNG")
+        return buf.getvalue()
+
+    try:
+        loop = asyncio.get_running_loop()
+        body = await loop.run_in_executor(None, _paste_job)
     except Exception as exc:
         return _json({"error": f"Вклейка не удалась: {exc}"}, 500)
-    buf = io.BytesIO()
-    out.save(buf, format="PNG")
-    return web.Response(body=buf.getvalue(), content_type="image/png")
+    return web.Response(body=body, content_type="image/png")
 
 
 def _file_bytes(data, key: str) -> bytes:
@@ -348,12 +365,26 @@ async def commit(request):
             meta = json.loads(raw)
         except Exception:
             meta = {"raw": raw[:500]}
-    saved = store.commit_image(image, mask, meta if isinstance(meta, dict) else {})
+    payload = meta if isinstance(meta, dict) else {}
+    loop = asyncio.get_running_loop()
+    saved = await loop.run_in_executor(None, store.commit_image, image, mask, payload)
     return _json(saved)
 
 
-async def gallery_list(_request):
-    return _json({"items": store.list_gallery()})
+async def gallery_list(request):
+    raw_offset = request.query.get("offset")
+    raw_limit = request.query.get("limit")
+    try:
+        offset = 0 if raw_offset in (None, "") else int(raw_offset)
+    except (TypeError, ValueError):
+        offset = 0
+    try:
+        limit = store.GALLERY_PAGE if raw_limit in (None, "") else int(raw_limit)
+    except (TypeError, ValueError):
+        limit = store.GALLERY_PAGE
+    loop = asyncio.get_running_loop()
+    page = await loop.run_in_executor(None, lambda: store.list_gallery(offset, limit))
+    return _json(page)
 
 
 async def asset_list(_request):
@@ -378,7 +409,11 @@ async def asset_save(request):
             imported = parsed if isinstance(parsed, dict) else None
         except Exception:
             imported = None
-    return _json(store.save_asset(blob, name, mime, role, project_id or None, imported))
+    loop = asyncio.get_running_loop()
+    saved = await loop.run_in_executor(
+        None, lambda: store.save_asset(blob, name, mime, role, project_id or None, imported)
+    )
+    return _json(saved)
 
 
 async def asset_file(request):
@@ -409,11 +444,15 @@ async def gallery_save(request):
         meta = json.loads(raw)
     if not isinstance(meta, dict):
         meta = {}
-    return _json(store.save_gallery_image(image, meta))
+    loop = asyncio.get_running_loop()
+    saved = await loop.run_in_executor(None, store.save_gallery_image, image, meta)
+    return _json(saved)
 
 
 async def project_put(request):
     project_id = request.match_info.get("project_id") or store.new_id()
+    if not store.valid_project_id(project_id):
+        return _json({"error": "Некорректный идентификатор проекта."}, 400)
     data = await request.post()
     raw = data.get("meta")
     if not isinstance(raw, str):
@@ -427,12 +466,15 @@ async def project_put(request):
             name = key.replace("\\", "/")
             item.file.seek(0)
             files[name] = item.file.read()
-    store.save_project_files(project_id, meta, files)
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, lambda: store.save_project_files(project_id, meta, files))
     return _json({"id": project_id})
 
 
 async def project_get(request):
     project_id = request.match_info["project_id"]
+    if not store.valid_project_id(project_id):
+        return _json({"error": "Некорректный идентификатор проекта."}, 400)
     try:
         meta = store.load_project_meta(project_id)
     except Exception as exc:
@@ -444,6 +486,8 @@ async def project_get(request):
 
 async def project_file(request):
     project_id = request.match_info["project_id"]
+    if not store.valid_project_id(project_id):
+        return _json({"error": "Некорректный идентификатор проекта."}, 400)
     name = request.match_info["name"]
     # name may contain slashes encoded; aiohttp {name:.*}
     try:
@@ -457,8 +501,11 @@ async def project_file(request):
 
 async def project_export(request):
     project_id = request.match_info["project_id"]
+    if not store.valid_project_id(project_id):
+        return _json({"error": "Некорректный идентификатор проекта."}, 400)
     try:
-        blob = store.export_project_zip(project_id)
+        loop = asyncio.get_running_loop()
+        blob = await loop.run_in_executor(None, store.export_project_zip, project_id)
     except Exception as exc:
         return _json({"error": str(exc)}, 400)
     return web.Response(
@@ -472,19 +519,29 @@ async def project_import(request):
     data = await request.post()
     blob = _file_bytes(data, "file")
     try:
-        project_id = store.import_project_zip(blob)
+        loop = asyncio.get_running_loop()
+        project_id = await loop.run_in_executor(None, store.import_project_zip, blob)
     except Exception as exc:
         return _json({"error": str(exc)}, 400)
     return _json({"id": project_id, "meta": store.load_project_meta(project_id)})
+
+
+def llm_base_url(value) -> str:
+    """Settings only. http and https, never a scheme from the request body."""
+    base = str(value or "").strip().rstrip("/")
+    parsed = urlparse(base)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        return ""
+    return base
 
 
 async def llm(request):
     body = await _body(request)
     mode = body.get("mode") or "improve"
     settings = store.load_settings()
-    base = (body.get("base") or settings.get("llm_base") or "").rstrip("/")
+    base = llm_base_url(settings.get("llm_base"))
     model = (body.get("model") or settings.get("llm_model") or "").strip()
-    key = body.get("api_key") if body.get("api_key") not in (None, "") else settings.get("llm_key") or ""
+    key = body.get("api_key") if body.get("api_key") not in (None, "") else (settings.get("llm_key") or "")
     system = body.get("system")
     if not system:
         system = (settings.get("llm_systems") or {}).get(mode) or ""
@@ -519,7 +576,7 @@ async def llm(request):
             {"role": "system", "content": system},
             {"role": "user", "content": content},
         ],
-        "temperature": float(body.get("temperature") or 0.7),
+        "temperature": 0.7 if body.get("temperature") is None or body.get("temperature") == "" else float(body.get("temperature")),
     }
     url = base + "/chat/completions"
     raw = json.dumps(payload).encode("utf-8")

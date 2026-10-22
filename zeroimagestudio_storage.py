@@ -10,10 +10,22 @@ import hashlib
 import io
 import json
 import os
+import re
+import shutil
+import tempfile
+import threading
 import time
 import uuid
 import zipfile
 from typing import Any
+
+_JSON_LOCK = threading.RLock()
+_PROJECT_ID_RE = re.compile(r"^[0-9a-fA-F]{8,64}$")
+ZIP_MAX_FILES = 200
+ZIP_MAX_FILE = 64 * 1024 * 1024
+ZIP_MAX_TOTAL = 256 * 1024 * 1024
+GALLERY_PAGE = 60
+COMMIT_KEEP = 8
 
 from PIL import Image, PngImagePlugin
 
@@ -41,16 +53,40 @@ def output_root() -> str:
 def _read_json(path: str, default: Any) -> Any:
     if not os.path.isfile(path):
         return default
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        stamp = int(time.time() * 1000)
+        dest = f"{path}.broken-{stamp}"
+        n = 0
+        while os.path.exists(dest):
+            n += 1
+            dest = f"{path}.broken-{stamp}-{n}"
+        try:
+            os.replace(path, dest)
+        except OSError:
+            pass
+        return default
 
 
 def _write_json(path: str, data: Any) -> None:
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, path)
+    folder = os.path.dirname(path) or "."
+    os.makedirs(folder, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=".tmp-", suffix=".json", dir=folder)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        with _JSON_LOCK:
+            os.replace(tmp, path)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def settings_path() -> str:
@@ -92,21 +128,60 @@ def load_settings() -> dict:
     return merged
 
 
+def mask_secret(value: str) -> str:
+    text = str(value or "")
+    if not text:
+        return ""
+    if len(text) <= 4:
+        return "•" * len(text)
+    return ("•" * (len(text) - 4)) + text[-4:]
+
+
+def _secret_unchanged(incoming, current: str) -> bool:
+    if incoming is None:
+        return True
+    text = str(incoming)
+    if text.strip() == "":
+        return True
+    if text == mask_secret(current or ""):
+        return True
+    if text and set(text) <= {"•", "*"}:
+        return True
+    return False
+
+
+def public_settings(data: dict | None = None) -> dict:
+    current = data if isinstance(data, dict) else load_settings()
+    out = json.loads(json.dumps(current))
+    token = str(out.get("civitai_token") or "")
+    key = str(out.get("llm_key") or "")
+    out["has_civitai_token"] = bool(token)
+    out["has_llm_key"] = bool(key)
+    out["civitai_token"] = mask_secret(token)
+    out["llm_key"] = mask_secret(key)
+    return out
+
+
 def save_settings(data: dict) -> dict:
-    current = load_settings()
-    for key in ("civitai_token", "llm_base", "llm_key", "llm_model"):
-        if key in data and data[key] is not None:
-            current[key] = str(data[key])
-    if isinstance(data.get("llm_systems"), dict):
-        for mode, text in data["llm_systems"].items():
-            if mode in current["llm_systems"] and isinstance(text, str):
-                current["llm_systems"][mode] = text
-    if isinstance(data.get("llm_presets"), list):
-        current["llm_presets"] = data["llm_presets"][:40]
-    if isinstance(data.get("layout"), dict):
-        current["layout"] = _clean_layout(data["layout"])
-    _write_json(settings_path(), current)
-    return current
+    with _JSON_LOCK:
+        current = load_settings()
+        for key in ("llm_base", "llm_model"):
+            if key in data and data[key] is not None:
+                current[key] = str(data[key])
+        if "civitai_token" in data and not _secret_unchanged(data.get("civitai_token"), current.get("civitai_token") or ""):
+            current["civitai_token"] = str(data["civitai_token"])
+        if "llm_key" in data and not _secret_unchanged(data.get("llm_key"), current.get("llm_key") or ""):
+            current["llm_key"] = str(data["llm_key"])
+        if isinstance(data.get("llm_systems"), dict):
+            for mode, text in data["llm_systems"].items():
+                if mode in current["llm_systems"] and isinstance(text, str):
+                    current["llm_systems"][mode] = text
+        if isinstance(data.get("llm_presets"), list):
+            current["llm_presets"] = data["llm_presets"][:40]
+        if isinstance(data.get("layout"), dict):
+            current["layout"] = _clean_layout(data["layout"])
+        _write_json(settings_path(), current)
+        return public_settings(current)
 
 
 def _clean_layout(raw: dict) -> dict:
@@ -178,25 +253,26 @@ def safe_join(root: str, rel: str) -> str:
 
 def write_png(path: str, data: bytes, meta: dict | None = None) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    image = Image.open(io.BytesIO(data))
-    info = PngImagePlugin.PngInfo()
-    if meta is not None:
-        payload = json.dumps(meta, ensure_ascii=False)
-        info.add_text("zeroimagestudio", payload)
-        prompt = meta.get("prompt") or ""
-        if prompt:
-            info.add_text("parameters", prompt)
-    image.save(path, format="PNG", pnginfo=info)
+    with Image.open(io.BytesIO(data)) as image:
+        image.load()
+        info = PngImagePlugin.PngInfo()
+        if meta is not None:
+            payload = json.dumps(meta, ensure_ascii=False)
+            info.add_text("zeroimagestudio", payload)
+            prompt = meta.get("prompt") or ""
+            if prompt:
+                info.add_text("parameters", prompt)
+        image.save(path, format="PNG", pnginfo=info)
 
 
 def read_png_meta(path: str) -> dict:
     try:
-        image = Image.open(path)
-        raw = (image.info or {}).get("zeroimagestudio")
-        if not raw:
-            return {}
-        data = json.loads(raw)
-        return data if isinstance(data, dict) else {}
+        with Image.open(path) as image:
+            raw = (image.info or {}).get("zeroimagestudio")
+            if not raw:
+                return {}
+            data = json.loads(raw)
+            return data if isinstance(data, dict) else {}
     except Exception:
         return {}
 
@@ -205,14 +281,21 @@ def new_id() -> str:
     return uuid.uuid4().hex[:16]
 
 
-def project_dir(project_id: str) -> str:
+def valid_project_id(project_id: str) -> bool:
+    return _PROJECT_ID_RE.fullmatch(str(project_id or "")) is not None
+
+
+def project_dir(project_id: str, create: bool = False) -> str:
+    if not valid_project_id(project_id):
+        raise ValueError("Некорректный идентификатор проекта.")
     path = safe_join(os.path.join(user_root(), "projects"), project_id)
-    os.makedirs(path, exist_ok=True)
+    if create:
+        os.makedirs(path, exist_ok=True)
     return path
 
 
 def save_project_files(project_id: str, meta: dict, files: dict[str, bytes]) -> str:
-    folder = project_dir(project_id)
+    folder = project_dir(project_id, create=True)
     for name, blob in files.items():
         dest = safe_join(folder, name)
         os.makedirs(os.path.dirname(dest), exist_ok=True)
@@ -227,16 +310,21 @@ def save_project_files(project_id: str, meta: dict, files: dict[str, bytes]) -> 
 
 
 def load_project_meta(project_id: str) -> dict:
-    folder = project_dir(project_id)
-    return _read_json(os.path.join(folder, "project.json"), {})
+    folder = project_dir(project_id, create=False)
+    path = os.path.join(folder, "project.json")
+    if not os.path.isfile(path):
+        return {}
+    return _read_json(path, {})
 
 
 def project_file(project_id: str, name: str) -> str:
-    return safe_join(project_dir(project_id), name)
+    return safe_join(project_dir(project_id, create=False), name)
 
 
 def export_project_zip(project_id: str) -> bytes:
-    folder = project_dir(project_id)
+    folder = project_dir(project_id, create=False)
+    if not os.path.isdir(folder):
+        raise ValueError("Проект не найден.")
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for dirpath, _dirs, filenames in os.walk(folder):
@@ -247,23 +335,120 @@ def export_project_zip(project_id: str) -> bytes:
     return buf.getvalue()
 
 
+class _LimitedReader:
+    def __init__(self, raw, limit: int):
+        self.raw = raw
+        self.limit = limit
+        self.read_bytes = 0
+
+    def read(self, n=-1):
+        if self.read_bytes > self.limit:
+            raise ValueError("Файл в архиве слишком большой.")
+        if n is None or n < 0:
+            n = 1024 * 1024
+        room = self.limit - self.read_bytes + 1
+        chunk = self.raw.read(min(n, room))
+        self.read_bytes += len(chunk)
+        if self.read_bytes > self.limit:
+            raise ValueError("Файл в архиве слишком большой.")
+        return chunk
+
+
 def import_project_zip(blob: bytes) -> str:
     project_id = new_id()
-    folder = project_dir(project_id)
-    with zipfile.ZipFile(io.BytesIO(blob)) as zf:
-        for info in zf.infolist():
-            if info.is_dir():
-                continue
-            name = info.filename.replace("\\", "/")
-            if name.startswith("/") or ".." in name.split("/"):
-                continue
-            dest = safe_join(folder, name)
-            os.makedirs(os.path.dirname(dest), exist_ok=True)
-            with zf.open(info) as src, open(dest, "wb") as dst:
-                dst.write(src.read())
-    if not os.path.isfile(os.path.join(folder, "project.json")):
-        raise ValueError("В архиве нет project.json.")
+    folder = project_dir(project_id, create=True)
+    try:
+        with zipfile.ZipFile(io.BytesIO(blob)) as zf:
+            infos = [info for info in zf.infolist() if not info.is_dir()]
+            if len(infos) > ZIP_MAX_FILES:
+                raise ValueError(f"В архиве больше {ZIP_MAX_FILES} файлов.")
+            total = 0
+            names = []
+            for info in infos:
+                name = info.filename.replace("\\", "/")
+                if not name or name.startswith("/") or ".." in name.split("/"):
+                    raise ValueError("Некорректное имя в архиве.")
+                size = int(info.file_size or 0)
+                if size > ZIP_MAX_FILE:
+                    raise ValueError("Файл в архиве слишком большой.")
+                total += size
+                if total > ZIP_MAX_TOTAL:
+                    raise ValueError("Архив слишком большой.")
+                names.append(name)
+            written = 0
+            for info, name in zip(infos, names):
+                dest = safe_join(folder, name)
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
+                with zf.open(info) as src, open(dest, "wb") as dst:
+                    reader = _LimitedReader(src, ZIP_MAX_FILE)
+                    shutil.copyfileobj(reader, dst, length=1024 * 1024)
+                    written += reader.read_bytes
+                if written > ZIP_MAX_TOTAL:
+                    raise ValueError("Архив слишком большой.")
+        if not os.path.isfile(os.path.join(folder, "project.json")):
+            raise ValueError("В архиве нет project.json.")
+    except Exception:
+        shutil.rmtree(folder, ignore_errors=True)
+        raise
     return project_id
+
+
+def _commit_index_path() -> str:
+    return os.path.join(output_root(), "commits", "index.json")
+
+
+def _backfill_commits(folder: str, index: list) -> list:
+    known = {item.get("id") for item in index if isinstance(item, dict)}
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return index
+    for name in names:
+        if not name.lower().endswith(".png") or name.lower().endswith("_mask.png"):
+            continue
+        ident = name[:-4]
+        if ident in known:
+            continue
+        path = os.path.join(folder, name)
+        meta = read_png_meta(path)
+        try:
+            created = int(os.path.getmtime(path))
+        except OSError:
+            created = 0
+        index.append({
+            "id": ident,
+            "project_id": str(meta.get("projectId") or meta.get("project_id") or ""),
+            "created": created,
+        })
+        known.add(ident)
+    return index
+
+
+def _prune_commits(folder: str, index: list) -> list:
+    latest: dict[str, dict] = {}
+    for item in index:
+        if not isinstance(item, dict) or not item.get("id"):
+            continue
+        ident = str(item["id"])
+        prev = latest.get(ident)
+        if prev is None or (item.get("created") or 0) >= (prev.get("created") or 0):
+            latest[ident] = item
+    groups: dict[str, list] = {}
+    for item in latest.values():
+        groups.setdefault(str(item.get("project_id") or ""), []).append(item)
+    kept: list = []
+    for items in groups.values():
+        items.sort(key=lambda row: row.get("created") or 0)
+        stale = items[:-COMMIT_KEEP] if len(items) > COMMIT_KEEP else []
+        kept.extend(items[-COMMIT_KEEP:])
+        for item in stale:
+            ident = str(item.get("id"))
+            for suffix in (".png", "_mask.png"):
+                try:
+                    os.remove(os.path.join(folder, ident + suffix))
+                except OSError:
+                    pass
+    return kept
 
 
 def commit_image(image_bytes: bytes, mask_bytes: bytes | None, meta: dict) -> dict:
@@ -276,6 +461,17 @@ def commit_image(image_bytes: bytes, mask_bytes: bytes | None, meta: dict) -> di
     if mask_bytes:
         mask_rel = f"zeroimagestudio/commits/{ident}_mask.png"
         write_png(os.path.join(folder, ident + "_mask.png"), mask_bytes, None)
+    index = _read_json(_commit_index_path(), [])
+    if not isinstance(index, list):
+        index = []
+    index = _backfill_commits(folder, index)
+    if not any(isinstance(item, dict) and item.get("id") == ident for item in index):
+        index.append({
+            "id": ident,
+            "project_id": str((meta or {}).get("projectId") or (meta or {}).get("project_id") or ""),
+            "created": int(time.time()),
+        })
+    _write_json(_commit_index_path(), _prune_commits(folder, index))
     return {"image": image_rel, "mask": mask_rel, "id": ident}
 
 
@@ -295,23 +491,66 @@ def save_gallery_image(image_bytes: bytes, meta: dict) -> dict:
     return {"id": ident, "file": f"zeroimagestudio/gallery/{ident}.png", "meta": meta}
 
 
-def list_gallery() -> list[dict]:
-    items = []
+def _gallery_index_path() -> str:
+    return os.path.join(gallery_dir(), "index.json")
+
+
+def list_gallery(offset: int = 0, limit: int | None = GALLERY_PAGE) -> dict:
     folder = gallery_dir()
-    for name in os.listdir(folder):
+    index = _read_json(_gallery_index_path(), {})
+    if not isinstance(index, dict):
+        index = {}
+    fresh: dict[str, dict] = {}
+    items = []
+    dirty = False
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        names = []
+    for name in names:
         if not name.lower().endswith(".png"):
             continue
         path = os.path.join(folder, name)
-        meta = read_png_meta(path)
+        try:
+            st = os.stat(path)
+        except OSError:
+            continue
+        mtime = int(getattr(st, "st_mtime_ns", int(st.st_mtime * 1e9)))
+        size = int(st.st_size)
+        cached = index.get(name) if isinstance(index.get(name), dict) else None
+        if cached and cached.get("mtime_ns") == mtime and cached.get("size") == size and isinstance(cached.get("meta"), dict):
+            meta = dict(cached["meta"])
+        else:
+            meta = read_png_meta(path)
+            dirty = True
         ident = name[:-4]
         meta.setdefault("id", ident)
         try:
-            meta.setdefault("created", int(os.path.getmtime(path)))
+            meta.setdefault("created", int(st.st_mtime))
         except OSError:
             meta.setdefault("created", 0)
+        fresh[name] = {"mtime_ns": mtime, "size": size, "meta": meta}
         items.append({"id": ident, "file": f"zeroimagestudio/gallery/{name}", "meta": meta})
-    items.sort(key=lambda x: x["meta"].get("created") or 0, reverse=True)
-    return items
+    if dirty or set(fresh) != {key for key, val in index.items() if isinstance(val, dict)}:
+        _write_json(_gallery_index_path(), fresh)
+    items.sort(key=lambda row: row["meta"].get("created") or 0, reverse=True)
+    total = len(items)
+    try:
+        start = max(0, int(0 if offset is None else offset))
+    except (TypeError, ValueError):
+        start = 0
+    if limit is None:
+        page = items[start:]
+        limit_out = len(page)
+    else:
+        try:
+            size = int(limit)
+        except (TypeError, ValueError):
+            size = GALLERY_PAGE
+        size = max(1, min(200, size))
+        page = items[start:start + size]
+        limit_out = size
+    return {"items": page, "total": total, "offset": start, "limit": limit_out}
 
 
 def sha256_file(path: str) -> str:
@@ -327,18 +566,20 @@ def hash_cache_path() -> str:
 
 
 def cached_sha256(path: str) -> str:
-    st = os.stat(path)
-    key = f"{path}|{st.st_mtime_ns}|{st.st_size}"
-    cache = _read_json(hash_cache_path(), {})
-    if cache.get(key):
-        return cache[key]
-    digest = sha256_file(path)
-    # keep the cache bounded
-    if len(cache) > 400:
-        cache = {}
-    cache[key] = digest
-    _write_json(hash_cache_path(), cache)
-    return digest
+    with _JSON_LOCK:
+        st = os.stat(path)
+        key = f"{path}|{st.st_mtime_ns}|{st.st_size}"
+        cache = _read_json(hash_cache_path(), {})
+        if not isinstance(cache, dict):
+            cache = {}
+        if cache.get(key):
+            return cache[key]
+        digest = sha256_file(path)
+        if len(cache) > 400:
+            cache = {}
+        cache[key] = digest
+        _write_json(hash_cache_path(), cache)
+        return digest
 
 
 def civitai_cache_path() -> str:

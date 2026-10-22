@@ -12,6 +12,7 @@ No per-model Python. A hint or a preset only fills this spec.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 
@@ -29,6 +30,50 @@ def snap(n: int, step: int, minimum: int = 64) -> int:
     if snapped % step:
         snapped = int((snapped + step - 1) // step) * step
     return snapped
+
+
+def _missing(value) -> bool:
+    return value is None or value == ""
+
+
+def _as_int(value, default: int) -> int:
+    if _missing(value):
+        return int(default)
+    return int(value)
+
+
+def _as_float(value, default: float) -> float:
+    if _missing(value):
+        return float(default)
+    return float(value)
+
+
+_REMOVAL_RE = re.compile(
+    r"(?<!\w)(?:удали\w*|убери\w*|сотри\w*|remove\w*|erase\w*|delete\w*)(?!\w)",
+    re.IGNORECASE,
+)
+
+
+def prompt_requests_removal(text: str) -> bool:
+    """True for a removal verb, not a substring such as сотрудник or убер."""
+    return _REMOVAL_RE.search(text or "") is not None
+
+
+def _grounding_px(krea: dict | None) -> int:
+    """Task default only when the client omits the value. 0 stays 0."""
+    data = krea if isinstance(krea, dict) else {}
+    raw = data.get("grounding_px")
+    if _missing(raw):
+        return 1024 if (data.get("task") or "").strip() == "identity" else 768
+    return int(raw)
+
+
+def _latent_step(spec: dict, built: str = "") -> int:
+    if built.startswith("edit:krea") or built.startswith("edit:qwen"):
+        return 16
+    if spec.get("encoder") == "qwen_image_21" or spec.get("latent_mode") == "sd3":
+        return 16
+    return 8
 
 
 def assemble_prompt(user: str, presets: list | None, loras: list | None) -> str:
@@ -146,8 +191,8 @@ def _add_loaders(g: _Graph, spec: dict):
                 "model": model,
                 "clip": clip,
                 "lora_name": lora["name"],
-                "strength_model": float(lora.get("strength_model", 1.0)),
-                "strength_clip": float(lora.get("strength_clip", 1.0)),
+                "strength_model": _as_float(lora.get("strength_model"), 1.0),
+                "strength_clip": _as_float(lora.get("strength_clip"), 1.0),
             },
             lora["name"],
         )
@@ -166,7 +211,7 @@ def _encode_clip(g: _Graph, clip, text: str, title: str) -> str:
 
 
 def _sampler(g: _Graph, spec: dict, model, positive, negative, latent, denoise: float) -> str:
-    seed = int(spec.get("seed") or 0)
+    seed = _as_int(spec.get("seed"), 0)
     if seed < 0:
         seed = 0
     return g.add(
@@ -174,8 +219,8 @@ def _sampler(g: _Graph, spec: dict, model, positive, negative, latent, denoise: 
         {
             "model": model,
             "seed": seed,
-            "steps": max(1, int(spec.get("steps") or 20)),
-            "cfg": float(spec.get("cfg") if spec.get("cfg") is not None else 7.0),
+            "steps": max(1, _as_int(spec.get("steps"), 20)),
+            "cfg": _as_float(spec.get("cfg"), 7.0),
             "sampler_name": spec.get("sampler") or "euler",
             "scheduler": spec.get("scheduler") or "normal",
             "positive": positive,
@@ -206,9 +251,9 @@ def _latent_node(spec: dict, w: int, h: int, batch: int) -> tuple[str, dict, int
 
 
 def _size(spec: dict, step: int) -> tuple[int, int, int]:
-    batch = max(1, min(8, int(spec.get("batch") or 1)))
-    w = snap(int(spec.get("width") or 1024), step)
-    h = snap(int(spec.get("height") or 1024), step)
+    batch = max(1, min(8, _as_int(spec.get("batch"), 1)))
+    w = snap(_as_int(spec.get("width"), 1024), step)
+    h = snap(_as_int(spec.get("height"), 1024), step)
     return w, h, batch
 
 
@@ -223,7 +268,7 @@ def build_create(spec: dict, warnings: list[str]) -> dict:
     encoder = spec.get("encoder") or "clip"
     has_image = bool(spec.get("image"))
     has_mask = bool(spec.get("mask")) and bool(spec.get("has_mask"))
-    denoise = float(spec.get("denoise") if spec.get("denoise") is not None else 1.0)
+    denoise = _as_float(spec.get("denoise"), 1.0)
 
     if encoder == "qwen_image_21":
         if has_mask:
@@ -245,6 +290,7 @@ def build_create(spec: dict, warnings: list[str]) -> dict:
         mask_img = _load_image(g, spec["mask"], "Mask")
         mask = g.add("ImageToMask", {"image": g.ref(mask_img, 0), "channel": "red"}, "ImageToMask")
         mode = spec.get("inpaint_mode") or "vae_encode"
+        grow = _as_int(spec.get("inpaint_grow"), 6)
         if mode == "inpaint_conditioning":
             cond = g.add(
                 "InpaintModelConditioning",
@@ -259,18 +305,27 @@ def build_create(spec: dict, warnings: list[str]) -> dict:
                 "InpaintModelConditioning",
             )
             positive, negative, latent = g.ref(cond, 0), g.ref(cond, 1), g.ref(cond, 2)
-        else:
+        elif denoise >= 0.999:
+            # VAEEncodeForInpaint greys the masked area. That is only right for a full regen.
             enc = g.add(
                 "VAEEncodeForInpaint",
                 {
                     "pixels": g.ref(img, 0),
                     "vae": vae,
                     "mask": g.ref(mask, 0),
-                    "grow_mask_by": int(spec.get("inpaint_grow") or 6),
+                    "grow_mask_by": grow,
                 },
                 "VAEEncodeForInpaint",
             )
             positive, negative, latent = g.ref(pos, 0), g.ref(neg, 0), g.ref(enc, 0)
+        else:
+            enc = g.add("VAEEncode", {"pixels": g.ref(img, 0), "vae": vae}, "VAEEncode")
+            masked = g.add(
+                "SetLatentNoiseMask",
+                {"samples": g.ref(enc, 0), "mask": g.ref(mask, 0)},
+                "SetLatentNoiseMask",
+            )
+            positive, negative, latent = g.ref(pos, 0), g.ref(neg, 0), g.ref(masked, 0)
         if denoise >= 0.999:
             warnings.append("Inpaint с denoise 1 перегенерирует маску почти с нуля. Для правки обычно 0.4–0.85.")
         _save(g, g.ref(_sampler(g, spec, model, positive, negative, latent, denoise), 0), vae, spec.get("filename_prefix") or "zeroimagestudio/gen")
@@ -325,7 +380,7 @@ def _build_qwen_t2i(g, spec, model, clip, vae, prompt, negative) -> dict:
 def _build_qwen(g, spec, warnings, model, clip, vae, prompt, negative, include_image: bool, include_references: bool = True) -> dict:
     if not include_image:
         return _build_qwen_t2i(g, spec, model, clip, vae, prompt, negative)
-    res = int(spec.get("qwen_resolution") or 0)
+    res = _as_int(spec.get("qwen_resolution"), 0)
     # 0 keeps a reference at its own size (multiples of 32).
     if res <= 0:
         res = 0
@@ -358,7 +413,7 @@ def _build_qwen(g, spec, warnings, model, clip, vae, prompt, negative, include_i
     if include_image and "images.image_1" not in inputs:
         raise WorkflowError("Редактирование Qwen Image 2.1 требует изображение области.")
     enc = g.add("TextEncodeQwenImage21", inputs, "TextEncodeQwenImage21")
-    denoise = float(spec.get("denoise") if spec.get("denoise") is not None else 1.0)
+    denoise = _as_float(spec.get("denoise"), 1.0)
     # The node returns the latent that matches the reference. Sampling any other size shifts the edit.
     _save(
         g,
@@ -393,8 +448,7 @@ def build_krea_edit(spec: dict, warnings: list[str]) -> dict:
     if prompt is None:
         prompt = assemble_prompt(spec.get("prompt") or "", spec.get("prompt_presets"), spec.get("loras"))
     negative = spec.get("negative") or ""
-    low = (prompt or "").lower()
-    if any(word in low for word in ("удал", "remove", "erase", "сотр", "убер")):
+    if prompt_requests_removal(prompt):
         warnings.append(
             "Для удаления объекта лучше модель Raw, CFG около 3 и около 20 шагов. "
             "Turbo при CFG 1 обычно перерисовывает объект."
@@ -431,7 +485,7 @@ def build_krea_edit(spec: dict, warnings: list[str]) -> dict:
         {"width": w, "height": h, "batch_size": batch},
         "EmptySD3LatentImage",
     )
-    grounding = int(krea.get("grounding_px") if krea.get("grounding_px") is not None else 768)
+    grounding = _grounding_px(krea)
     fit_mode = krea.get("fit_mode") or "fit"
     if fit_mode not in ("fit", "crop (legacy)"):
         fit_mode = "fit"
@@ -448,29 +502,32 @@ def build_krea_edit(spec: dict, warnings: list[str]) -> dict:
         return g.add(enc_cls, inputs, title)
 
     pos = _enc(prompt, "Grounded positive")
-    # At CFG > 1 the negative must be grounded on the same image (trained unconditional).
-    neg = _enc(negative, "Grounded negative")
+    # CFG <= 1 does not use the negative. Skip the second grounded encode.
+    cfg = _as_float(spec.get("cfg"), 7.0)
+    if cfg <= 1.0:
+        neg = _encode_clip(g, clip, negative, "Negative")
+    else:
+        neg = _enc(negative, "Grounded negative")
 
-    src_lat = g.add("VAEEncode", {"pixels": g.ref(src, 0), "vae": vae}, "Source latent")
+    # source_latent is required, but vae + source_image encode inside the patch.
+    # An empty latent satisfies the socket without a redundant VAEEncode.
     patch_inputs: dict[str, Any] = {
         "model": model,
-        "source_latent": g.ref(src_lat, 0),
+        "source_latent": g.ref(latent, 0),
         "vae": vae,
         "source_image": g.ref(src, 0),
         "target_latent": g.ref(latent, 0),
         "fit_mode": fit_mode,
-        "ref_boost": float(krea.get("ref_boost") if krea.get("ref_boost") is not None else 1.0),
-        "ref_boost_a": float(krea.get("ref_boost_a") if krea.get("ref_boost_a") is not None else 1.0),
+        "ref_boost": _as_float(krea.get("ref_boost"), 1.0),
+        "ref_boost_a": _as_float(krea.get("ref_boost_a"), 1.0),
         "ref_position": krea.get("ref_position") or "aligned (trained)",
         "ref_position_a": krea.get("ref_position_a") or "aligned (trained)",
     }
     if ref_node:
-        src_lat_b = g.add("VAEEncode", {"pixels": g.ref(ref_node, 0), "vae": vae}, "Reference latent")
-        patch_inputs["source_latent_b"] = g.ref(src_lat_b, 0)
         patch_inputs["source_image_b"] = g.ref(ref_node, 0)
     patched = g.add(patch_cls, patch_inputs, "Krea2EditModelPatch")
 
-    denoise = float(spec.get("denoise") if spec.get("denoise") is not None else 1.0)
+    denoise = _as_float(spec.get("denoise"), 1.0)
     if denoise < 0.999:
         warnings.append("Krea 2 Edit семплирует чистый шум, обусловленный исходником. Denoise принудительно 1; локальность даёт маска вклейки.")
         denoise = 1.0
@@ -515,7 +572,7 @@ def build_workflow(spec: dict) -> tuple[dict, list[str], str]:
         else:
             # no painted mask: img2img the crop, default denoise if the user left it at 1
             edited["has_mask"] = False
-            if float(edited.get("denoise") or 1) >= 0.999:
+            if _as_float(edited.get("denoise"), 1.0) >= 0.999:
                 edited["denoise"] = 0.75
                 warnings.append("Маска не нарисована — область уходит в img2img с denoise 0.75. Нарисуйте маску для inpaint или оставьте denoise ниже 1.")
         return build_create(edited, warnings), warnings, "edit:inpaint"
@@ -584,13 +641,37 @@ def adapt_to_installed(prompt: dict) -> list[str]:
             node["inputs"].pop(key, None)
             notes.append(f"{cls_name}: вход «{key}» убран — его нет в этой версии ComfyUI.")
     if missing:
-        uniq = sorted(set(missing))
-        raise WorkflowError(
-            "В этой версии ComfyUI нет нод: "
-            + ", ".join(uniq)
-            + ". Обновите ComfyUI (Qwen Image 2.1 — с версии 0.37) или смените способ редактирования."
-        )
+        raise WorkflowError(missing_nodes_message(missing, _krea_import_error()))
     return notes
+
+
+def missing_nodes_message(names: list[str], krea_error: str | None = None) -> str:
+    uniq = sorted({str(n) for n in names if n})
+    krea = [n for n in uniq if "Krea2Edit" in n or "krea2edit" in n.lower()]
+    if krea and krea_error:
+        return (
+            "Встроенные ноды Krea 2 Edit не загрузились: "
+            + str(krea_error)
+            + ". Ноды: "
+            + ", ".join(krea)
+            + "."
+        )
+    return (
+        "В этой версии ComfyUI нет нод: "
+        + ", ".join(uniq or ["?"])
+        + ". Обновите ComfyUI (Qwen Image 2.1 — с версии 0.37) или смените способ редактирования."
+    )
+
+
+def _krea_import_error():
+    try:
+        from . import zeroimagestudio_routes as routes
+    except ImportError:
+        try:
+            import zeroimagestudio_routes as routes
+        except ImportError:
+            return None
+    return getattr(routes, "KREA_IMPORT_ERROR", None) or None
 
 
 def describe_pipeline(spec: dict, built: str) -> list[dict]:
@@ -598,8 +679,13 @@ def describe_pipeline(spec: dict, built: str) -> list[dict]:
     loader = "Checkpoint" if (spec.get("loader") == "checkpoint") else "UNET + CLIP + VAE"
     loras = _enabled_loras(spec)
     lora_label = f"LoRA ×{len(loras)}" if loras else "без LoRA"
-    steps = spec.get("steps") or "?"
+    steps = spec.get("steps")
+    if _missing(steps):
+        steps = "?"
     cfg = spec.get("cfg")
+    if _missing(cfg):
+        cfg = "?"
+    w, h, _batch = _size(spec, _latent_step(spec, built))
     if built.startswith("edit:krea2"):
         tail = "Krea2 Edit → бесшовная вклейка"
     elif built.startswith("edit:qwen_image_21"):
@@ -613,7 +699,7 @@ def describe_pipeline(spec: dict, built: str) -> list[dict]:
     else:
         tail = "Сэмплинг в область → новый слой"
     return [
-        {"text": f"Область {spec.get('width')}×{spec.get('height')}", "color": "#4aa8ff"},
+        {"text": f"Область {w}×{h}", "color": "#4aa8ff"},
         {"text": loader, "color": "#ff7a1a"},
         {"text": lora_label, "color": "#b18cff"},
         {"text": "Промт + пресеты", "color": "#e7c27a"},

@@ -4,6 +4,8 @@
   if (!window.__ZEROIMAGESTUDIO_PAGE) return;
 
   const $ = (id) => document.getElementById(id);
+  const U = window.ZeroImageStudioUtil;
+  const HISTORY_BYTES = 32 * 1024 * 1024;
   const BLENDS = [
     ["normal", "Нормальный"], ["multiply", "Умножение"], ["screen", "Экран"],
     ["overlay", "Перекрытие"], ["soft-light", "Мягкий свет"], ["hard-light", "Жёсткий свет"],
@@ -49,6 +51,11 @@
     settings: null,
     running: false,
     promptId: null,
+    jobId: "",
+    galleryTotal: 0,
+    galleryLimit: 48,
+    studioPaused: false,
+    collapsed: false,
   };
   state.edit.method = "krea2_edit";
   state.edit.clip_type = "krea2";
@@ -103,7 +110,7 @@
       clip_type: kind === "edit" ? "krea2" : "stable_diffusion",
       weight_dtype: "default", latent_mode: "sd3", encoder: "clip",
       method: "inpaint", inpaint_mode: "vae_encode", inpaint_grow: 6,
-      qwen_resolution: 1024,
+      qwen_resolution: 0,
       loras: [],
       krea: {
         fit_mode: "fit", ref_boost: 1, ref_boost_a: 1,
@@ -138,16 +145,15 @@
     toast._t = setTimeout(() => { el.hidden = true; el.replaceChildren(); }, open ? 9000 : 5200);
   }
 
+  function formatApiError(body, statusText) {
+    return U.formatApiError(body, statusText);
+  }
+
   async function api(path, opts) {
     const res = await fetch(path, opts);
     const type = res.headers.get("content-type") || "";
     const body = type.includes("json") ? await res.json() : await res.text();
-    if (!res.ok) {
-      let msg = res.statusText;
-      if (body && body.error) msg = typeof body.error === "string" ? body.error : JSON.stringify(body.error);
-      else if (typeof body === "string") msg = body.slice(0, 500);
-      throw new Error(msg || ("HTTP " + res.status));
-    }
+    if (!res.ok) throw new Error(formatApiError(body, res.statusText));
     return body;
   }
 
@@ -158,8 +164,14 @@
   function loadImage(src) {
     return new Promise((resolve, reject) => {
       const img = new Image();
-      img.onload = () => resolve(img);
-      img.onerror = () => reject(new Error("Не удалось открыть изображение"));
+      img.onload = () => {
+        if (typeof src === "string" && src.startsWith("blob:")) URL.revokeObjectURL(src);
+        resolve(img);
+      };
+      img.onerror = () => {
+        if (typeof src === "string" && src.startsWith("blob:")) URL.revokeObjectURL(src);
+        reject(new Error("Не удалось открыть изображение"));
+      };
       img.src = src;
     });
   }
@@ -198,6 +210,9 @@
       this.selection = null;
       this.undoStack = [];
       this.redoStack = [];
+      this._maskCount = 0;
+      this._maskDirty = true;
+      this._maskLive = false;
       this.space = false;
       this.drag = null;
       this._raf = 0;
@@ -225,6 +240,7 @@
       if (this.maskCtx) g.drawImage(prev, 0, 0);
       this.maskCanvas = c;
       this.maskCtx = g;
+      this.touchMask();
     }
 
     resizeView() {
@@ -339,7 +355,7 @@
         ctx.drawImage(layer.canvas, 0, 0);
         ctx.restore();
       }
-      if (this.maskArea() > 0) {
+      if (this._maskLive || this.maskArea() > 0) {
         ctx.save();
         ctx.globalAlpha = 0.42;
         ctx.drawImage(this.maskTint(), 0, 0);
@@ -438,10 +454,17 @@
     }
 
     maskArea() {
+      if (!this._maskDirty) return this._maskCount;
       const data = this.maskCtx.getImageData(0, 0, this.maskCanvas.width, this.maskCanvas.height).data;
       let n = 0;
-      for (let i = 0; i < data.length; i += 16) if (data[i] > 16) n++;
-      return n * 4;
+      for (let i = 0; i < data.length; i += 4) if (data[i] > 16) n++;
+      this._maskCount = n;
+      this._maskDirty = false;
+      return n;
+    }
+
+    touchMask() {
+      this._maskDirty = true;
     }
 
     exportMask() {
@@ -526,10 +549,18 @@
           return layer;
         });
         this.active = Math.min(rec.active, this.layers.length - 1);
+        this.touchMask();
+      } else if (rec.type === "patch") {
+        const layer = this.layers.find((l) => l.id === rec.id);
+        const ctx = rec.maskStroke ? this.maskCtx : (layer && layer.ctx);
+        if (ctx && rec.data) ctx.putImageData(rec.data, rec.x || 0, rec.y || 0);
+        if (rec.maskStroke) this.touchMask();
+        else this.thumb(layer);
       } else if (rec.type === "pixels") {
         const layer = this.layers.find((l) => l.id === rec.id);
         if (layer && rec.data) layer.ctx.putImageData(rec.data, 0, 0);
         if (rec.mask) this.maskCtx.putImageData(rec.mask, 0, 0);
+        this.touchMask();
         this.thumb(layer);
       } else if (rec.type === "move") {
         const layer = this.layers.find((l) => l.id === rec.id);
@@ -542,29 +573,56 @@
 
     pushUndo(rec) {
       this.undoStack.push(rec);
-      if (this.undoStack.length > 20) this.undoStack.shift();
       this.redoStack = [];
+      this.trimHistory();
       if (this.onChange) this.onChange();
+    }
+
+    trimHistory() {
+      const bytes = () => U.historyBytes(this.undoStack);
+      while (this.undoStack.length > 20 || (this.undoStack.length > 1 && bytes() > HISTORY_BYTES)) this.undoStack.shift();
+    }
+
+    clearHistory() {
+      this.undoStack = [];
+      this.redoStack = [];
+    }
+
+    captureInverse(rec) {
+      if (!rec) return null;
+      if (rec.type === "full") return this.fullSnapshot();
+      if (rec.type === "move") {
+        const layer = this.layers.find((l) => l.id === rec.id);
+        return U.inverseHistory(rec, { x: layer ? layer.x : rec.x, y: layer ? layer.y : rec.y });
+      }
+      if (rec.type === "patch") {
+        const layer = this.layers.find((l) => l.id === rec.id);
+        const ctx = rec.maskStroke ? this.maskCtx : (layer && layer.ctx);
+        const data = ctx && rec.w ? ctx.getImageData(rec.x, rec.y, rec.w, rec.h) : rec.data;
+        return { type: "patch", id: rec.id, maskStroke: !!rec.maskStroke, x: rec.x, y: rec.y, w: rec.w, h: rec.h, data };
+      }
+      if (rec.type === "pixels") {
+        const layer = this.layers.find((l) => l.id === rec.id);
+        const data = layer && rec.data ? layer.ctx.getImageData(0, 0, layer.canvas.width, layer.canvas.height) : rec.data;
+        const mask = rec.mask ? this.maskCtx.getImageData(0, 0, this.maskCanvas.width, this.maskCanvas.height) : null;
+        return U.inverseHistory(rec, { data, mask });
+      }
+      return null;
     }
 
     undo() {
       const rec = this.undoStack.pop();
       if (!rec) return;
-      if (rec.type === "full") this.redoStack.push(this.fullSnapshot());
-      else if (rec.type === "pixels") {
-        const layer = this.layers.find((l) => l.id === rec.id);
-        this.redoStack.push({ type: "pixels", id: rec.id, data: layer ? layer.ctx.getImageData(0, 0, layer.canvas.width, layer.canvas.height) : rec.data, mask: this.maskCtx.getImageData(0, 0, this.maskCanvas.width, this.maskCanvas.height) });
-      } else if (rec.type === "move") {
-        const layer = this.layers.find((l) => l.id === rec.id);
-        this.redoStack.push({ type: "move", id: rec.id, x: layer ? layer.x : rec.x, y: layer ? layer.y : rec.y });
-      }
+      const inverse = this.captureInverse(rec);
+      if (inverse) this.redoStack.push(inverse);
       this.restore(rec);
     }
 
     redo() {
       const rec = this.redoStack.pop();
       if (!rec) return;
-      if (rec.type === "full") this.undoStack.push(this.fullSnapshot());
+      const inverse = this.captureInverse(rec);
+      if (inverse) this.undoStack.push(inverse);
       this.restore(rec);
     }
 
@@ -622,6 +680,7 @@
         if (map[e.code]) { setTool(map[e.code]); }
       });
       window.addEventListener("keyup", (e) => { if (e.code === "Space") this.space = false; });
+      window.addEventListener("blur", () => { this.space = false; });
     }
 
     pointerDown(e) {
@@ -668,10 +727,10 @@
       if (tool === "brush" || tool === "eraser" || tool === "mask") {
         const layer = this.activeLayer();
         if (tool !== "mask" && (!layer || layer.locked)) { toast(layer && layer.locked ? "Слой заблокирован." : "Нет слоя."); return; }
-        const rec = { type: "pixels", id: layer && layer.id };
-        if (tool === "mask") rec.mask = this.maskCtx.getImageData(0, 0, this.maskCanvas.width, this.maskCanvas.height);
-        else rec.data = layer.ctx.getImageData(0, 0, layer.canvas.width, layer.canvas.height);
-        this.drag = { kind: "paint", x: p.x, y: p.y, rec };
+        const patch = { type: "patch", id: layer && layer.id, maskStroke: tool === "mask", x: 0, y: 0, w: 0, h: 0, data: null };
+        this.drag = { kind: "paint", x: p.x, y: p.y, patch };
+        if (tool === "mask") this._maskLive = true;
+        this.notePatch(patch, p.x, p.y);
         this.stamp(p.x, p.y);
       }
     }
@@ -689,6 +748,7 @@
         const layer = this.layers.find((l) => l.id === d.id);
         if (layer) { layer.x = Math.round(d.lx + (p.x - d.x)); layer.y = Math.round(d.ly + (p.y - d.y)); }
       } else if (d.kind === "paint") {
+        this.noteSegment(d.patch, d.x, d.y, p.x, p.y);
         this.strokeLine(d.x, d.y, p.x, p.y);
         d.x = p.x; d.y = p.y;
       } else if (d.kind === "select" || d.kind === "crop") {
@@ -710,7 +770,14 @@
       const d = this.drag;
       this.drag = null;
       if (!d) return;
-      if (d.kind === "paint" && d.rec) { this.pushUndo(d.rec); this.thumb(this.activeLayer()); renderLayers(); renderTags(); }
+      if (d.kind === "paint" && d.patch && d.patch.data) {
+        this._maskLive = false;
+        this.touchMask();
+        this.pushUndo(d.patch);
+        this.thumb(this.activeLayer());
+        renderLayers();
+        renderTags();
+      }
       if (d.kind === "move") this.pushUndo({ type: "move", id: d.id, x: d.lx, y: d.ly });
       if (d.kind === "crop" && this.selection && this.selection.w > 4 && this.selection.h > 4) this.applyCrop(this.selection);
       if (d.kind === "transform" && d.snapshot) { this.bakeActive(); this.pushUndo(d.snapshot); }
@@ -749,6 +816,51 @@
       const step = Math.max(1, state.brush.size * 0.25);
       const n = Math.max(1, Math.ceil(dist / step));
       for (let i = 0; i <= n; i++) this.stamp(x0 + (x1 - x0) * i / n, y0 + (y1 - y0) * i / n);
+    }
+
+    noteSegment(patch, x0, y0, x1, y1) {
+      const dist = Math.hypot(x1 - x0, y1 - y0);
+      const step = Math.max(1, state.brush.size * 0.5);
+      const n = Math.max(1, Math.ceil(dist / step));
+      for (let i = 0; i <= n; i++) this.notePatch(patch, x0 + (x1 - x0) * i / n, y0 + (y1 - y0) * i / n);
+    }
+
+    notePatch(patch, x, y) {
+      if (!patch) return;
+      const layer = this.layers.find((l) => l.id === patch.id);
+      const ctx = patch.maskStroke ? this.maskCtx : (layer && layer.ctx);
+      if (!ctx) return;
+      const rad = Math.max(1, state.brush.size / 2 + 2);
+      const lx = patch.maskStroke ? x : x - (layer ? layer.x : 0);
+      const ly = patch.maskStroke ? y : y - (layer ? layer.y : 0);
+      const canvas = ctx.canvas;
+      const x0 = Math.max(0, Math.floor(lx - rad));
+      const y0 = Math.max(0, Math.floor(ly - rad));
+      const x1 = Math.min(canvas.width, Math.ceil(lx + rad));
+      const y1 = Math.min(canvas.height, Math.ceil(ly + rad));
+      if (x1 <= x0 || y1 <= y0) return;
+      if (!patch.data) {
+        patch.x = x0; patch.y = y0; patch.w = x1 - x0; patch.h = y1 - y0;
+        patch.data = ctx.getImageData(patch.x, patch.y, patch.w, patch.h);
+        return;
+      }
+      const nx = Math.min(patch.x, x0);
+      const ny = Math.min(patch.y, y0);
+      const nx2 = Math.max(patch.x + patch.w, x1);
+      const ny2 = Math.max(patch.y + patch.h, y1);
+      if (nx === patch.x && ny === patch.y && nx2 === patch.x + patch.w && ny2 === patch.y + patch.h) return;
+      const nw = nx2 - nx;
+      const nh = ny2 - ny;
+      const next = ctx.createImageData(nw, nh);
+      next.data.set(ctx.getImageData(nx, ny, nw, nh).data);
+      const ox = patch.x - nx;
+      const oy = patch.y - ny;
+      const src = patch.data.data;
+      const dst = next.data;
+      for (let row = 0; row < patch.h; row++) {
+        dst.set(src.subarray(row * patch.w * 4, (row + 1) * patch.w * 4), ((oy + row) * nw + ox) * 4);
+      }
+      patch.x = nx; patch.y = ny; patch.w = nw; patch.h = nh; patch.data = next;
     }
 
     stamp(x, y) {
@@ -953,7 +1065,7 @@
     host.innerHTML = list.map((h) => {
       const on = h.id === state.hintId;
       const tags = hintTags(h, state.pipeline).map((t, i) => `<span class="tag ${on && i === 0 ? "to" : ""}">${escapeHtml(t)}</span>`).join("");
-      return `<button type="button" class="mrow ${on ? "on" : ""}" data-hint="${h.id}" title="${escapeHtml(h.name)}"><span class="rd"></span><b>${escapeHtml(h.name)}</b><span class="tg">${tags}</span></button>`;
+      return `<button type="button" class="mrow ${on ? "on" : ""}" data-hint="${escapeHtml(h.id)}" title="${escapeHtml(h.name)}"><span class="rd"></span><b>${escapeHtml(h.name)}</b><span class="tg">${tags}</span></button>`;
     }).join("") || '<div class="empty">Нет моделей для этого режима.</div>';
   }
 
@@ -1004,11 +1116,11 @@
     const kreaRow = state.pipeline === "edit" && c.method === "krea2_edit" ? `
       <label>Fit <select class="dd" data-krea="fit_mode" style="width:100%"><option ${krea.fit_mode === "fit" ? "selected" : ""}>fit</option><option ${krea.fit_mode === "crop (legacy)" ? "selected" : ""}>crop (legacy)</option></select></label>
       <label>Позиция референса <select class="dd" data-krea="ref_position" style="width:100%" disabled title="Позицию задаёт режим Правка или Персонаж">${["aligned (trained)", "beside (right of target)", "bag of features"].map((v) => `<option ${krea.ref_position === v ? "selected" : ""}>${v}</option>`).join("")}</select></label>
-      <label>Grounding, px <input class="f" data-krea="grounding_px" value="${krea.grounding_px}" title="Ниже — сильнее инструкция, выше — сильнее сходство"></label>
+      <label>Grounding, px <input class="f" data-krea="grounding_px" value="${U.finiteNumber(krea.grounding_px, 768)}" title="Ниже — сильнее инструкция, выше — сильнее сходство"></label>
       <label>Ноды <select class="dd" data-krea="impl" style="width:100%"><option value="internal" ${krea.impl !== "external" ? "selected" : ""}>встроенные</option><option value="external" ${krea.impl === "external" ? "selected" : ""}>пакет comfyui-krea2edit</option></select></label>` : "";
     const qwenUsesEncoder = (state.pipeline === "edit" && (c.method === "qwen_image_21" || c.method === "qwen")) || (c.encoder === "qwen_image_21" && usesSource());
     const qwenRow = qwenUsesEncoder
-      ? `<label>Qwen resolution <input class="f" data-file="qwen_resolution" value="${c.qwen_resolution || 0}"></label>` : "";
+      ? `<label>Qwen resolution <input class="f" data-file="qwen_resolution" value="${U.finiteNumber(c.qwen_resolution, 0)}"></label>` : "";
     $("graph-options").innerHTML = `
       ${methodRow}
       <label>Латент <select class="dd" data-file="latent_mode" style="width:100%"><option value="standard" ${c.latent_mode !== "sd3" ? "selected" : ""}>EmptyLatentImage (4 кан.)</option><option value="sd3" ${c.latent_mode === "sd3" ? "selected" : ""}>EmptySD3LatentImage (16 кан.)</option></select></label>
@@ -1024,7 +1136,7 @@
   function renderRefs() {
     const host = $("ref-list");
     const cards = state.references.map((r) =>
-      `<div class="ref ${r.selected ? "on" : ""}" data-ref="${r.id}" title="Клик — выбрать для LLM"><img src="${r.url}"><s>${escapeHtml(r.name)}</s><button class="x" data-ref-del="${r.id}">×</button></div>`
+      `<div class="ref ${r.selected ? "on" : ""}" data-ref="${escapeHtml(r.id)}" title="Клик — выбрать для LLM"><img src="${r.url}"><s>${escapeHtml(r.name)}</s><button class="x" data-ref-del="${escapeHtml(r.id)}">×</button></div>`
     ).join("");
     host.innerHTML = cards +
       `<button class="ref add" id="ref-upload" type="button"><div><span data-i="upload" data-s="15"></span><br>Загрузить</div></button>` +
@@ -1062,7 +1174,7 @@
     const sum = enabled.reduce((s, l) => s + Number(l.strength_model || 0), 0);
     $("lora-sum").textContent = list.length ? `${enabled.length} активны · Σ ${sum.toFixed(2)}` : "только добавленные";
     const rows = list.map((l) => {
-      const base = l.name.split("/").pop();
+      const base = U.fileBase(l.name);
       const triggers = (l.triggers || []).map((t, i) =>
         `<button type="button" class="tw ${t.enabled === false ? "" : "on"}" data-trig="${i}" data-lora-name="${escapeHtml(l.name)}">${t.enabled === false ? "" : "✓ "}${escapeHtml(t.text)}</button>`
       ).join(" ");
@@ -1101,12 +1213,13 @@
     const prefix = path ? path.replace(/\/+$/, "") + "/" : "";
     const folders = new Set();
     const here = [];
-    for (const name of files) {
+    for (const raw of files) {
+      const name = U.normalizeSlashes(raw);
       if (prefix && !name.startsWith(prefix)) continue;
       const rest = prefix ? name.slice(prefix.length) : name;
       const slash = rest.indexOf("/");
       if (slash >= 0) folders.add(rest.slice(0, slash));
-      else here.push(name);
+      else here.push(raw);
     }
     return { folders: [...folders].sort(), files: here.sort() };
   }
@@ -1144,7 +1257,7 @@
           const preview = knownPreview(name);
           const thumb = preview ? `<img src="${escapeHtml(preview)}" alt="">` : `<span class="lora-ph"></span>`;
           const mark = added.has(name) ? `<span class="tag tgr">добавлена</span>` : "";
-          return `<button type="button" class="lora-file" data-pick="${escapeHtml(name)}">${thumb}<span class="nm" title="${escapeHtml(name)}">${escapeHtml(q ? name : name.split("/").pop())}</span>${mark}</button>`;
+          return `<button type="button" class="lora-file" data-pick="${escapeHtml(name)}">${thumb}<span class="nm" title="${escapeHtml(name)}">${escapeHtml(q ? U.normalizeSlashes(name) : U.fileBase(name))}</span>${mark}</button>`;
         }).join("");
         host.innerHTML = `
           <input id="lora-pick-search" class="f" style="width:100%;font-family:inherit" placeholder="Поиск по всем папкам" value="${escapeHtml(q)}">
@@ -1182,16 +1295,15 @@
     const q = state.loraQuery.toLowerCase();
     const folder = state.loraFolder;
     const shown = files.filter((name) => {
-      if (folder && !name.startsWith(folder + "/") && name !== folder) {
-        if (!(folder && name.startsWith(folder))) return false;
-      }
-      if (folder && !name.startsWith(folder)) return false;
-      if (q && !name.toLowerCase().includes(q)) return false;
+      const path = U.normalizeSlashes(name);
+      if (folder && path !== folder && !path.startsWith(folder + "/")) return false;
+      if (q && !path.toLowerCase().includes(q)) return false;
       return true;
     }).slice(0, 80);
     const folders = {};
     files.forEach((name) => {
-      const top = name.includes("/") ? name.split("/")[0] : "";
+      const path = U.normalizeSlashes(name);
+      const top = path.includes("/") ? path.split("/")[0] : "";
       folders[top] = (folders[top] || 0) + 1;
     });
     const tree = [`<button type="button" class="fld ${folder === "" ? "on" : ""}" data-folder="">Все<span class="c">${files.length}</span></button>`]
@@ -1199,7 +1311,7 @@
         `<button type="button" class="fld ${folder === f ? "on" : ""}" data-folder="${escapeHtml(f)}">${escapeHtml(f)}<span class="c">${folders[f]}</span></button>`
       )).join("");
     const rows = shown.map((name) => {
-      const base = name.split("/").pop();
+      const base = U.fileBase(name);
       const hit = activeLoras().find((l) => l.name === name);
       const on = hit && hit.enabled;
       return `<tr data-lora="${escapeHtml(name)}" class="${state.loraSelected === name ? "on" : ""}"><td><span class="cb ${on ? "on" : ""}" data-lora-toggle="${escapeHtml(name)}"></span></td><td>${escapeHtml(base)}</td><td class="mono">${on ? Number(hit.strength_model).toFixed(2) : "—"}</td><td class="mono">${on && hit.triggers ? hit.triggers.filter((t) => t.enabled !== false).length : ""}</td></tr>`;
@@ -1235,7 +1347,7 @@
       ? `civitai · ${escapeHtml(info.base_model || "")} · ${info.size_kb ? Math.round(info.size_kb / 1024) + " МБ" : ""} · ★${info.rating != null ? Number(info.rating).toFixed(1) : "—"} · ${info.download_count || 0} загрузок`
       : (l.sha256 ? "sha256 " + l.sha256.slice(0, 12) + "…" : "хеш ещё не считался");
     return `<div style="border:1px solid var(--ln);border-radius:6px;padding:8px;background:#16191e;display:flex;flex-direction:column;gap:7px">
-      <div class="row"><b style="font-size:12.5px">${escapeHtml(l.name.split("/").pop())}</b><span class="tag tvi">${escapeHtml((info && info.base_model) || "LoRA")}</span>
+      <div class="row"><b style="font-size:12.5px">${escapeHtml(U.fileBase(l.name))}</b><span class="tag tvi">${escapeHtml((info && info.base_model) || "LoRA")}</span>
         <button class="b s" data-civitai="1" style="margin-left:auto;color:var(--bl)" data-i="link" data-s="12">Civitai info</button></div>
       <div class="row"><span class="mu" style="width:62px">Model</span><input class="range" data-str="model" type="range" min="0" max="2" step="0.01" value="${l.strength_model}"><input class="f" data-str-num="model" style="width:48px" value="${Number(l.strength_model).toFixed(2)}"></div>
       <div class="row"><span class="mu" style="width:62px">CLIP</span><input class="range" data-str="clip" type="range" min="0" max="2" step="0.01" value="${l.strength_clip}"><input class="f" data-str-num="clip" style="width:48px" value="${Number(l.strength_clip).toFixed(2)}"></div>
@@ -1264,14 +1376,14 @@
     const cat = state.catalog || { samplers: ["euler"], schedulers: ["simple", "normal", "beta"] };
     const opt = (list, cur) => (list || []).map((n) => `<option ${n === cur ? "selected" : ""}>${escapeHtml(n)}</option>`).join("");
     $("sampler-box").innerHTML = `
-      <span>Seed</span><div class="row seed-row"><input id="seed" class="f" value="${s.seed}" title="Последний сид. В режиме «случайный» каждый запуск берёт новый."><button class="b s" id="btn-seed" data-i="dice" data-s="12" type="button" title="Случайный сид"></button>
+      <span>Seed</span><div class="row seed-row"><input id="seed" class="f" value="${U.finiteNumber(s.seed, 0)}" title="Последний сид. В режиме «случайный» каждый запуск берёт новый."><button class="b s" id="btn-seed" data-i="dice" data-s="12" type="button" title="Случайный сид"></button>
         <select id="seed-mode" class="dd" title="Режим сида"><option value="random" ${s.seedMode === "random" ? "selected" : ""}>случайный</option><option value="fixed" ${s.seedMode === "fixed" ? "selected" : ""}>фиксированный</option><option value="increment" ${s.seedMode === "increment" ? "selected" : ""}>+1</option></select></div>
-      <span>Шаги</span><div class="row"><input id="steps-range" class="range" type="range" min="1" max="80" value="${s.steps}"><input id="steps" class="f" style="width:48px" value="${s.steps}"></div>
-      <span>CFG</span><div class="row"><input id="cfg-range" class="range" type="range" min="0" max="12" step="0.1" value="${s.cfg}"><input id="cfg" class="f" style="width:48px" value="${s.cfg}"></div>
-      <span>Denoise</span><div class="row"><input id="denoise-range" class="range" type="range" min="0" max="1" step="0.01" value="${s.denoise}"><input id="denoise" class="f" style="width:48px" value="${s.denoise}"></div>
+      <span>Шаги</span><div class="row"><input id="steps-range" class="range" type="range" min="1" max="80" value="${U.finiteNumber(s.steps, 20)}"><input id="steps" class="f" style="width:48px" value="${U.finiteNumber(s.steps, 20)}"></div>
+      <span>CFG</span><div class="row"><input id="cfg-range" class="range" type="range" min="0" max="12" step="0.1" value="${U.finiteNumber(s.cfg, 7)}"><input id="cfg" class="f" style="width:48px" value="${U.finiteNumber(s.cfg, 7)}"></div>
+      <span>Denoise</span><div class="row"><input id="denoise-range" class="range" type="range" min="0" max="1" step="0.01" value="${U.finiteNumber(s.denoise, 1)}"><input id="denoise" class="f" style="width:48px" value="${U.finiteNumber(s.denoise, 1)}"></div>
       <span>Сэмплер</span><select id="sampler" class="dd">${opt(cat.samplers, s.sampler)}</select>
       <span>Планировщик</span><select id="scheduler" class="dd">${opt(cat.schedulers, s.scheduler)}</select>
-      <span>Батч</span><input id="batch" class="f" value="${s.batch}">
+      <span>Батч</span><input id="batch" class="f" value="${U.finiteNumber(s.batch, 1)}">
     `;
     $("gen-batch").textContent = `×${s.batch}`;
     if (window.zeroImageStudioHydrateIcons) window.zeroImageStudioHydrateIcons($("sampler-box"));
@@ -1618,7 +1730,7 @@
   }
 
   function basenameOf(name) {
-    return String(name || "").split("/").pop().toLowerCase();
+    return U.basenameOf(name);
   }
 
   function catalogHas(list, name) {
@@ -1718,7 +1830,7 @@
       const frame = editor ? generationSize() : { w: 0, h: 0 };
       const mp = (frame.w * frame.h) / 1e6;
       const over = mp > 2;
-      const removal = /удал|remove|erase|сотр|убер/i.test(state.prompt || "");
+      const removal = U.requestsRemoval(state.prompt || "");
       tips.innerHTML = `
         <div class="${over ? "hot" : "mu"}">До 2 Мп для Krea Edit.${over ? ` Сейчас ${mp.toFixed(2)} — выше исходник может протекать, а объект двоиться.` : ""}</div>
         <div class="${removal ? "hot" : "mu"}">Для удаления объекта — модель Raw, CFG около 3, около 20 шагов.</div>`;
@@ -1926,11 +2038,12 @@
       const idx = editor.layers.indexOf(l);
       const on = idx === editor.active;
       const blendName = (BLENDS.find((b) => b[0] === l.blend) || ["", l.blend])[1];
-      return `<div class="layer ${on ? "on" : ""}" data-layer="${l.id}">
-        <button class="e ${l.visible ? "" : "off"}" data-eye="${l.id}" data-i="${l.visible ? "eye" : "eyeoff"}" data-s="15" type="button" title="${l.visible ? "Скрыть слой" : "Показать слой"}"></button>
+      const lid = escapeHtml(l.id);
+      return `<div class="layer ${on ? "on" : ""}" data-layer="${lid}">
+        <button class="e ${l.visible ? "" : "off"}" data-eye="${lid}" data-i="${l.visible ? "eye" : "eyeoff"}" data-s="15" type="button" title="${l.visible ? "Скрыть слой" : "Показать слой"}"></button>
         <div class="t" title="Миниатюра">${l.thumb ? `<img src="${l.thumb}" alt="">` : ""}</div>
-        <div class="n"><b title="Двойной щелчок — переименовать">${escapeHtml(l.name)}</b><small>${escapeHtml(blendName)} · ${Math.round(l.opacity * 100)}%${l.locked ? " · замок" : ""}${l.visible ? "" : " · скрыт"}</small></div>
-        <button data-lock="${l.id}" data-i="lock" data-s="13" type="button" title="${l.locked ? "Разблокировать" : "Заблокировать"}" style="color:${l.locked ? "var(--ac)" : "var(--mu)"}"></button>
+        <div class="n"><b title="Двойной щелчок — переименовать">${escapeHtml(l.name)}</b><small>${escapeHtml(blendName)} · ${Math.round(Number(l.opacity) * 100) || 0}%${l.locked ? " · замок" : ""}${l.visible ? "" : " · скрыт"}</small></div>
+        <button data-lock="${lid}" data-i="lock" data-s="13" type="button" title="${l.locked ? "Разблокировать" : "Заблокировать"}" style="color:${l.locked ? "var(--ac)" : "var(--mu)"}"></button>
       </div>`;
     }).join("") || `<div class="empty">Нет слоёв. Загрузите изображение или сгенерируйте.</div>`;
     if (window.zeroImageStudioHydrateIcons) window.zeroImageStudioHydrateIcons(host);
@@ -1941,10 +2054,10 @@
 
   function normalizePreset(p, i) {
     return {
-      id: p.id || ("p" + Date.now().toString(36) + i),
-      name: p.name || "Пресет",
-      category: p.category || "Общее",
-      text: p.text || "",
+      id: U.safeId(p.id || ("p" + Date.now().toString(36) + i), "p" + i),
+      name: String(p.name || "Пресет"),
+      category: String(p.category || "Общее"),
+      text: String(p.text || ""),
       position: p.position === "after" ? "after" : "before",
       enabled: !!p.enabled,
       order: Number.isFinite(Number(p.order)) ? Number(p.order) : i,
@@ -2107,13 +2220,13 @@
       ${items.map((p) => {
         const i = indexOf(p.id);
         return `<div class="pp-row">
-          <input type="checkbox" data-pp-on="${p.id}" ${p.enabled ? "checked" : ""}>
-          <button type="button" class="nm" data-pp-edit="${p.id}">${escapeHtml(p.name)}</button>
-          <button type="button" class="b s" data-pp-pos="${p.id}">${p.position === "after" ? "ПОСЛЕ" : "ДО"}</button>
-          <button type="button" class="b s" data-pp-up="${p.id}" ${i <= 0 ? "disabled" : ""} title="Раньше среди активных">↑</button>
-          <button type="button" class="b s" data-pp-down="${p.id}" ${i < 0 || i === active.length - 1 ? "disabled" : ""} title="Позже среди активных">↓</button>
-          <button type="button" class="b s" data-pp-dup="${p.id}">Дубль</button>
-          <button type="button" class="b s" data-pp-del="${p.id}">Удалить</button>
+          <input type="checkbox" data-pp-on="${escapeHtml(p.id)}" ${p.enabled ? "checked" : ""}>
+          <button type="button" class="nm" data-pp-edit="${escapeHtml(p.id)}">${escapeHtml(p.name)}</button>
+          <button type="button" class="b s" data-pp-pos="${escapeHtml(p.id)}">${p.position === "after" ? "ПОСЛЕ" : "ДО"}</button>
+          <button type="button" class="b s" data-pp-up="${escapeHtml(p.id)}" ${i <= 0 ? "disabled" : ""} title="Раньше среди активных">↑</button>
+          <button type="button" class="b s" data-pp-down="${escapeHtml(p.id)}" ${i < 0 || i === active.length - 1 ? "disabled" : ""} title="Позже среди активных">↓</button>
+          <button type="button" class="b s" data-pp-dup="${escapeHtml(p.id)}">Дубль</button>
+          <button type="button" class="b s" data-pp-del="${escapeHtml(p.id)}">Удалить</button>
         </div>`;
       }).join("")}
       </div>`).join("");
@@ -2186,7 +2299,7 @@
     bits.push("промт");
     orderedPresets().filter((p) => p.enabled && p.position === "after").forEach((p) => bits.push("[" + p.name + "]"));
     $("prompt-final").textContent = "⤷ итог: " + bits.join(" + ") + " — пресеты применяются при генерации, в поле не вставляются";
-    $("token-est").textContent = "CONDITIONING · " + text.length + " симв.";
+    $("token-est").textContent = text.length + " симв.";
   }
 
   function renderPipe() {
@@ -2196,7 +2309,7 @@
   function renderPresetSelect() {
     const sel = $("preset-select");
     const cur = sel.value;
-    sel.innerHTML = `<option value="">— без пресета —</option>` + state.presets.map((p) => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join("");
+    sel.innerHTML = `<option value="">— без пресета —</option>` + state.presets.map((p) => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)}</option>`).join("");
     if ([...sel.options].some((o) => o.value === cur)) sel.value = cur;
     $("preset-count").textContent = String(state.presets.length);
   }
@@ -2266,7 +2379,8 @@
         const col = colors[m.edit_method] || colors[m.pipeline] || "#7d8594";
         const id = escapeHtml(it.id);
         const tip = [m.model_label || m.unet || m.checkpoint || "Генерация", m.width && m.height ? m.width + "×" + m.height : "", m.seed != null ? "seed " + m.seed : ""].filter(Boolean).join(" · ");
-        return `<div class="g" role="button" tabindex="0" data-gal="${id}" title="${escapeHtml(tip)}"><img src="/view?filename=${encodeURIComponent(it.file.split("/").pop())}&type=output&subfolder=zeroimagestudio/gallery" alt=""><s style="background:${col}"></s><span class="tile-actions"><button type="button" data-gal-apply="${id}" data-i="undo" data-s="13" title="Применить заново"></button><button type="button" data-gal-seed="${id}" data-i="dice" data-s="13" title="Взять сид"></button><button type="button" data-gal-lora="${id}" data-i="layers" data-s="13" title="Взять LoRA"></button></span></div>`;
+        const file = U.fileBase(it.file);
+        return `<div class="g" role="button" tabindex="0" data-gal="${id}" title="${escapeHtml(tip)}"><img src="/view?filename=${encodeURIComponent(file)}&type=output&subfolder=zeroimagestudio/gallery" alt=""><s style="background:${col}"></s><span class="tile-actions"><button type="button" data-gal-apply="${id}" data-i="undo" data-s="13" title="Применить заново"></button><button type="button" data-gal-seed="${id}" data-i="dice" data-s="13" title="Взять сид"></button><button type="button" data-gal-lora="${id}" data-i="layers" data-s="13" title="Взять LoRA"></button></span></div>`;
       }).join("");
       if (window.zeroImageStudioHydrateIcons) window.zeroImageStudioHydrateIcons(host);
       $("gal-legend").innerHTML = `<span>${scopeNote}</span><span><b style="color:#ff7a1a">▬</b> Krea Edit</span><span><b style="color:#b18cff">▬</b> Создание</span><span><b style="color:#4aa8ff">▬</b> Qwen</span>`;
@@ -2281,6 +2395,13 @@
     if (sort) sort.title = sort.value === "old" ? "Сначала старые" : "Сначала новые";
     const label = $("gal-sort-label");
     if (label && sort) label.textContent = "сортировка: " + (sort.value === "old" ? "старые" : "новые");
+    const more = $("gal-more");
+    if (more) {
+      const loaded = (state.gallery || []).filter((it) => !it.example).length;
+      const total = Number(state.galleryTotal) || loaded;
+      more.hidden = kind === "assets" || loaded >= total;
+      more.textContent = "Ещё " + loaded + " / " + total;
+    }
     sealCollapsed($("gallery-node"));
   }
 
@@ -2366,7 +2487,7 @@
   }
 
   function escapeHtml(s) {
-    return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    return U.escapeHtml(s);
   }
 
   function usesSource() {
@@ -2392,8 +2513,8 @@
       encoder: c.encoder,
       edit_method: c.method,
       inpaint_mode: c.inpaint_mode,
-      inpaint_grow: c.inpaint_grow,
-      qwen_resolution: 0,
+      inpaint_grow: U.finiteNumber(c.inpaint_grow, 6),
+      qwen_resolution: U.finiteNumber(c.qwen_resolution, 0),
       krea: { ...(c.krea || {}) },
       loras: c.loras,
       prompt: state.prompt,
@@ -2417,6 +2538,42 @@
     else if (state.sampler.seedMode === "increment") state.sampler.seed = (Number(state.sampler.seed) + 1) >>> 0;
     const el = $("seed");
     if (el) el.value = state.sampler.seed;
+  }
+
+  function fitRegionCanvas(src, boxW, boxH) {
+    const frame = window.ZeroImageStudioSize.frameForRegion(src.width, src.height, boxW, boxH);
+    const placed = window.ZeroImageStudioSize.containRect(src.width, src.height, frame.w, frame.h);
+    const canvas = document.createElement("canvas");
+    canvas.width = frame.w;
+    canvas.height = frame.h;
+    const g = canvas.getContext("2d");
+    g.fillStyle = "#000";
+    g.fillRect(0, 0, frame.w, frame.h);
+    g.drawImage(src, placed.x, placed.y, placed.w, placed.h);
+    return { canvas, frame, placed };
+  }
+
+  function jobName(kind, index) {
+    const id = U.safeId(state.jobId, "job");
+    const tail = index == null ? kind : kind + "-" + index;
+    return "zis-" + id + "-" + tail + ".png";
+  }
+
+  function cropFrameContent(img, fit, outW, outH) {
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, outW);
+    canvas.height = Math.max(1, outH);
+    const sx = fit.placed.x * (img.width / fit.frame.w);
+    const sy = fit.placed.y * (img.height / fit.frame.h);
+    const sw = Math.max(1, fit.placed.w * (img.width / fit.frame.w));
+    const sh = Math.max(1, fit.placed.h * (img.height / fit.frame.h));
+    canvas.getContext("2d").drawImage(img, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+    return canvas;
+  }
+
+  function keepGrounding(spec) {
+    if (Number.isFinite(Number(spec.krea && spec.krea.grounding_px))) spec.krea.grounding_px = Number(spec.krea.grounding_px);
+    else if (spec.krea) delete spec.krea.grounding_px;
   }
 
   async function uploadCanvas(canvas, name) {
@@ -2452,10 +2609,12 @@
 
   function connectWs() {
     if (location.protocol === "file:") return;
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
     const proto = location.protocol === "https:" ? "wss" : "ws";
     ws = new WebSocket(`${proto}://${location.host}/ws?clientId=${clientId}`);
     ws.binaryType = "arraybuffer";
     ws.addEventListener("message", (ev) => {
+      if (state.studioPaused && !state.running) return;
       if (ev.data instanceof ArrayBuffer) { showBinaryPreview(ev.data); return; }
       if (!wsWait) return;
       let msg; try { msg = JSON.parse(ev.data); } catch { return; }
@@ -2494,9 +2653,48 @@
     if (prev && prev.startsWith("blob:")) URL.revokeObjectURL(prev);
   }
 
+  function queuePromptId(item) {
+    if (Array.isArray(item)) return item[1];
+    return item && (item.prompt_id || item.id);
+  }
+
+  async function stopOurPrompt() {
+    const id = state.promptId;
+    let queue = {};
+    try { queue = await api("/queue"); } catch { queue = {}; }
+    const running = (queue.queue_running || []).some((item) => queuePromptId(item) === id);
+    const pending = (queue.queue_pending || []).some((item) => queuePromptId(item) === id);
+    if (running) await fetch("/interrupt", { method: "POST" });
+    else if (pending && id) {
+      await api("/queue", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ delete: [id] }) });
+    }
+  }
+
   function waitPrompt(promptId) {
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { wsWait = null; reject(new Error("Таймаут ожидания ComfyUI")); }, 30 * 60 * 1000);
+      let settled = false;
+      const finish = (err) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        clearInterval(poll);
+        wsWait = null;
+        if (err) reject(err);
+        else resolve();
+      };
+      const timer = setTimeout(() => finish(new Error("Таймаут ожидания ComfyUI")), 30 * 60 * 1000);
+      const poll = setInterval(async () => {
+        if (!ws || ws.readyState !== WebSocket.OPEN) connectWs();
+        try {
+          const hist = await api("/history/" + encodeURIComponent(promptId));
+          const entry = hist && hist[promptId];
+          if (!entry) return;
+          const status = entry.status || {};
+          if (status.status_str === "error") finish(new Error(status.exception_message || "Ошибка выполнения"));
+          else if (entry.outputs || status.completed) finish();
+        } catch { /* the socket may still deliver the result */ }
+      }, 4000);
+      if (!ws || ws.readyState !== WebSocket.OPEN) connectWs();
       wsWait = (msg) => {
         const d = msg.data || {};
         if (d.prompt_id && d.prompt_id !== promptId) return;
@@ -2514,23 +2712,15 @@
           const run = $("ga-run-label");
           if (run) run.textContent = "Узел " + d.node;
         }
-        if (msg.type === "execution_interrupted") {
-          clearTimeout(timer); wsWait = null;
-          reject(new Error("Генерация остановлена"));
-        }
-        if (msg.type === "execution_error") {
-          clearTimeout(timer); wsWait = null;
-          reject(new Error(d.exception_message || "Ошибка выполнения"));
-        }
-        if (msg.type === "execution_success" || (msg.type === "executing" && d.node == null && d.prompt_id === promptId)) {
-          clearTimeout(timer); wsWait = null; resolve();
-        }
+        if (msg.type === "execution_interrupted") finish(new Error("Генерация остановлена"));
+        if (msg.type === "execution_error") finish(new Error(d.exception_message || "Ошибка выполнения"));
+        if (msg.type === "execution_success" || (msg.type === "executing" && d.node == null && d.prompt_id === promptId)) finish();
       };
     });
   }
 
   async function generate() {
-    if (state.running) { await fetch("/interrupt", { method: "POST" }); return; }
+    if (state.running) { await stopOurPrompt(); return; }
     const blocked = generateBlockReason();
     if (blocked) {
       const needsModel = emptyWeightReasons().length || missingKreaLora();
@@ -2538,7 +2728,8 @@
       if (needsModel) openModelDrawer();
       return;
     }
-    state.running = true;
+      state.jobId = (crypto.randomUUID && crypto.randomUUID().replace(/-/g, "").slice(0, 12)) || String(Date.now());
+      state.running = true;
     $("btn-gen").classList.add("stop");
     $("gen-label").textContent = "Отмена";
     $("gen-progress").style.display = "block";
@@ -2558,45 +2749,49 @@
       const task = kreaOn ? kreaTaskId() : "";
       const scene = sceneOnCanvas();
       let crop = null;
+      let regionFit = null;
       if (kreaOn && task === "identity" && !scene) {
         const person = state.references[0];
-        const frame = generationSize();
-        spec.width = frame.w;
-        spec.height = frame.h;
-        spec.image = await uploadCanvas(scaleCanvas(person.canvas, frame.w, frame.h), "ref.png");
+        const budget = generationSize();
+        const fitted = fitRegionCanvas(person.canvas, budget.w, budget.h);
+        spec.width = fitted.frame.w;
+        spec.height = fitted.frame.h;
+        spec.image = await uploadCanvas(fitted.canvas, jobName("ref", 0));
         spec.references = [];
         spec.has_mask = false;
         spec.krea.task = "identity";
         spec.krea.ref_position = "aligned (trained)";
         spec.krea.ref_position_a = "aligned (trained)";
-        spec.krea.grounding_px = Number(spec.krea.grounding_px) || 1024;
+        keepGrounding(spec);
       } else {
         const source = usesSource();
         const expand = source && state.pipeline === "edit" ? state.area.context : (editor.maskArea() > 8 ? state.area.context : 0);
         crop = source ? editor.cropOf(expand) : null;
         spec.has_mask = !!(crop && editor.maskArea() > 8);
         if (crop) {
-          const scaled = scaleCanvas(crop.canvas, spec.width, spec.height);
-          const scaledMask = scaleCanvas(crop.mask, spec.width, spec.height);
-          spec.image = await uploadCanvas(scaled, "crop.png");
-          if (spec.has_mask || state.pipeline === "edit") spec.mask = await uploadCanvas(scaledMask, "mask.png");
+          regionFit = fitRegionCanvas(crop.canvas, spec.width, spec.height);
+          const maskFit = fitRegionCanvas(crop.mask, spec.width, spec.height);
+          spec.width = regionFit.frame.w;
+          spec.height = regionFit.frame.h;
+          spec.image = await uploadCanvas(regionFit.canvas, jobName("crop"));
+          if (spec.has_mask || state.pipeline === "edit") spec.mask = await uploadCanvas(maskFit.canvas, jobName("mask"));
         }
         const refs = [];
         if (state.pipeline === "edit" && !(kreaOn && task === "general")) {
           const list = kreaOn && task === "identity" ? state.references.slice(0, 1) : state.references;
-          for (const ref of list) refs.push(await uploadCanvas(ref.canvas, "ref.png"));
+          for (let i = 0; i < list.length; i++) refs.push(await uploadCanvas(list[i].canvas, jobName("ref", i)));
         }
         spec.references = refs;
         if (kreaOn && task === "general") {
           spec.krea.task = "general";
           spec.krea.ref_position = "aligned (trained)";
           spec.krea.ref_position_a = "aligned (trained)";
-          spec.krea.grounding_px = Number(spec.krea.grounding_px) || 768;
+          keepGrounding(spec);
         } else if (kreaOn && task === "identity") {
           spec.krea.task = "identity";
           spec.krea.ref_position = "beside (right of target)";
           spec.krea.ref_position_a = "aligned (trained)";
-          spec.krea.grounding_px = Number(spec.krea.grounding_px) || 1024;
+          keepGrounding(spec);
         }
       }
       const built = await api("/zeroimagestudio/build_workflow", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(spec) });
@@ -2620,10 +2815,14 @@
       const meta = generationMeta(spec, built.final_prompt);
       await rememberGallery(blob, meta);
       let pasted = blob;
+      if (crop && regionFit) {
+        const framed = await loadImage(URL.createObjectURL(blob));
+        pasted = await canvasBlob(cropFrameContent(framed, regionFit, crop.canvas.width, crop.canvas.height));
+      }
       if (crop) {
         try {
           const fd = new FormData();
-          fd.append("result", blob, "result.png");
+          fd.append("result", pasted, "result.png");
           fd.append("original", await canvasBlob(crop.canvas), "original.png");
           fd.append("mask", await canvasBlob(crop.mask), "mask.png");
           fd.append("mode", state.area.paste);
@@ -2634,7 +2833,7 @@
           pasted = await res.blob();
         } catch (err) {
           toast("Poisson на сервере не вышел, вклейка растушёвкой. " + err.message);
-          pasted = await localFeather(blob, crop);
+          pasted = await localFeather(pasted, crop);
         }
       }
       const img = await loadImage(URL.createObjectURL(pasted));
@@ -2706,6 +2905,7 @@
     fd.append("meta", JSON.stringify(meta));
     const saved = await api("/zeroimagestudio/gallery", { method: "POST", body: fd });
     state.gallery.unshift({ id: saved.id, file: saved.file, meta: saved.meta });
+    state.galleryTotal = (Number(state.galleryTotal) || 0) + 1;
   }
 
   async function localFeather(blob, crop) {
@@ -2730,7 +2930,7 @@
     return new Promise((resolve) => {
       const back = document.createElement("div");
       back.className = "modal-back";
-      back.innerHTML = `<div class="modal"><h3>Выберите вариант</h3><div class="gal" style="grid-template-columns:repeat(${Math.min(4, urls.length)},1fr)">${urls.map((u, i) => `<button class="g" data-i="${i}"><img src="${u}"></button>`).join("")}</div></div>`;
+      back.innerHTML = `<div class="modal"><h3>Выберите вариант</h3><div class="gal" style="grid-template-columns:repeat(${Math.min(4, urls.length)},1fr)">${urls.map((u, i) => `<button class="g" data-i="${i}"><img src="${escapeHtml(u)}" alt=""></button>`).join("")}</div></div>`;
       back.addEventListener("click", (e) => {
         const b = e.target.closest("[data-i]");
         if (!b) return;
@@ -2792,6 +2992,7 @@
     g.putImageData(data, 0, 0);
     editor.maskCtx.clearRect(0, 0, editor.doc.w, editor.doc.h);
     editor.maskCtx.drawImage(tmp, layer.x, layer.y);
+    editor.touchMask();
     editor.requestDraw();
     renderInspector();
     toast("Маска взята из непрозрачности слоя.");
@@ -2851,9 +3052,38 @@
     return saved.id;
   }
 
+  function projectFileUrl(projectId, file) {
+    const parts = U.normalizeSlashes(String(file || "")).split("/").filter(Boolean).map((part) => encodeURIComponent(part));
+    return "/zeroimagestudio/project/" + encodeURIComponent(projectId) + "/file/" + parts.join("/");
+  }
+
+  function sanitizeLoadedState() {
+    state.projectName = String(state.projectName || "Проект").slice(0, 200);
+    state.prompt = String(state.prompt ?? "");
+    state.negative = String(state.negative ?? "");
+    const sampler = state.sampler || {};
+    sampler.seed = U.finiteNumber(sampler.seed, 0);
+    sampler.steps = U.finiteNumber(sampler.steps, 20);
+    sampler.cfg = U.finiteNumber(sampler.cfg, 7);
+    sampler.denoise = U.finiteNumber(sampler.denoise, 1);
+    sampler.batch = U.finiteNumber(sampler.batch, 1);
+    state.sampler = sampler;
+    for (const key of ["create", "edit"]) {
+      const pipe = state[key];
+      if (!pipe || typeof pipe !== "object") continue;
+      if (pipe.krea && typeof pipe.krea === "object") {
+        const fallback = pipe.krea.task === "identity" ? 1024 : 768;
+        if (pipe.krea.grounding_px != null && pipe.krea.grounding_px !== "") pipe.krea.grounding_px = U.finiteNumber(pipe.krea.grounding_px, fallback);
+      }
+      if (pipe.qwen_resolution != null && pipe.qwen_resolution !== "") pipe.qwen_resolution = U.finiteNumber(pipe.qwen_resolution, 0);
+      if (pipe.inpaint_grow != null && pipe.inpaint_grow !== "") pipe.inpaint_grow = U.finiteNumber(pipe.inpaint_grow, 6);
+    }
+  }
+
   async function loadProject(id) {
-    const data = await api("/zeroimagestudio/project/" + id);
+    const data = await api("/zeroimagestudio/project/" + encodeURIComponent(id));
     const meta = data.meta || {};
+    editor.clearHistory();
     state.projectId = id;
     if (meta.state) Object.assign(state, {
       projectName: meta.state.projectName || meta.name || state.projectName,
@@ -2872,36 +3102,53 @@
     state.hintId = canonicalHintId(state.hintId);
     state.hintByMode[state.pipeline] = state.hintId;
     if (Array.isArray(state.promptPresets)) state.promptPresets = state.promptPresets.map((p, i) => normalizePreset(p, i));
+    sanitizeLoadedState();
     editor.doc = meta.canvas || editor.doc;
     editor.gen = meta.gen || editor.gen;
     editor.resizeMask();
     editor.layers = [];
     for (const layer of meta.layers || []) {
-      const img = await loadImage(`/zeroimagestudio/project/${id}/file/${layer.file}`);
+      const img = await loadImage(projectFileUrl(id, layer.file));
       const c = document.createElement("canvas");
       c.width = img.width; c.height = img.height;
       c.getContext("2d").drawImage(img, 0, 0);
-      const obj = editor.makeLayer(layer.name, c);
-      Object.assign(obj, { id: layer.id, x: layer.x || 0, y: layer.y || 0, visible: layer.visible !== false, opacity: layer.opacity ?? 1, blend: layer.blend || "normal", locked: !!layer.locked, meta: layer.meta || null });
+      const obj = editor.makeLayer(String(layer.name || "Слой").slice(0, 200), c);
+      Object.assign(obj, {
+        id: U.safeId(layer.id, "l" + editor.layers.length),
+        x: U.finiteNumber(layer.x, 0),
+        y: U.finiteNumber(layer.y, 0),
+        visible: layer.visible !== false,
+        opacity: U.finiteNumber(layer.opacity, 1),
+        blend: layer.blend || "normal",
+        locked: !!layer.locked,
+        meta: layer.meta || null,
+      });
       editor.thumb(obj);
       editor.layers.push(obj);
     }
     if (meta.mask) {
       try {
-        const img = await loadImage(`/zeroimagestudio/project/${id}/file/${meta.mask}`);
+        const img = await loadImage(projectFileUrl(id, meta.mask));
         editor.maskCtx.clearRect(0, 0, editor.doc.w, editor.doc.h);
         editor.maskCtx.drawImage(img, 0, 0);
       } catch { /* no mask */ }
     }
     state.references = [];
     for (const ref of meta.references || []) {
-      const img = await loadImage(`/zeroimagestudio/project/${id}/file/${ref.file}`);
+      const img = await loadImage(projectFileUrl(id, ref.file));
       const c = document.createElement("canvas");
       c.width = img.width; c.height = img.height;
       c.getContext("2d").drawImage(img, 0, 0);
-      state.references.push({ id: ref.id, name: ref.name, canvas: c, url: c.toDataURL("image/png") });
+      state.references.push({
+        id: U.safeId(ref.id, "r" + state.references.length),
+        name: String(ref.name || "Реф").slice(0, 200),
+        canvas: c,
+        url: c.toDataURL("image/png"),
+      });
     }
     editor.active = Math.max(0, editor.layers.length - 1);
+    editor.clearHistory();
+    editor.touchMask();
     if (!state.area.userPlaced) syncDefaultArea();
     editor.fit();
     state.dirty = false;
@@ -3295,6 +3542,7 @@
   }
 
   async function collapseZeroImageStudio() {
+    let skipSave = false;
     if (state.dirty) {
       const choice = await new Promise((resolve) => {
         const back = document.createElement("div");
@@ -3315,10 +3563,12 @@
       if (choice === "cancel") return;
       if (choice === "save") {
         try { await saveProject(); } catch (err) { toast(err.message || String(err)); return; }
+      } else if (choice === "drop") {
+        skipSave = true;
       }
     }
     try {
-      const id = await saveProject();
+      const id = skipSave ? (state.projectId || "") : await saveProject();
       const flat = editor.flatten();
       const mask = editor.exportMask();
       const fd = new FormData();
@@ -3341,6 +3591,8 @@
       } else {
         toast("Сведено в " + saved.image + ". Откройте ZeroImageStudio из ноды, чтобы вернуть кадр в граф.");
       }
+      state.collapsed = true;
+      syncStudioPause();
     } catch (err) {
       toast(err.message || String(err));
     }
@@ -3436,7 +3688,7 @@
       return;
     }
     if (mode === "seed") {
-      if (m.seed != null) state.sampler.seed = m.seed;
+      if (m.seed != null) state.sampler.seed = U.finiteNumber(m.seed, state.sampler.seed);
       renderSampler();
       return;
     }
@@ -3449,14 +3701,16 @@
   function showPop(it, anchor) {
     const pop = $("pop");
     const m = it.meta || {};
-    const loras = (m.loras || []).map((l) => `${escapeHtml(l.name)} ${l.strength_model}`).join("<br>") || "—";
+    const loras = (m.loras || []).map((l) => `${escapeHtml(l.name)} ${U.finiteNumber(l.strength_model, 0)}`).join("<br>") || "—";
+    const side = m.width && m.height ? (U.finiteNumber(m.width, 0) + "×" + U.finiteNumber(m.height, 0)) : "?";
+    const seed = m.seed == null || m.seed === "" ? "" : U.finiteNumber(m.seed, 0);
     pop.hidden = false;
     pop.innerHTML = `
-      <div class="row" style="padding:8px 10px;border-bottom:1px solid #3a404c"><b>${escapeHtml(m.model_label || "Генерация")}</b><span class="mu mono" style="margin-left:auto;font-size:10.5px">${m.width || "?"}²</span></div>
+      <div class="row" style="padding:8px 10px;border-bottom:1px solid #3a404c"><b>${escapeHtml(m.model_label || "Генерация")}</b><span class="mu mono" style="margin-left:auto;font-size:10.5px">${side}</span></div>
       <div style="padding:8px 10px"><table>
         <tr><td>Модель</td><td>${escapeHtml(m.model_label || m.unet || m.checkpoint || "")}</td></tr>
-        <tr><td>Seed</td><td class="mono">${m.seed ?? ""}</td></tr>
-        <tr><td>Сэмплер</td><td class="mono">${escapeHtml(m.sampler || "")}/${escapeHtml(m.scheduler || "")} · ${m.steps} · CFG ${m.cfg}</td></tr>
+        <tr><td>Seed</td><td class="mono">${seed}</td></tr>
+        <tr><td>Сэмплер</td><td class="mono">${escapeHtml(m.sampler || "")}/${escapeHtml(m.scheduler || "")} · ${U.finiteNumber(m.steps, 0)} · CFG ${U.finiteNumber(m.cfg, 0)}</td></tr>
         <tr><td>LoRA</td><td class="mono">${loras}</td></tr>
         <tr><td>Промт</td><td>${escapeHtml((m.final_prompt || m.prompt || "").slice(0, 180))}</td></tr>
       </table>
@@ -3521,15 +3775,17 @@
 
   function openSettings() {
     const s = state.settings || {};
+    const civPlaceholder = s.has_civitai_token ? "сохранён — введите новый, чтобы заменить" : "";
+    const keyPlaceholder = s.has_llm_key ? "сохранён — введите новый, чтобы заменить" : "";
     openModal(`<h3>Настройки</h3>
       <div class="mu">Civitai API key (необязательно, для скрытых моделей)</div>
-      <input id="set-civ" type="password" value="${escapeHtml(s.civitai_token || "")}">
+      <input id="set-civ" type="password" value="" placeholder="${escapeHtml(civPlaceholder)}" autocomplete="new-password">
       <div class="mu">LLM, OpenAI-совместимый адрес (Ollama, llama.cpp, LM Studio). Пример: http://127.0.0.1:11434/v1</div>
       <input id="set-base" type="text" value="${escapeHtml(s.llm_base || "")}">
       <div class="mu">Имя модели</div>
       <input id="set-model" type="text" value="${escapeHtml(s.llm_model || "")}" placeholder="qwen2.5:7b">
       <div class="mu">Ключ, если сервер его требует</div>
-      <input id="set-key" type="password" value="${escapeHtml(s.llm_key || "")}">
+      <input id="set-key" type="password" value="" placeholder="${escapeHtml(keyPlaceholder)}" autocomplete="new-password">
       <div class="row" style="flex-wrap:wrap">
         <button type="button" class="b" id="set-focus">Открыть в графе ComfyUI</button>
         <button type="button" class="b" id="set-layout">Сбросить раскладку</button>
@@ -3579,7 +3835,7 @@
   function fillLlmPresets() {
     const sel = $("llm-preset");
     const items = (state.settings && state.settings.llm_presets) || [];
-    sel.innerHTML = `<option value="">Режим: текущий</option>` + items.map((p) => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join("");
+    sel.innerHTML = `<option value="">Режим: текущий</option>` + items.map((p) => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)}</option>`).join("");
   }
 
   function openCanvasSize() {
@@ -3632,10 +3888,10 @@
     if (!host) return;
     host.innerHTML = `<div class="preset-cols">
       <div><b>Пресеты генерации</b><div class="mu">Модель, LoRA, сэмплер, область. Холст не входит.</div>
-        ${state.presets.map((p) => `<div class="row" style="margin-top:6px"><button class="b" data-load-preset="${p.id}">${escapeHtml(p.name)}</button><button class="b s" data-del-preset="${p.id}">удалить</button></div>`).join("") || `<div class="empty">Пока пусто. «Сохранить как» в шапке.</div>`}
+        ${state.presets.map((p) => `<div class="row" style="margin-top:6px"><button class="b" data-load-preset="${escapeHtml(p.id)}">${escapeHtml(p.name)}</button><button class="b s" data-del-preset="${escapeHtml(p.id)}">удалить</button></div>`).join("") || `<div class="empty">Пока пусто. «Сохранить как» в шапке.</div>`}
       </div>
       <div><b>Пресеты промта</b><div class="mu">Вставляются до или после текста только в момент генерации.</div>
-        ${state.promptPresets.map((p) => `<div class="row" style="margin-top:6px"><span class="tag">${p.position === "after" ? "ПОСЛЕ" : "ДО"}</span><input class="f" style="flex:1" data-pp-name="${p.id}" value="${escapeHtml(p.name)}"><button class="b s" data-pp-del="${p.id}">×</button></div><textarea class="f" style="height:48px;width:100%;margin-top:4px" data-pp-text="${p.id}">${escapeHtml(p.text)}</textarea>`).join("")}
+        ${state.promptPresets.map((p) => `<div class="row" style="margin-top:6px"><span class="tag">${p.position === "after" ? "ПОСЛЕ" : "ДО"}</span><input class="f" style="flex:1" data-pp-name="${escapeHtml(p.id)}" value="${escapeHtml(p.name)}"><button class="b s" data-pp-del="${escapeHtml(p.id)}">×</button></div><textarea class="f" style="height:48px;width:100%;margin-top:4px" data-pp-text="${escapeHtml(p.id)}">${escapeHtml(p.text)}</textarea>`).join("")}
       </div></div>`;
   }
 
@@ -3763,6 +4019,7 @@
     if ($("negative")) $("negative").value = "";
     fitPromptField();
     newCanvas(1024, 1024);
+    editor.clearHistory();
     state.dirty = false;
     $("project-name").value = state.projectName;
     $("project-sub").textContent = "новый проект";
@@ -3988,7 +4245,7 @@
       e.returnValue = "";
     });
     setInterval(() => {
-      if (!state.dirty || state.running) return;
+      if (state.studioPaused || !state.dirty || state.running) return;
       saveProject({ auto: true }).catch(() => {});
     }, 3 * 60 * 1000);
     const brushSize = $("brush-size");
@@ -4358,6 +4615,7 @@
       if (!p) return;
       if (e.target.dataset.ppName) p.name = e.target.value;
       if (e.target.dataset.ppText) p.text = e.target.value;
+      persistPreset(p);
       renderChips();
     });
     $("preset-page").addEventListener("click", async (e) => {
@@ -4366,11 +4624,19 @@
       const pp = e.target.closest("[data-pp-del]");
       if (load) applyPreset(state.presets.find((p) => p.id === load.dataset.loadPreset));
       if (del) {
-        await api("/zeroimagestudio/collection/presets/" + del.dataset.delPreset, { method: "DELETE" });
+        await api("/zeroimagestudio/collection/presets/" + encodeURIComponent(del.dataset.delPreset), { method: "DELETE" });
         state.presets = state.presets.filter((p) => p.id !== del.dataset.delPreset);
         renderPresetSelect(); renderPresetPage();
       }
-      if (pp) { state.promptPresets = state.promptPresets.filter((p) => p.id !== pp.dataset.ppDel); renderChips(); renderPresetPage(); }
+      if (pp) {
+        const id = pp.dataset.ppDel;
+        try {
+          await api("/zeroimagestudio/collection/prompt_presets/" + encodeURIComponent(id), { method: "DELETE" });
+        } catch (err) { toast(err.message || String(err)); return; }
+        state.promptPresets = state.promptPresets.filter((p) => p.id !== id);
+        renderChips();
+        renderPresetPage();
+      }
     });
     window.addEventListener("keydown", (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); generate(); }
@@ -4378,9 +4644,16 @@
         if (menuName) { closeMenus(); return; }
         if (!$("pp-pop").hidden) { closePromptPop(); return; }
         if (document.querySelector(".modal-back")) return;
+        if (typingTarget(e.target)) return;
         collapseZeroImageStudio();
       }
     });
+    document.addEventListener("visibilitychange", () => {
+      if (editor) editor.space = false;
+      syncStudioPause();
+    });
+    const more = $("gal-more");
+    if (more) more.onclick = () => loadMoreGallery().catch((err) => toast(err.message || String(err)));
     window.addEventListener("message", async (ev) => {
       const msg = ev.data || {};
       if (msg.type !== "zeroimagestudio-open") return;
@@ -4390,6 +4663,8 @@
   }
 
   async function applyGraphOpen(msg) {
+    state.collapsed = false;
+    syncStudioPause();
     if (msg.projectId && msg.projectId !== state.projectId) {
       try { await loadProject(msg.projectId); } catch (err) { toast(err.message); }
     }
@@ -4755,7 +5030,7 @@
     try {
       const [hints, models, loras, presets, gallery, settings, promptPresets] = await Promise.all([
         api("/zeroimagestudio/hints"), api("/zeroimagestudio/models"), api("/zeroimagestudio/loras"),
-        api("/zeroimagestudio/collection/presets"), api("/zeroimagestudio/gallery"), api("/zeroimagestudio/settings"),
+        api("/zeroimagestudio/collection/presets"), api("/zeroimagestudio/gallery?offset=0&limit=48"), api("/zeroimagestudio/settings"),
         api("/zeroimagestudio/collection/prompt_presets"),
       ]);
       state.hints = hints.hints || [];
@@ -4763,6 +5038,7 @@
       state.loras = loras.files || [];
       state.presets = presets.items || [];
       state.gallery = gallery.items || [];
+      state.galleryTotal = Number(gallery && gallery.total != null ? gallery.total : state.gallery.length) || 0;
       state.settings = settings;
       const storedPresets = (promptPresets && promptPresets.items) || [];
       if (storedPresets.length) state.promptPresets = storedPresets.map((p, i) => normalizePreset(p, i));
@@ -4805,7 +5081,32 @@
     window.parent.postMessage({ type: "zeroimagestudio-ready" }, "*");
   }
 
+  function syncStudioPause() {
+    state.studioPaused = !!(state.collapsed || document.hidden);
+    if (state.studioPaused && editor) editor.space = false;
+  }
+
+  let galleryLoading = false;
+  async function loadMoreGallery() {
+    if (galleryLoading) return;
+    galleryLoading = true;
+    try {
+      const offset = (state.gallery || []).filter((it) => !it.example).length;
+      const page = await api("/zeroimagestudio/gallery?offset=" + offset + "&limit=" + (state.galleryLimit || 48));
+      const seen = new Set((state.gallery || []).map((it) => it.id));
+      for (const it of page.items || []) if (it && !seen.has(it.id)) state.gallery.push(it);
+      if (page && page.total != null) state.galleryTotal = Number(page.total) || 0;
+      renderGallery();
+    } finally {
+      galleryLoading = false;
+    }
+  }
+
   async function pollStats() {
+    if (state.studioPaused && !state.running) {
+      setTimeout(pollStats, 4000);
+      return;
+    }
     try {
       const [sys, queue] = await Promise.all([api("/system_stats"), api("/queue")]);
       const dev = (sys.devices && sys.devices[0]) || {};

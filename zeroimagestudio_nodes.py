@@ -8,7 +8,10 @@ import numpy as np
 import torch
 from PIL import Image
 
-import zeroimagestudio_storage as store
+try:
+    from . import zeroimagestudio_storage as store
+except ImportError:
+    import zeroimagestudio_storage as store
 
 
 def _list(folder: str) -> list[str]:
@@ -106,11 +109,18 @@ class ZeroImageStudio:
                     mask_img = Image.open(mask_path).convert("L").resize((tensor.shape[2], tensor.shape[1]), Image.Resampling.BILINEAR)
                     mask = torch.from_numpy(np.asarray(mask_img, dtype=np.float32) / 255.0).unsqueeze(0)
                 return (tensor, mask, layers)
+        if zeroimagestudio_image:
+            raise RuntimeError(
+                "ZeroImageStudio не нашёл сведённый кадр "
+                f"«{zeroimagestudio_image}». Сверните редактор в ноду, чтобы записать файл."
+            )
         if image is not None:
             b, h, w, _c = image.shape
             return (image, torch.zeros((b, h, w), dtype=torch.float32, device=image.device), layers)
-        blank = torch.zeros((1, 64, 64, 3), dtype=torch.float32)
-        return (blank, torch.zeros((1, 64, 64), dtype=torch.float32), layers)
+        raise RuntimeError(
+            "ZeroImageStudio ещё не получил кадр. Откройте редактор и сверните его в ноду, "
+            "либо подайте изображение на вход IMAGE."
+        )
 
 
 class ZeroImageStudioModelLoader:

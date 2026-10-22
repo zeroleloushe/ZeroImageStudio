@@ -35,3 +35,12 @@ test("snap rounds to 16 and never below 64", () => {
   assert.equal(size.snapSize(1024), 1024);
   assert.equal(size.snapSize(8), 64);
 });
+
+test("a wide crop keeps its aspect inside the generation budget", () => {
+  const frame = size.frameForRegion(200, 100, 1024, 1024);
+  assert.ok(Math.abs(frame.w / frame.h - 2) < 0.08);
+  const placed = size.containRect(200, 100, frame.w, frame.h);
+  assert.ok(placed.w <= frame.w && placed.h <= frame.h);
+  assert.ok(placed.x >= 0 && placed.y >= 0);
+  assert.ok(placed.w === frame.w || placed.h === frame.h);
+});

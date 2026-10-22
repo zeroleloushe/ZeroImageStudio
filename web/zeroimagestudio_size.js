@@ -30,6 +30,27 @@
     return kind + " → " + frame.w + "×" + frame.h;
   }
 
+  function frameForRegion(srcW, srcH, budgetW, budgetH, step) {
+    const s = Math.max(1, step || 16);
+    const sw = Math.max(1, Number(srcW) || 1);
+    const sh = Math.max(1, Number(srcH) || 1);
+    const budget = Math.max(s * s, (Number(budgetW) || sw) * (Number(budgetH) || sh));
+    const ratio = sw / sh;
+    const h = Math.sqrt(budget / ratio);
+    return { w: snapSize(h * ratio, s), h: snapSize(h, s) };
+  }
+
+  function containRect(srcW, srcH, boxW, boxH) {
+    const sw = Math.max(1, Number(srcW) || 1);
+    const sh = Math.max(1, Number(srcH) || 1);
+    const bw = Math.max(1, Number(boxW) || 1);
+    const bh = Math.max(1, Number(boxH) || 1);
+    const scale = Math.min(bw / sw, bh / sh);
+    const w = Math.max(1, Math.round(sw * scale));
+    const h = Math.max(1, Math.round(sh * scale));
+    return { x: Math.floor((bw - w) / 2), y: Math.floor((bh - h) / 2), w: w, h: h };
+  }
+
   function areaLabelText(gen, doc, area) {
     const frame = generationFrame(doc, area);
     const kind = area && area.userPlaced ? "Область" : "Весь холст";
@@ -38,5 +59,12 @@
     return kind + " " + w + "×" + h + " → " + frame.w + "×" + frame.h;
   }
 
-  return { snapSize: snapSize, generationFrame: generationFrame, areaStatusText: areaStatusText, areaLabelText: areaLabelText };
+  return {
+    snapSize: snapSize,
+    generationFrame: generationFrame,
+    frameForRegion: frameForRegion,
+    containRect: containRect,
+    areaStatusText: areaStatusText,
+    areaLabelText: areaLabelText,
+  };
 });

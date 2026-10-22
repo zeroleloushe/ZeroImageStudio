@@ -1,6 +1,14 @@
 import unittest
 
-from zeroimagestudio_workflows import WorkflowError, assemble_prompt, build_workflow, snap
+from zeroimagestudio_workflows import (
+    WorkflowError,
+    assemble_prompt,
+    build_workflow,
+    describe_pipeline,
+    missing_nodes_message,
+    prompt_requests_removal,
+    snap,
+)
 
 
 def _diff_spec(**extra):
@@ -97,12 +105,30 @@ class WorkflowTests(unittest.TestCase):
 
     def test_create_inpaint(self):
         spec = _diff_spec(image="zeroimagestudio/crop.png", mask="zeroimagestudio/mask.png", has_mask=True, denoise=0.7, latent_mode="standard")
-        prompt, _w, _b = build_workflow(spec)
-        self.assertIn("VAEEncodeForInpaint", classes(prompt))
+        prompt, warnings, _b = build_workflow(spec)
+        self.assertIn("VAEEncode", classes(prompt))
+        self.assertIn("SetLatentNoiseMask", classes(prompt))
+        self.assertNotIn("VAEEncodeForInpaint", classes(prompt))
         self.assertIn("ImageToMask", classes(prompt))
         self.assertNotIn("EmptyLatentImage", classes(prompt))
         sampler = next(n for n in prompt.values() if n["class_type"] == "KSampler")
         self.assertAlmostEqual(sampler["inputs"]["denoise"], 0.7)
+        self.assertFalse(any("denoise 1" in w for w in warnings))
+
+    def test_create_inpaint_full_denoise_grows_mask(self):
+        spec = _diff_spec(
+            image="zeroimagestudio/crop.png",
+            mask="zeroimagestudio/mask.png",
+            has_mask=True,
+            denoise=1,
+            inpaint_grow=0,
+            latent_mode="standard",
+        )
+        prompt, warnings, _b = build_workflow(spec)
+        enc = next(n for n in prompt.values() if n["class_type"] == "VAEEncodeForInpaint")
+        self.assertEqual(enc["inputs"]["grow_mask_by"], 0)
+        self.assertNotIn("SetLatentNoiseMask", classes(prompt))
+        self.assertTrue(any("denoise 1" in w for w in warnings))
 
     def test_create_inpaint_conditioning(self):
         spec = _diff_spec(
@@ -171,11 +197,14 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(built, "edit:krea2_edit")
         self.assertIn("ZeroImageStudioKrea2EditModelPatch", classes(prompt))
         self.assertIn("ZeroImageStudioKrea2EditGroundedEncode", classes(prompt))
-        self.assertEqual(classes(prompt).count("ZeroImageStudioKrea2EditGroundedEncode"), 2)
+        self.assertEqual(classes(prompt).count("ZeroImageStudioKrea2EditGroundedEncode"), 1)
+        self.assertNotIn("VAEEncode", classes(prompt))
         patch = next(n for n in prompt.values() if n["class_type"] == "ZeroImageStudioKrea2EditModelPatch")
         latent = next(nid for nid, n in prompt.items() if n["class_type"] == "EmptySD3LatentImage")
         sampler = next(n for n in prompt.values() if n["class_type"] == "KSampler")
         self.assertEqual(patch["inputs"]["target_latent"], [latent, 0])
+        self.assertEqual(patch["inputs"]["source_latent"], [latent, 0])
+        self.assertNotIn("source_latent_b", patch["inputs"])
         self.assertEqual(sampler["inputs"]["latent_image"], [latent, 0])
         self.assertEqual(patch["inputs"]["fit_mode"], "fit")
         self.assertIn("source_image_b", patch["inputs"])
@@ -226,7 +255,7 @@ class WorkflowTests(unittest.TestCase):
         patch = next(n for n in prompt.values() if n["class_type"] == "ZeroImageStudioKrea2EditModelPatch")
         enc = next(n for n in prompt.values() if n["class_type"] == "ZeroImageStudioKrea2EditGroundedEncode")
         self.assertIn("source_image_b", patch["inputs"])
-        self.assertIn("source_latent_b", patch["inputs"])
+        self.assertNotIn("source_latent_b", patch["inputs"])
         self.assertEqual(patch["inputs"]["ref_position"], "beside (right of target)")
         self.assertEqual(patch["inputs"]["ref_position_a"], "aligned (trained)")
         self.assertEqual(enc["inputs"]["grounding_px"], 1024)
@@ -294,6 +323,88 @@ class WorkflowTests(unittest.TestCase):
     def test_snap(self):
         self.assertEqual(snap(1000, 16), 1008)
         self.assertEqual(snap(8, 64), 64)
+
+    def test_denoise_zero_stays_zero(self):
+        spec = _diff_spec(image="zeroimagestudio/crop.png", has_mask=False, denoise=0)
+        prompt, _, _ = build_workflow(spec)
+        sampler = next(n for n in prompt.values() if n["class_type"] == "KSampler")
+        self.assertEqual(sampler["inputs"]["denoise"], 0.0)
+
+    def test_grounding_fallback_and_explicit_zero(self):
+        general = _diff_spec(
+            pipeline="edit",
+            edit_method="krea2_edit",
+            image="zeroimagestudio/crop.png",
+            krea={"task": "general", "impl": "internal"},
+        )
+        prompt, _, _ = build_workflow(general)
+        enc = next(n for n in prompt.values() if n["class_type"] == "ZeroImageStudioKrea2EditGroundedEncode")
+        self.assertEqual(enc["inputs"]["grounding_px"], 768)
+        general["krea"]["grounding_px"] = 0
+        prompt, _, _ = build_workflow(general)
+        enc = next(n for n in prompt.values() if n["class_type"] == "ZeroImageStudioKrea2EditGroundedEncode")
+        self.assertEqual(enc["inputs"]["grounding_px"], 0)
+        identity = _diff_spec(
+            pipeline="edit",
+            edit_method="krea2_edit",
+            image="zeroimagestudio/crop.png",
+            krea={"task": "identity", "impl": "internal"},
+        )
+        prompt, _, _ = build_workflow(identity)
+        enc = next(n for n in prompt.values() if n["class_type"] == "ZeroImageStudioKrea2EditGroundedEncode")
+        self.assertEqual(enc["inputs"]["grounding_px"], 1024)
+
+    def test_krea_cfg_above_one_grounds_negative(self):
+        spec = _diff_spec(
+            pipeline="edit",
+            edit_method="krea2_edit",
+            image="zeroimagestudio/crop.png",
+            cfg=2.0,
+            krea={"task": "general", "grounding_px": 768, "impl": "internal"},
+        )
+        prompt, _, _ = build_workflow(spec)
+        self.assertEqual(classes(prompt).count("ZeroImageStudioKrea2EditGroundedEncode"), 2)
+        self.assertNotIn("VAEEncode", classes(prompt))
+
+    def test_removal_verb_is_not_a_substring(self):
+        self.assertTrue(prompt_requests_removal("удали лампу"))
+        self.assertTrue(prompt_requests_removal("уберите это"))
+        self.assertFalse(prompt_requests_removal("сотрудник у двери"))
+        self.assertFalse(prompt_requests_removal("убер"))
+        spec = _diff_spec(
+            pipeline="edit",
+            edit_method="krea2_edit",
+            image="zeroimagestudio/crop.png",
+            prompt="сотрудник стоит",
+            krea={"task": "general", "grounding_px": 768, "impl": "internal"},
+        )
+        _prompt, warnings, _built = build_workflow(spec)
+        self.assertFalse(any("Raw" in w for w in warnings))
+
+    def test_qwen_resolution_zero_is_sent(self):
+        spec = _diff_spec(
+            pipeline="edit",
+            edit_method="qwen_image_21",
+            clip_type="qwen_image",
+            image="zeroimagestudio/crop.png",
+            qwen_resolution=0,
+        )
+        prompt, warnings, _built = build_workflow(spec)
+        enc = next(n for n in prompt.values() if n["class_type"] == "TextEncodeQwenImage21")
+        self.assertEqual(enc["inputs"]["resolution"], 0)
+        self.assertFalse(any("16435" in w for w in warnings))
+
+    def test_describe_pipeline_snaps_and_keeps_zero(self):
+        steps = describe_pipeline(_diff_spec(width=1000, height=1000, steps=0, cfg=0), "create")
+        self.assertEqual(steps[0]["text"], "Область 1008×1008")
+        self.assertIn("0 / 0", steps[4]["text"])
+
+    def test_missing_krea_nodes_report_import_error(self):
+        msg = missing_nodes_message(["ZeroImageStudioKrea2EditModelPatch"], "ImportError: no module")
+        self.assertIn("ImportError: no module", msg)
+        self.assertNotIn("Обновите ComfyUI", msg)
+        other = missing_nodes_message(["TextEncodeQwenImage21"], None)
+        self.assertIn("Обновите ComfyUI", other)
 
 
 def enc_id(prompt, node):
