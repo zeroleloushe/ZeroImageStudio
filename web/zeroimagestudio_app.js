@@ -892,6 +892,7 @@
   }
 
   function renderAll() {
+    adoptInstalledWeights();
     renderHints();
     renderFiles();
     renderRefs();
@@ -909,6 +910,7 @@
     renderModelSummary();
     $("prompt").value = state.prompt;
     $("negative").value = state.negative;
+    fitPromptField();
     $("project-name").value = state.projectName;
     document.querySelectorAll("#mode button").forEach((b) => b.classList.toggle("on", b.dataset.pipe === state.pipeline));
     if (window.zeroImageStudioHydrateIcons) window.zeroImageStudioHydrateIcons(document);
@@ -1258,7 +1260,7 @@
       <span>Планировщик</span><select id="scheduler" class="dd">${opt(cat.schedulers, s.scheduler)}</select>
       <span>Батч</span><input id="batch" class="f" value="${s.batch}">
     `;
-    $("gen-batch").textContent = `×${s.batch} · Ctrl+↵`;
+    $("gen-batch").textContent = `×${s.batch}`;
     if (window.zeroImageStudioHydrateIcons) window.zeroImageStudioHydrateIcons($("sampler-box"));
     bindSampler();
   }
@@ -1278,7 +1280,7 @@
     $("seed-mode").onchange = () => { state.sampler.seedMode = $("seed-mode").value; };
     $("sampler").onchange = () => { state.sampler.sampler = $("sampler").value; renderPipe(); };
     $("scheduler").onchange = () => { state.sampler.scheduler = $("scheduler").value; };
-    $("batch").onchange = () => { state.sampler.batch = Math.max(1, Math.min(8, parseInt($("batch").value, 10) || 1)); $("gen-batch").textContent = `×${state.sampler.batch} · Ctrl+↵`; };
+    $("batch").onchange = () => { state.sampler.batch = Math.max(1, Math.min(8, parseInt($("batch").value, 10) || 1)); $("gen-batch").textContent = `×${state.sampler.batch}`; };
     $("btn-seed").onclick = () => { state.sampler.seed = Math.floor(Math.random() * 1e9); $("seed").value = state.sampler.seed; };
   }
 
@@ -1696,8 +1698,8 @@
     const task = kreaTaskId();
     if (host) {
       host.innerHTML = `
-        <button type="button" data-krea-task="general" class="${task === "general" ? "on" : ""}" aria-pressed="${task === "general"}">Правка</button>
-        <button type="button" data-krea-task="identity" class="${task === "identity" ? "on" : ""}" aria-pressed="${task === "identity"}">Персонаж по референсу</button>`;
+        <button type="button" data-krea-task="general" class="${task === "general" ? "on" : ""}" aria-pressed="${task === "general"}" title="Правка — General Edit V2">Правка</button>
+        <button type="button" data-krea-task="identity" class="${task === "identity" ? "on" : ""}" aria-pressed="${task === "identity"}" title="Персонаж по референсу — Identity Edit V2">Персонаж</button>`;
     }
     if (tips) {
       const frame = editor ? generationSize() : { w: 0, h: 0 };
@@ -1711,61 +1713,113 @@
     renderModelWarn();
   }
 
-  function fileIssues() {
-    const issues = [];
+  function slotList(key) {
+    const cat = state.catalog || {};
+    return { unet: cat.unets, clip: cat.clips, vae: cat.vaes, checkpoint: cat.checkpoints }[key] || null;
+  }
+
+  function installedPath(list, name) {
+    if (!name || !list) return "";
+    const want = basenameOf(name);
+    return list.find((n) => basenameOf(n) === want) || "";
+  }
+
+  function shortFolder(folder) {
+    return String(folder || "models/").replace(/^models\//, "");
+  }
+
+  function adoptInstalledWeights() {
     const c = cfg();
     const hint = state.hints.find((h) => h.id === state.hintId);
     const sug = (hint && hint.defaults) || {};
-    const loader = c.loader || "diffusion";
-    if (loader === "checkpoint") {
-      const name = (c.checkpoint || "").trim();
-      if (!name) issues.push({ text: "Загрузчик checkpoint: не выбран файл checkpoint." });
-      else if (state.catalog && state.catalog.checkpoints && !catalogHas(state.catalog.checkpoints, name)) {
-        issues.push({ text: `Не найден checkpoint ${name}.`, file: basenameOf(name) || name, folder: "models/checkpoints/" });
+    const slots = (c.loader || "diffusion") === "checkpoint"
+      ? [["checkpoint", "checkpoints"]]
+      : [["unet", "unets"], ["clip", "clips"], ["vae", "vaes"]];
+    const cat = state.catalog || {};
+    for (const [key, listName] of slots) {
+      const list = cat[listName];
+      if (!list || !list.length) continue;
+      const current = (c[key] || "").trim();
+      if (current && installedPath(list, current)) {
+        c[key] = installedPath(list, current);
+        continue;
       }
+      if (!current) {
+        const hit = installedPath(list, sug[key]);
+        if (hit) c[key] = hit;
+      }
+    }
+  }
+
+  function weightIssue(key, label, folder) {
+    const c = cfg();
+    const hint = state.hints.find((h) => h.id === state.hintId);
+    const sug = (hint && hint.defaults) || {};
+    const list = slotList(key);
+    const name = (c[key] || "").trim();
+    const expected = (name || sug[key] || "").split("/").pop();
+    if (!expected && !name) {
+      return { file: "", folder, detail: `Не выбран ${label}.`, pick: "" };
+    }
+    if (name && (!list || installedPath(list, name))) return null;
+    const known = KNOWN_WEIGHTS[basenameOf(expected)] || null;
+    const onDisk = !!(list && installedPath(list, expected));
+    if (!name && onDisk) {
+      return {
+        file: expected,
+        folder: (known && known.folder) || folder,
+        detail: `${label} есть в каталоге, но не выбран.`,
+        pick: key,
+      };
+    }
+    if (onDisk && name && !installedPath(list, name)) {
+      return {
+        file: name.split("/").pop(),
+        folder: (known && known.folder) || folder,
+        detail: `Не найден файл ${name.split("/").pop()}.`,
+        url: known && known.url,
+      };
+    }
+    return {
+      file: expected,
+      folder: (known && known.folder) || folder,
+      detail: name
+        ? `Не найден файл ${name.split("/").pop()}.`
+        : `Нет файла ${expected}.`,
+      url: known && known.url,
+    };
+  }
+
+  function fileIssues() {
+    const issues = [];
+    const c = cfg();
+    if ((c.loader || "diffusion") === "checkpoint") {
+      const issue = weightIssue("checkpoint", "checkpoint", "models/checkpoints/");
+      if (issue) issues.push(issue);
     } else {
       const slots = [
-        ["unet", "UNET (diffusion-модель)", "models/diffusion_models/", state.catalog && state.catalog.unets],
-        ["clip", "CLIP (текстовый энкодер)", "models/text_encoders/", state.catalog && state.catalog.clips],
-        ["vae", "VAE", "models/vae/", state.catalog && state.catalog.vaes],
+        ["unet", "UNET", "models/diffusion_models/"],
+        ["clip", "CLIP", "models/text_encoders/"],
+        ["vae", "VAE", "models/vae/"],
       ];
-      for (const [key, label, folder, list] of slots) {
-        const name = (c[key] || "").trim();
-        const expected = name || sug[key] || "";
-        const known = KNOWN_WEIGHTS[basenameOf(expected)] || null;
-        if (!name) {
-          issues.push({
-            text: expected
-              ? `Загрузчик diffusion: не выбран ${label}. Ожидается ${expected}.`
-              : `Загрузчик diffusion: не выбран ${label}.`,
-            file: expected,
-            folder: (known && known.folder) || folder,
-            url: known && known.url,
-          });
-        } else if (list && !catalogHas(list, name)) {
-          const base = name.split("/").pop();
-          const hit = KNOWN_WEIGHTS[basenameOf(base)];
-          issues.push({
-            text: `Не найден файл ${base}.`,
-            file: base,
-            folder: (hit && hit.folder) || folder,
-            url: hit && hit.url,
-          });
-        }
+      for (const slot of slots) {
+        const issue = weightIssue(...slot);
+        if (issue) issues.push(issue);
       }
     }
     if (isKreaEdit()) {
       const spec = KREA_TASKS[kreaTaskId()];
       if (!findInstalledLora(spec.file)) {
         issues.unshift({
-          text: `Не найдена LoRA ${spec.file} — без неё редактирование не работает.`,
           file: spec.file,
           folder: "models/loras/",
+          lora: true,
+          detail: `Не найдена LoRA ${spec.file} — без неё редактирование не работает.`,
           url: spec.url,
         });
       }
     }
-    return issues;
+    return issues.filter((issue) => issue.file || issue.detail);
   }
 
   function renderModelWarn() {
@@ -1773,14 +1827,23 @@
     if (!host) return;
     const issues = fileIssues();
     if (!issues.length) { host.innerHTML = ""; return; }
-    const blocks = issues.map((issue) => {
-      const bits = [`<div>${escapeHtml(issue.text)}</div>`];
-      if (issue.file) bits.push(`<div>Файл: <span class="mono">${escapeHtml(issue.file)}</span></div>`);
-      if (issue.folder) bits.push(`<div>Папка: <span class="mono">ComfyUI/${escapeHtml(issue.folder)}</span></div>`);
-      if (issue.url) bits.push(`<a class="b s" href="${escapeHtml(issue.url)}" target="_blank" rel="noopener">Скачать</a>`);
-      return `<div class="banner">${bits.join("")}</div>`;
+    const lines = issues.map((issue) => {
+      const action = issue.pick
+        ? `<button type="button" class="dl" data-pick-file="${escapeHtml(issue.pick)}">Выбрать</button>`
+        : (issue.url ? `<a class="dl" href="${escapeHtml(issue.url)}" target="_blank" rel="noopener">Скачать</a>` : "");
+      return `<div class="miss-line${issue.lora ? " lora" : ""}">
+        <span class="nm" title="${escapeHtml(issue.file)}">${escapeHtml(issue.file || "файл")}</span>
+        <span class="dir">${escapeHtml(shortFolder(issue.folder))}</span>
+        ${action}
+      </div>`;
     }).join("");
-    host.innerHTML = blocks + `<div class="row"><button type="button" class="b s" data-rescan="1">Проверить снова</button></div>`;
+    const details = issues.map((issue) => `<div>${escapeHtml(issue.detail)} Папка ComfyUI/${escapeHtml(issue.folder || "models/")}.</div>`).join("");
+    host.innerHTML = `<div class="miss-card">
+      <div class="miss-head">Не хватает файлов: ${issues.length}</div>
+      ${lines}
+      <details class="miss-more"><summary>Подробнее</summary>${details}</details>
+      <button type="button" class="b s" data-rescan="1">Проверить снова</button>
+    </div>`;
   }
 
   async function rescanModels() {
@@ -1791,6 +1854,7 @@
       ]);
       state.catalog = models;
       state.loras = loras.files || [];
+      adoptInstalledWeights();
       syncKreaStack();
       renderFiles();
       renderKreaChrome();
@@ -1813,7 +1877,7 @@
         else if (scene && !state.references.length) reasons.push("Для «Персонаж по референсу» добавьте фото человека в Референсы.");
       } else if (!scene) reasons.push("В правке нет изображения. Откройте фото.");
     }
-    reasons.push(...fileIssues().map((issue) => issue.text));
+    reasons.push(...fileIssues().map((issue) => issue.detail || issue.file));
     return reasons.join(" ");
   }
 
@@ -1969,12 +2033,71 @@
     }
   }
 
+  const PROMPT_MODE_KEY = "zeroimagestudio.promptMode";
+
+  function fitPromptField() {
+    const el = $("prompt");
+    const node = $("prompt-node");
+    if (!el || !node) return;
+    if (node.dataset.prompt === "full") {
+      el.style.height = "";
+      el.style.overflowY = "";
+      return;
+    }
+    const cs = getComputedStyle(el);
+    const line = parseFloat(cs.lineHeight) || 18;
+    const pad = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
+    const border = (parseFloat(cs.borderTopWidth) || 0) + (parseFloat(cs.borderBottomWidth) || 0);
+    const min = Math.ceil(line * 2 + pad + border);
+    const max = Math.ceil(line * 4 + pad + border);
+    el.style.height = "0px";
+    const need = el.scrollHeight + border;
+    const next = Math.min(max, Math.max(min, need));
+    el.style.height = next + "px";
+    el.style.overflowY = need > max + 1 ? "auto" : "hidden";
+  }
+
+  function setPromptMode(mode, persist) {
+    const node = $("prompt-node");
+    if (!node) return;
+    const full = mode === "full";
+    node.dataset.prompt = full ? "full" : "compact";
+    const btn = $("prompt-fold");
+    const slot = $("prompt-fold-slot");
+    if (btn) {
+      btn.title = full ? "Свернуть промт" : "Развернуть: негатив, стили, LLM";
+      btn.setAttribute("aria-expanded", full ? "true" : "false");
+      if (full && slot) slot.appendChild(btn);
+      else if (!full && $("prompt")) $("prompt").insertAdjacentElement("afterend", btn);
+    }
+    fitPromptField();
+    if (persist) {
+      try { localStorage.setItem(PROMPT_MODE_KEY, node.dataset.prompt); } catch (err) { /* private mode */ }
+    }
+    requestAnimationFrame(() => {
+      renderChips();
+      fitPromptField();
+      if (editor) editor.resizeView();
+    });
+  }
+
   function renderChips() {
     const active = activeOrdered();
     const count = $("pp-count");
     if (count) count.textContent = String(active.length);
     const host = $("pp-chips");
     if (!host) { updateFinal(); return; }
+    const node = $("prompt-node");
+    const compact = !node || node.dataset.prompt !== "full";
+    const slot = $("pp-compact");
+    const bar = document.querySelector("#prompt-presets .pp-bar");
+    if (compact && slot) {
+      if (host.parentElement !== slot) slot.appendChild(host);
+      slot.hidden = active.length === 0;
+    } else if (bar && host.parentElement !== bar) {
+      bar.appendChild(host);
+      if (slot) slot.hidden = true;
+    }
     host.replaceChildren();
     const make = (p) => {
       const chip = document.createElement("button");
@@ -2020,6 +2143,7 @@
         }
       }
     }
+    if (compact && slot) slot.hidden = !host.querySelector(".pp-chip, .pp-more");
     updateFinal();
     if (!$("pp-pop").hidden) renderPromptMenu();
   }
@@ -2240,7 +2364,7 @@
         const name = asset.name || "Изображение";
         const badges = (asset.roles || []).map((role) => {
           const ref = role === "reference";
-          return `<span class="asset-badge${ref ? " ref" : ""}">${ref ? "Референс" : "Холст"}</span>`;
+          return `<span class="asset-badge${ref ? " ref" : ""}" title="${ref ? "Референс" : "Холст"}">${ref ? "Реф" : "Холст"}</span>`;
         }).join("");
         return `<div class="g asset-tile" draggable="true" data-asset="${id}" title="${escapeHtml(name + " · " + meta)}">
           <img src="/zeroimagestudio/assets/${encodeURIComponent(asset.id)}/thumb" alt="">
@@ -3317,6 +3441,7 @@
     if (cat.clips) target.clip = resolveInstalled(cat.clips, target.clip);
     if (cat.vaes) target.vae = resolveInstalled(cat.vaes, target.vae);
     if (cat.checkpoints) target.checkpoint = resolveInstalled(cat.checkpoints, target.checkpoint);
+    adoptInstalledWeights();
     renderAll();
   }
 
@@ -3610,7 +3735,7 @@
     const hidden = (state.layout && state.layout.hidden) || {};
     host.innerHTML = Object.entries(PANEL_LABELS).map(([id, name]) => {
       const on = !hidden[id];
-      return `<button type="button" role="menuitemcheckbox" aria-checked="${on ? "true" : "false"}" data-act="panel" data-panel="${id}">${on ? "✓ " : ""}${name}</button>`;
+      return `<button type="button" role="menuitemcheckbox" aria-checked="${on ? "true" : "false"}" data-act="panel" data-toggle="${id}">${on ? "✓ " : ""}${name}</button>`;
     }).join("");
   }
 
@@ -3662,7 +3787,7 @@
     renderViewPanels();
     if (menuName === "view") {
       const items = menuItems();
-      const at = items.findIndex((el) => el.dataset.panel === id);
+      const at = items.findIndex((el) => el.dataset.toggle === id);
       if (at >= 0) menuIndex = at;
       paintMenuIndex();
     }
@@ -3676,6 +3801,7 @@
     state.negative = "";
     if ($("prompt")) $("prompt").value = "";
     if ($("negative")) $("negative").value = "";
+    fitPromptField();
     newCanvas(1024, 1024);
     state.dirty = false;
     $("project-name").value = state.projectName;
@@ -3726,7 +3852,7 @@
     else if (act === "settings") openSettings();
     else if (act === "focus-graph") focusGraph();
     else if (act === "help") toggleHelp(true);
-    else if (act === "panel") toggleHiddenPanel(item.dataset.panel);
+    else if (act === "panel") toggleHiddenPanel(item.dataset.toggle);
   }
 
   function typingTarget(target) {
@@ -3816,11 +3942,26 @@
     model.addEventListener("click", (e) => {
       const task = e.target.closest("[data-krea-task]");
       if (task) { setKreaTask(task.dataset.kreaTask); return; }
+      const pick = e.target.closest("[data-pick-file]");
+      if (pick) {
+        const key = pick.dataset.pickFile;
+        const hint = state.hints.find((h) => h.id === state.hintId);
+        const expected = hint && hint.defaults ? hint.defaults[key] : "";
+        const hit = installedPath(slotList(key), expected);
+        if (hit) cfg()[key] = hit;
+        renderFiles();
+        renderModelWarn();
+        updateGenerateButton();
+        return;
+      }
       if (e.target.closest("[data-rescan]")) rescanModels();
     });
   }
 
   function bindStatic() {
+    let storedPrompt = "compact";
+    try { storedPrompt = localStorage.getItem(PROMPT_MODE_KEY) === "full" ? "full" : "compact"; } catch (err) { /* private mode */ }
+    setPromptMode(storedPrompt, false);
     document.querySelectorAll(".tabs button").forEach((b) => b.onclick = () => {
       document.querySelectorAll(".tabs button").forEach((x) => x.classList.toggle("on", x === b));
       document.body.dataset.tab = b.dataset.tab;
@@ -3857,7 +3998,8 @@
     $("graph-options").addEventListener("change", onFileChange);
     $("tools").onclick = (e) => { const b = e.target.closest("[data-tool]"); if (b) setTool(b.dataset.tool); };
     $("swatch").oninput = () => { state.color = $("swatch").value; };
-    $("prompt").oninput = () => { state.prompt = $("prompt").value; state.dirty = true; updateFinal(); updateGenerateButton(); if (isKreaEdit()) renderKreaChrome(); };
+    $("prompt").oninput = () => { state.prompt = $("prompt").value; state.dirty = true; updateFinal(); updateGenerateButton(); fitPromptField(); if (isKreaEdit()) renderKreaChrome(); };
+    $("prompt-fold").onclick = () => setPromptMode($("prompt-node").dataset.prompt === "full" ? "compact" : "full", true);
     $("negative").oninput = () => { state.negative = $("negative").value; };
     $("project-name").onchange = () => { state.projectName = $("project-name").value || "zeroimagestudio"; };
     $("btn-gen").onclick = () => generate();
@@ -3923,7 +4065,11 @@
     };
     $("pp-open").onclick = () => { if ($("pp-pop").hidden) openPromptPop(); else closePromptPop(); };
     $("pp-chips").onclick = (e) => {
-      if (e.target.closest("[data-pp-open]")) { openPromptPop(); return; }
+      if (e.target.closest("[data-pp-open]")) {
+        if ($("prompt-node").dataset.prompt !== "full") setPromptMode("full", true);
+        openPromptPop();
+        return;
+      }
       const off = e.target.closest("[data-pp-off]");
       if (!off) return;
       const p = state.promptPresets.find((x) => x.id === off.dataset.ppOff);
@@ -4328,6 +4474,7 @@
     }
     renderPipe();
     renderModelSummary();
+    renderModelWarn();
     updateGenerateButton();
   }
 
@@ -4478,11 +4625,11 @@
       const host = document.querySelector(".cols > ." + col);
       if (!host) continue;
       for (const id of layout[col]) {
-        const node = document.querySelector(`[data-panel="${id}"]`);
+        const node = document.querySelector(`.node[data-panel="${id}"]`);
         if (node) host.appendChild(node);
       }
     }
-    document.querySelectorAll("[data-panel]").forEach((node) => {
+    document.querySelectorAll(".node[data-panel]").forEach((node) => {
       const id = node.dataset.panel;
       const on = id !== "canvas" && !!layout.collapsed[id];
       const gone = id !== "canvas" && !!(layout.hidden && layout.hidden[id]);
@@ -4494,7 +4641,7 @@
   }
 
   function layoutFromDom() {
-    const read = (sel) => [...document.querySelector(sel).children].filter((n) => n.dataset && n.dataset.panel).map((n) => n.dataset.panel);
+    const read = (sel) => [...document.querySelector(sel).children].filter((n) => n.classList && n.classList.contains("node") && n.dataset && n.dataset.panel).map((n) => n.dataset.panel);
     return normalizeLayout({
       left: read(".cols > .left"),
       center: read(".cols > .center"),

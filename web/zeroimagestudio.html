@@ -189,10 +189,12 @@
       <div class="opts" id="tool-options"></div>
       <div class="stage" id="stage"></div>
     </div>
-    <div class="node" id="prompt-node" data-panel="prompt" style="--c:#e7c27a">
-      <div class="nh"><span class="d"></span>Промт<span class="r" id="token-est">CONDITIONING</span></div>
+    <div class="node" id="prompt-node" data-panel="prompt" data-prompt="compact" style="--c:#e7c27a">
+      <div class="nh"><span class="d"></span><span class="ht">Промт</span><span class="r"><span id="token-est">CONDITIONING</span><span id="prompt-fold-slot"></span></span></div>
       <div class="nb">
-        <textarea id="prompt" class="prompt"></textarea>
+        <textarea id="prompt" class="prompt" rows="2"></textarea>
+        <button type="button" class="prompt-fold" id="prompt-fold" data-i="chev" data-s="16" title="Развернуть: негатив, стили, LLM" aria-expanded="false" aria-controls="prompt-extra"></button>
+        <div id="prompt-extra">
         <input id="negative" class="f" placeholder="Негативный промт" style="width:100%;font-family:inherit">
         <div class="pp-wrap" id="prompt-presets">
           <div class="pp-bar">
@@ -230,9 +232,11 @@
           <select id="llm-preset" class="dd" title="Пресет LLM"></select>
           <button class="b s" id="btn-system" data-i="gear" data-s="12">Системный промт</button>
         </div>
+        </div>
+        <div class="pp-compact" id="pp-compact" hidden></div>
         <div class="progress-line" id="gen-progress" style="display:none"><i></i></div>
         <div class="gen-wrap" id="gen-wrap" title="Сгенерировать (Ctrl+Enter)">
-          <button class="gen" id="btn-gen" type="button" title="Сгенерировать (Ctrl+Enter)"><span data-i="play" data-s="14"></span><span id="gen-label">Сгенерировать</span> <span class="mono" id="gen-batch" style="font-weight:500;font-size:11px;opacity:.75">×1 · Ctrl+↵</span></button>
+          <button class="gen" id="btn-gen" type="button" title="Сгенерировать (Ctrl+Enter)"><span data-i="play" data-s="14"></span><span id="gen-label">Сгенерировать</span> <span class="mono" id="gen-batch" style="font-weight:500;font-size:11px;opacity:.75">×1</span><span class="gen-key mono"> · Ctrl+↵</span></button>
         </div>
       </div>
     </div>
@@ -306,6 +310,13 @@
 <input id="file-layer" type="file" accept="image/*" hidden>
 
 <div id="modal"></div>
+<script>
+try {
+  if (localStorage.getItem("zeroimagestudio.promptMode") === "full") {
+    document.getElementById("prompt-node").dataset.prompt = "full";
+  }
+} catch (e) {}
+</script>
 <script src="zeroimagestudio_size.js"></script>
 <script src="zeroimagestudio_app.js"></script>
 </body>
