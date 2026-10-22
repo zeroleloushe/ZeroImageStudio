@@ -1,9 +1,33 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
 [hidden] { display: none !important; }
 :root {
+  color-scheme: dark;
   --bg: #121418; --p: #1b1e24; --p2: #22262e; --ln: #2c313b; --tx: #d9dde5; --mu: #7d8594;
   --ac: #ff7a1a; --ac2: rgba(255, 122, 26, .14); --bl: #4aa8ff; --gr: #3ddc97; --vi: #b18cff;
+  --sb: #3a404c; --sb-hover: #5c6574;
 }
+html, body { color-scheme: dark; }
+@supports (-moz-appearance: none) {
+  html, body, * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--sb) transparent;
+  }
+}
+*::-webkit-scrollbar { width: 8px; height: 8px; background: transparent; }
+*::-webkit-scrollbar-track,
+*::-webkit-scrollbar-track-piece { background: transparent; }
+*::-webkit-scrollbar-thumb { background: var(--sb); border-radius: 8px; }
+*::-webkit-scrollbar-thumb:hover { background: var(--sb-hover); }
+*::-webkit-scrollbar-thumb:active { background: var(--ac); }
+*::-webkit-scrollbar-button,
+*::-webkit-scrollbar-button:single-button,
+*::-webkit-scrollbar-button:vertical:decrement,
+*::-webkit-scrollbar-button:vertical:increment,
+*::-webkit-scrollbar-button:horizontal:decrement,
+*::-webkit-scrollbar-button:horizontal:increment {
+  display: none; width: 0; height: 0; background: transparent;
+}
+*::-webkit-scrollbar-corner { background: transparent; }
 html, body { height: 100%; }
 body {
   min-width: 1100px;
@@ -79,9 +103,30 @@ select.dd { appearance: none; min-width: 0; max-width: 100%; }
 .node:has(> .sock.l) > .nh { padding-left: 22px; }
 .node:has(> .sock.r) > .nh { padding-right: 22px; }
 .node.collapsed {
-  flex: 0 0 auto !important; height: auto; min-height: 0; overflow: hidden;
+  flex: 0 0 auto !important;
+  height: auto !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  padding: 0 !important;
+  overflow: hidden !important;
 }
-.node.collapsed > :not(.nh):not(.sock) { display: none !important; }
+.node.collapsed > :not(.nh):not(.sock),
+.node.collapsed > :not(.nh):not(.sock) * {
+  display: none !important;
+  height: 0 !important;
+  min-height: 0 !important;
+  max-height: 0 !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border: 0 !important;
+  outline: none !important;
+  overflow: hidden !important;
+  visibility: hidden !important;
+  flex: 0 0 0 !important;
+}
+.left .node.collapsed .nb,
+.right .node.collapsed .nb,
+.center .node.collapsed .nb { overflow: hidden !important; }
 .node.collapsed > .nh { border-bottom: 0; border-radius: 7px; }
 .node.collapsed > .nh .d { background: transparent; box-shadow: inset 0 0 0 2px var(--c); }
 .node.dragging { opacity: .45; }
