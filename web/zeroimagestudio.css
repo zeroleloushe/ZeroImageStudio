@@ -1,4 +1,5 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
+[hidden] { display: none !important; }
 :root {
   --bg: #121418; --p: #1b1e24; --p2: #22262e; --ln: #2c313b; --tx: #d9dde5; --mu: #7d8594;
   --ac: #ff7a1a; --ac2: rgba(255, 122, 26, .14); --bl: #4aa8ff; --gr: #3ddc97; --vi: #b18cff;
@@ -244,7 +245,6 @@ body[data-tab="lora"] .cols > :has([data-panel="lora"]) { width: auto !important
 body[data-tab="gallery"] .cols > :not(:has([data-panel="gallery"])) { display: none; }
 body[data-tab="gallery"] .cols > :has([data-panel="gallery"]) { width: auto !important; flex: 1; max-width: none; }
 body[data-tab="gallery"] .gal { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
-body[data-tab="gallery"] .assets { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
 .left, .right, .center { min-height: 0; min-width: 0; }
 .right .node, .left .node, .center .node { min-width: 0; max-width: 100%; }
 .left { width: 400px; display: flex; flex-direction: column; gap: 8px; flex: none; }
@@ -416,7 +416,7 @@ textarea.prompt { height: 76px; }
 .cols { gap: 8px; }
 .left, .right, .center { gap: 8px; }
 .nb { padding: 10px; gap: 8px; }
-.empty-gal { color: var(--mu); padding: 18px 8px; line-height: 1.45; }
+.empty-gal { color: var(--mu); padding: 18px 8px; line-height: 1.45; grid-column: 1 / -1; }
 .gal-scope, .gal-kind {
   display: flex; gap: 4px; min-width: 0; width: 100%;
   background: #101216; border: 1px solid var(--ln); border-radius: 6px; padding: 3px;
@@ -464,6 +464,13 @@ textarea.prompt { height: 76px; }
 .insp-inline { display: flex; align-items: center; gap: 4px; min-width: 0; }
 .insp-inline select { flex: 1 1 auto; }
 .insp-inline .icon-btn { width: 26px; height: 26px; }
+.insp-res {
+  display: grid; grid-template-columns: 64px minmax(0, 1fr) 72px;
+  gap: 6px 8px; align-items: center; min-width: 0;
+}
+.insp-res > .lbl { color: var(--mu); font-size: 11px; line-height: 26px; }
+.insp-res select.dd, .insp-res .f { height: 26px; width: 100%; min-width: 0; }
+.insp-res .icon-btn { width: 26px; height: 26px; }
 .insp-result { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 12px; color: var(--tx); }
 .insp-adv { border-top: 1px solid var(--ln); padding-top: 6px; }
 .insp-adv summary { cursor: pointer; font-size: 11px; font-weight: 700; color: var(--mu); }
@@ -476,15 +483,32 @@ textarea.prompt { height: 76px; }
 .import-aspects, .import-mps { display: flex; flex-wrap: wrap; gap: 4px; }
 .import-aspects .b.on, .import-mps .b.on,
 .import-aspects .b.on:hover, .import-mps .b.on:hover { background: var(--ac); border-color: var(--ac); color: #111; font-weight: 700; }
-.assets { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
-.asset {
-  display: grid; grid-template-columns: 56px minmax(0, 1fr); gap: 8px; padding: 6px;
-  border: 1px solid var(--ln); border-radius: 6px; background: #16191e; min-width: 0; text-align: left;
+.g.asset-tile { aspect-ratio: 1 / 1; cursor: grab; text-align: left; }
+.asset-badges {
+  position: absolute; left: 4px; top: 4px; z-index: 1; display: flex; flex-wrap: wrap; gap: 2px;
+  max-width: calc(100% - 28px); pointer-events: none;
 }
-.asset img { width: 56px; height: 56px; object-fit: cover; border-radius: 4px; background: #101216; }
-.asset .nm { display: block; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.asset .badges, .asset .acts { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
-.asset .acts .b { height: 22px; }
+.asset-badge {
+  font-size: 9px; font-weight: 700; line-height: 1.2; padding: 2px 4px; border-radius: 3px;
+  background: rgba(16, 18, 22, .86); color: #eef1f6;
+}
+.asset-badge.ref { color: #d8c8ff; }
+.asset-hover {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 1; padding: 4px 5px;
+  font-size: 9px; line-height: 1.25; background: rgba(12, 14, 18, .86); color: #e8edf5;
+  opacity: 0; pointer-events: none;
+}
+.asset-actions {
+  position: absolute; right: 3px; top: 3px; z-index: 2; display: flex; gap: 2px; opacity: 0;
+}
+.g.asset-tile:hover .asset-hover,
+.g.asset-tile:hover .asset-actions,
+.g.asset-tile:focus-within .asset-hover,
+.g.asset-tile:focus-within .asset-actions { opacity: 1; }
+.asset-actions button {
+  width: 20px; height: 20px; padding: 0; border-radius: 4px; border: 1px solid #3a404c;
+  background: rgba(16, 18, 22, .9); color: #eef1f6; display: flex; align-items: center; justify-content: center;
+}
 @media (max-width: 1500px) {
   .canvas-head .btn-label { display: none; }
   .opts input.range { width: 48px; min-width: 40px; }

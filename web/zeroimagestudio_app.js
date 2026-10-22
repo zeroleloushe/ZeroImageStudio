@@ -92,7 +92,7 @@
       el.appendChild(b);
     }
     clearTimeout(toast._t);
-    toast._t = setTimeout(() => { el.hidden = true; }, open ? 9000 : 5200);
+    toast._t = setTimeout(() => { el.hidden = true; el.replaceChildren(); }, open ? 9000 : 5200);
   }
 
   async function api(path, opts) {
@@ -359,9 +359,9 @@
       this.ga.style.height = Math.max(8, g.h * this.zoom) + "px";
       this.ga.style.pointerEvents = state.tool === "genarea" ? "auto" : "none";
       const lab = this.ga.querySelector(".lab");
-      const frame = generationSize();
-      const kind = state.area.userPlaced ? "Область" : "Весь холст";
-      lab.textContent = `${kind} ${Math.round(g.w)}×${Math.round(g.h)} → ${frame.w}×${frame.h}`;
+      generationSize();
+      lab.textContent = window.ZeroImageStudioSize.areaLabelText(g, this.doc, state.area);
+      paintStatus();
       lab.classList.toggle("inside", (this.panY + g.y * this.zoom) < 26);
       const run = $("ga-run");
       if (run) {
@@ -1245,10 +1245,7 @@
     return a || 1;
   }
   function snapSize(n, step = 16, minimum = 64) {
-    const s = Math.max(1, step | 0);
-    let snapped = Math.round(Number(n) / s) * s;
-    if (!Number.isFinite(snapped) || snapped < minimum) snapped = Math.ceil(minimum / s) * s;
-    return snapped;
+    return window.ZeroImageStudioSize.snapSize(n, step, minimum);
   }
   function matchAspect(w, h) {
     if (!w || !h) return "custom";
@@ -1282,15 +1279,11 @@
     return best;
   }
   function generationSize() {
-    if (editor && state.area.outputLinked !== false && !state.area.userPlaced) {
-      state.area.outW = snapSize(editor.doc.w);
-      state.area.outH = snapSize(editor.doc.h);
-    } else {
-      state.area.outW = snapSize(state.area.outW || 64);
-      state.area.outH = snapSize(state.area.outH || 64);
-    }
-    state.area.mp = nearestMp(state.area.outW, state.area.outH);
-    return { w: state.area.outW, h: state.area.outH };
+    const frame = window.ZeroImageStudioSize.generationFrame(editor && editor.doc, state.area);
+    state.area.outW = frame.w;
+    state.area.outH = frame.h;
+    state.area.mp = nearestMp(frame.w, frame.h);
+    return frame;
   }
   function sizeForAspectMp(aspect, mp) {
     const hit = ASPECTS.find((a) => a[0] === aspect) || ASPECTS[0];
@@ -1417,17 +1410,13 @@
         </section>
         <section class="insp-sec">
           <div class="insp-h">Разрешение генерации</div>
-          <div class="insp-grid">
+          <div class="insp-res">
             <span class="lbl">Аспект</span>
-            <div class="insp-span insp-inline">
-              <select id="g-aspect" class="dd" aria-label="Соотношение сторон">${aspectOpts}</select>
-              <button type="button" class="b s icon-btn" id="g-swap" title="Портрет или альбом">⇄</button>
-            </div>
+            <select id="g-aspect" class="dd" aria-label="Соотношение сторон">${aspectOpts}</select>
+            <button type="button" class="b s icon-btn" id="g-swap" title="Портрет или альбом">⇄</button>
             <span class="lbl">МП</span>
-            <div class="insp-span insp-inline">
-              <select id="g-mp" class="dd" aria-label="Мегапиксели">${mpOpts}</select>
-              <input id="g-mp-custom" class="f" inputmode="decimal" aria-label="Своё значение в мегапикселях" value="${customMp}" ${mpOn == null ? "" : "hidden"} style="width:72px;flex:0 0 72px">
-            </div>
+            <select id="g-mp" class="dd" aria-label="Мегапиксели">${mpOpts}</select>
+            <span class="insp-mp-slot" id="g-mp-slot">${mpOn == null ? `<input id="g-mp-custom" class="f" inputmode="decimal" aria-label="Своё значение в мегапикселях" value="${customMp}">` : ""}</span>
           </div>
           <div class="insp-result">${frame.w}×${frame.h} · ${exact} МП</div>
         </section>
@@ -1456,8 +1445,19 @@
     num("gh", (v) => { editor.gen.h = Math.max(16, v || 16); });
     const currentMp = () => {
       const sel = $("g-mp");
-      if (sel && sel.value === "custom") return Math.max(0.25, parseFloat($("g-mp-custom").value) || 1);
+      const custom = $("g-mp-custom");
+      if (sel && sel.value === "custom" && custom) return Math.max(0.25, parseFloat(custom.value) || 1);
       return parseFloat(sel && sel.value) || nearestMp(frame.w, frame.h);
+    };
+    const bindCustomMp = () => {
+      const input = $("g-mp-custom");
+      if (!input) return;
+      input.onchange = () => {
+        const ratio = frame.w / frame.h || 1;
+        const pixels = Math.max(0.25, parseFloat(input.value) || 1) * 1e6;
+        const h = Math.sqrt(pixels / ratio);
+        applyOutputSize(snapSize(h * ratio), snapSize(h));
+      };
     };
     $("g-aspect").onchange = () => {
       const name = $("g-aspect").value;
@@ -1469,8 +1469,13 @@
     };
     $("g-mp").onchange = () => {
       if ($("g-mp").value === "custom") {
-        $("g-mp-custom").hidden = false;
-        $("g-mp-custom").focus();
+        const slot = $("g-mp-slot");
+        if (slot && !$("g-mp-custom")) {
+          slot.innerHTML = `<input id="g-mp-custom" class="f" inputmode="decimal" aria-label="Своё значение в мегапикселях" value="${exact}">`;
+        }
+        const input = $("g-mp-custom");
+        if (input) { input.focus(); input.select(); }
+        bindCustomMp();
         return;
       }
       const ratio = frame.w / frame.h || 1;
@@ -1478,12 +1483,7 @@
       const h = Math.sqrt(pixels / ratio);
       applyOutputSize(snapSize(h * ratio), snapSize(h));
     };
-    $("g-mp-custom").onchange = () => {
-      const ratio = frame.w / frame.h || 1;
-      const pixels = Math.max(0.25, parseFloat($("g-mp-custom").value) || 1) * 1e6;
-      const h = Math.sqrt(pixels / ratio);
-      applyOutputSize(snapSize(h * ratio), snapSize(h));
-    };
+    bindCustomMp();
     $("g-swap").onclick = () => applyOutputSize(frame.h, frame.w);
     $("insp-paste").addEventListener("toggle", () => { state.area.pasteOpen = $("insp-paste").open; });
     $("gpaste").onchange = () => { state.area.paste = $("gpaste").value; };
@@ -1536,8 +1536,8 @@
       const area = editor.maskArea();
       el.textContent = area > 8 ? `маска ${area} px²` : "маска не нарисована";
     } else if (state.tool === "genarea") {
-      const frame = generationSize();
-      el.textContent = state.area.userPlaced ? `область → ${frame.w}×${frame.h}` : `весь холст → ${frame.w}×${frame.h}`;
+      generationSize();
+      el.textContent = window.ZeroImageStudioSize.areaStatusText(editor.doc, state.area);
     }
   }
 
@@ -1966,6 +1966,10 @@
     if (label && sort) label.textContent = "сортировка: " + (sort.value === "old" ? "старые" : "новые");
   }
 
+  function assetMeta(asset) {
+    return [`${asset.width || "?"}×${asset.height || "?"}`, formatBytes(asset.bytes), formatWhen(asset.created)].filter(Boolean).join(" · ");
+  }
+
   function renderAssetGallery(host, scope) {
     const all = state.assets || [];
     const items = (scope === "project" ? all.filter(assetInProject) : all.slice())
@@ -1974,27 +1978,67 @@
     if (!items.length) {
       host.innerHTML = `<div class="empty-gal">${scope === "project" ? "В этом проекте ещё нет ассетов." : "Ассетов пока нет. Сюда попадают импорт на холст и референсы."}</div>`;
     } else {
-      host.innerHTML = `<div class="assets">${items.map((asset) => {
-        const badges = (asset.roles || []).map((role) => `<span class="tag ${role === "reference" ? "tvi" : "tbl"}">${role === "reference" ? "Референс" : "Холст"}</span>`).join("");
-        return `<div class="asset" draggable="true" data-asset="${escapeHtml(asset.id)}">
+      host.innerHTML = items.map((asset) => {
+        const id = escapeHtml(asset.id);
+        const meta = assetMeta(asset);
+        const name = asset.name || "Изображение";
+        const badges = (asset.roles || []).map((role) => {
+          const ref = role === "reference";
+          return `<span class="asset-badge${ref ? " ref" : ""}">${ref ? "Референс" : "Холст"}</span>`;
+        }).join("");
+        return `<div class="g asset-tile" draggable="true" data-asset="${id}" title="${escapeHtml(name + " · " + meta)}">
           <img src="/zeroimagestudio/assets/${encodeURIComponent(asset.id)}/thumb" alt="">
-          <div>
-            <b class="nm" title="${escapeHtml(asset.name || "")}">${escapeHtml(asset.name || "Изображение")}</b>
-            <div class="badges">${badges}</div>
-            <div class="mu">${asset.width || "?"}×${asset.height || "?"} · ${formatBytes(asset.bytes)} · ${formatWhen(asset.created)}</div>
-            <div class="acts">
-              <button type="button" class="b s" data-asset-open="${escapeHtml(asset.id)}">Открыть на холсте</button>
-              <button type="button" class="b s" data-asset-ref="${escapeHtml(asset.id)}">Добавить как референс</button>
-              <button type="button" class="b s" data-asset-del="${escapeHtml(asset.id)}">Удалить</button>
-            </div>
-          </div>
+          <span class="asset-badges">${badges}</span>
+          <span class="asset-hover">${escapeHtml(meta)}</span>
+          <span class="asset-actions">
+            <button type="button" data-asset-open="${id}" data-i="open" data-s="12" title="Открыть на холсте"></button>
+            <button type="button" data-asset-ref="${id}" data-i="image" data-s="12" title="Добавить как референс"></button>
+            <button type="button" data-asset-del="${id}" data-i="trash" data-s="12" title="Удалить"></button>
+          </span>
         </div>`;
-      }).join("")}</div>`;
+      }).join("");
+      if (window.zeroImageStudioHydrateIcons) window.zeroImageStudioHydrateIcons(host);
     }
     $("gal-legend").innerHTML = `<span>${note}</span>`;
     $("gal-count").textContent = String(items.length);
     const label = $("gal-sort-label");
     if (label) label.textContent = "ассеты";
+  }
+
+  function openAssetMenu(x, y, id) {
+    let menu = $("asset-menu");
+    if (!menu) {
+      menu = document.createElement("div");
+      menu.id = "asset-menu";
+      menu.className = "layer-menu";
+      menu.hidden = true;
+      document.body.appendChild(menu);
+      menu.addEventListener("click", async (ev) => {
+        const btn = ev.target.closest("[data-asset-open], [data-asset-ref], [data-asset-del]");
+        if (!btn) return;
+        ev.stopPropagation();
+        menu.hidden = true;
+        const assetId = btn.dataset.assetOpen || btn.dataset.assetRef || btn.dataset.assetDel;
+        try {
+          if (btn.dataset.assetOpen) await openAssetOnCanvas(assetId);
+          else if (btn.dataset.assetRef) await addAssetAsReference(assetId);
+          else await deleteAsset(assetId);
+        } catch (err) { toast(err.message || String(err)); }
+      });
+    }
+    menu.innerHTML = `<button type="button" data-asset-open="${escapeHtml(id)}">Открыть на холсте</button>
+      <button type="button" data-asset-ref="${escapeHtml(id)}">Добавить как референс</button>
+      <button type="button" data-asset-del="${escapeHtml(id)}">Удалить</button>`;
+    menu.hidden = false;
+    const rect = menu.getBoundingClientRect();
+    menu.style.left = Math.max(4, Math.min(x, window.innerWidth - rect.width - 8)) + "px";
+    menu.style.top = Math.max(4, Math.min(y, window.innerHeight - rect.height - 8)) + "px";
+    const close = (ev) => {
+      if (ev && menu.contains(ev.target)) return;
+      menu.hidden = true;
+      document.removeEventListener("mousedown", close);
+    };
+    setTimeout(() => document.addEventListener("mousedown", close), 0);
   }
 
   function fillSelect(sel, values, current, placeholder) {
@@ -3166,6 +3210,7 @@
           editor.fit();
           renderInspector();
           renderPipe();
+          paintStatus();
         }
         close();
       };
@@ -3585,6 +3630,12 @@
       if (!card) return;
       e.dataTransfer.setData("text/zis-asset", card.dataset.asset);
       e.dataTransfer.effectAllowed = "copy";
+    });
+    $("gal").addEventListener("contextmenu", (e) => {
+      const card = e.target.closest("[data-asset]");
+      if (!card) return;
+      e.preventDefault();
+      openAssetMenu(e.clientX, e.clientY, card.dataset.asset);
     });
     $("gal-kind").onclick = (e) => {
       const b = e.target.closest("[data-kind]");
