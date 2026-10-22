@@ -355,8 +355,9 @@
       this.ga.style.height = Math.max(8, g.h * this.zoom) + "px";
       this.ga.style.pointerEvents = state.tool === "genarea" ? "auto" : "none";
       const lab = this.ga.querySelector(".lab");
+      const frame = generationSize();
       const kind = state.area.userPlaced ? "Область" : "Весь холст";
-      lab.textContent = `${kind} ${Math.round(g.w)}×${Math.round(g.h)} → ${state.area.outW}×${state.area.outH}`;
+      lab.textContent = `${kind} ${Math.round(g.w)}×${Math.round(g.h)} → ${frame.w}×${frame.h}`;
       lab.classList.toggle("inside", (this.panY + g.y * this.zoom) < 26);
       const run = $("ga-run");
       if (run) {
@@ -663,6 +664,8 @@
       if (d.kind === "transform" && d.snapshot) { this.bakeActive(); this.pushUndo(d.snapshot); }
       renderInspector();
       renderLayers();
+      renderPipe();
+      paintStatus();
     }
 
     dragGen(d, p) {
@@ -948,8 +951,9 @@
       <label>Позиция референса <select class="dd" data-krea="ref_position" style="width:100%">${["aligned (trained)", "beside (right of target)", "bag of features"].map((v) => `<option ${krea.ref_position === v ? "selected" : ""}>${v}</option>`).join("")}</select></label>
       <label>Grounding, px <input class="f" data-krea="grounding_px" value="${krea.grounding_px}"></label>
       <label>Ноды <select class="dd" data-krea="impl" style="width:100%"><option value="internal" ${krea.impl !== "external" ? "selected" : ""}>встроенные</option><option value="external" ${krea.impl === "external" ? "selected" : ""}>пакет comfyui-krea2edit</option></select></label>` : "";
-    const qwenRow = (state.pipeline === "edit" && (c.method === "qwen_image_21" || c.method === "qwen")) || c.encoder === "qwen_image_21"
-      ? `<label>Qwen resolution <input class="f" data-file="qwen_resolution" value="${c.qwen_resolution || state.area.outW}"></label>` : "";
+    const qwenUsesEncoder = (state.pipeline === "edit" && (c.method === "qwen_image_21" || c.method === "qwen")) || (c.encoder === "qwen_image_21" && usesSource());
+    const qwenRow = qwenUsesEncoder
+      ? `<label>Qwen resolution <input class="f" data-file="qwen_resolution" value="${c.qwen_resolution || 0}"></label>` : "";
     $("graph-options").innerHTML = `
       ${methodRow}
       <label>Латент <select class="dd" data-file="latent_mode" style="width:100%"><option value="standard" ${c.latent_mode !== "sd3" ? "selected" : ""}>EmptyLatentImage (4 кан.)</option><option value="sd3" ${c.latent_mode === "sd3" ? "selected" : ""}>EmptySD3LatentImage (16 кан.)</option></select></label>
@@ -1261,6 +1265,27 @@
     const mp = (w * h) / 1e6;
     return MPS.reduce((best, m) => Math.abs(m - mp) < Math.abs(best - mp) ? m : best, MPS[0]);
   }
+  function activeMp(w, h) {
+    const mp = (w * h) / 1e6;
+    let best = null;
+    let err = 0.08;
+    for (const m of MPS) {
+      const e = Math.abs(m - mp);
+      if (e < err) { err = e; best = m; }
+    }
+    return best;
+  }
+  function generationSize() {
+    if (editor && state.area.outputLinked !== false && !state.area.userPlaced) {
+      state.area.outW = snapSize(editor.doc.w);
+      state.area.outH = snapSize(editor.doc.h);
+    } else {
+      state.area.outW = snapSize(state.area.outW || 64);
+      state.area.outH = snapSize(state.area.outH || 64);
+    }
+    state.area.mp = nearestMp(state.area.outW, state.area.outH);
+    return { w: state.area.outW, h: state.area.outH };
+  }
   function sizeForAspectMp(aspect, mp) {
     const hit = ASPECTS.find((a) => a[0] === aspect) || ASPECTS[0];
     const ratio = hit[1] / hit[2];
@@ -1286,12 +1311,13 @@
   }
   function resolutionPickerHtml(w, h) {
     const aspect = matchAspect(w, h);
+    const mpOn = activeMp(w, h);
     const exact = ((w * h) / 1e6).toFixed(2);
     return `<div class="res-pick">
       <div class="mu">Соотношение</div>
-      <div class="res-aspects">${ASPECTS.map(([n]) => `<button type="button" class="b s ${aspect === n ? "on" : ""}" data-aspect="${n}">${n}</button>`).join("")}<button type="button" class="b s" data-swap="1" title="Портрет или альбом">⇄</button></div>
+      <div class="res-aspects">${ASPECTS.map(([n]) => `<button type="button" class="b s ${aspect === n ? "on" : ""}" data-aspect="${n}" aria-pressed="${aspect === n ? "true" : "false"}">${n}</button>`).join("")}<button type="button" class="b s" data-swap="1" title="Портрет или альбом">⇄</button></div>
       <div class="mu">Мегапиксели</div>
-      <div class="res-mps">${MPS.map((m) => `<button type="button" class="b s ${Math.abs(m - (w * h) / 1e6) < 0.08 ? "on" : ""}" data-mp="${m}">${m}</button>`).join("")}<button type="button" class="b s" data-custom="1">Своё</button></div>
+      <div class="res-mps">${MPS.map((m) => `<button type="button" class="b s ${m === mpOn ? "on" : ""}" data-mp="${m}" aria-pressed="${m === mpOn ? "true" : "false"}">${m}</button>`).join("")}<button type="button" class="b s" data-custom="1" aria-pressed="false">Своё</button></div>
       <div class="row res-wh"><input class="f" data-rw="1" value="${w}" inputmode="numeric" aria-label="Ширина"><span>×</span><input class="f" data-rh="1" value="${h}" inputmode="numeric" aria-label="Высота"><span class="mu res-live">${w}×${h} · ${exact} МП · кратно 16</span></div>
     </div>`;
   }
@@ -1334,12 +1360,11 @@
   }
 
   function renderInspector() {
-    if (!state.area.userPlaced && state.area.outputLinked !== false) syncOutputFromCanvas();
+    const frame = generationSize();
     const g = editor.gen;
     const a = state.area;
-    const scale = (g.w > 0) ? (a.outW / g.w) : 1;
+    const scale = (g.w > 0) ? (frame.w / g.w) : 1;
     const linked = a.outputLinked !== false && coversWholeCanvas();
-    const qwenSquare = cfg().encoder === "qwen_image_21" && state.pipeline === "create" && !usesSource() && Math.abs(a.outW - a.outH) > 32;
     $("inspector").innerHTML = `
       <div class="kv" style="grid-template-columns:auto minmax(0,1fr) auto minmax(0,1fr)">
         <span>X</span><input id="gx" class="f" value="${g.x}"><span>Y</span><input id="gy" class="f" value="${g.y}">
@@ -1349,7 +1374,7 @@
         <span>Шов</span><input id="gfeather" class="f" value="${a.feather}">
       </div>
       <div class="mu">Разрешение генерации${linked ? " · как холст" : ""}</div>
-      ${resolutionPickerHtml(a.outW, a.outH)}
+      ${resolutionPickerHtml(frame.w, frame.h)}
       <div class="row" style="gap:6px"><span class="mu">Контекст</span><input id="gcontext" class="f" style="width:64px" value="${Math.round(a.context*100)}"><span class="mu">%</span>
         <label class="row" style="gap:4px"><input id="gcolor" type="checkbox" ${a.colorMatch?"checked":""}> цвет. подгон</label></div>
       <div class="row" style="gap:5px;flex-wrap:wrap">
@@ -1360,8 +1385,8 @@
         <button type="button" class="b s" id="btn-gen-full">Как холст</button>
       </div>
       <div class="banner">${linked
-        ? `Весь холст: генерация ${a.outW}×${a.outH}, кратно 16, по размеру холста ${editor.doc.w}×${editor.doc.h}.`
-        : `Область ${Math.round(g.w)}×${Math.round(g.h)} (${ratioText(g.w, g.h)}), выход модели ${a.outW}×${a.outH}.`}${qwenSquare ? " Qwen Image 2.1 без картинки считает квадрат и потом вписывается в холст." : ""}</div>`;
+        ? `Весь холст: генерация ${frame.w}×${frame.h}, кратно 16, по размеру холста ${editor.doc.w}×${editor.doc.h}.`
+        : `Область ${Math.round(g.w)}×${Math.round(g.h)} (${ratioText(g.w, g.h)}), выход модели ${frame.w}×${frame.h}.`}</div>`;
     const num = (id, fn) => $(id).onchange = () => { state.area.userPlaced = true; fn(parseFloat($(id).value)); editor.requestDraw(); renderInspector(); renderLayers(); };
     num("gx", (v) => { editor.gen.x = clamp(v || 0, 0, editor.doc.w - 8); });
     num("gy", (v) => { editor.gen.y = clamp(v || 0, 0, editor.doc.h - 8); });
@@ -1440,7 +1465,8 @@
       const area = editor.maskArea();
       el.textContent = area > 8 ? `маска ${area} px²` : "маска не нарисована";
     } else if (state.tool === "genarea") {
-      el.textContent = state.area.userPlaced ? "своя область" : `весь холст → ${state.area.outW}×${state.area.outH}`;
+      const frame = generationSize();
+      el.textContent = state.area.userPlaced ? `область → ${frame.w}×${frame.h}` : `весь холст → ${frame.w}×${frame.h}`;
     }
   }
 
@@ -1532,6 +1558,9 @@
     renderLayers();
     renderEmpty();
     renderInspector();
+    renderPipe();
+    paintStatus();
+    editor.requestDraw();
     updateGenerateButton();
     toast(`Холст ${w} × ${h}.`);
   }
@@ -1801,10 +1830,11 @@
 
   function renderPipe() {
     const c = cfg();
+    const frame = generationSize();
     const loras = activeLoras().filter((l) => l.enabled);
     const built = state.pipeline === "edit" ? "edit:" + (c.method || "inpaint") : "create";
     const steps = [
-      { text: `Область ${state.area.outW}×${state.area.outH}`, color: "#4aa8ff" },
+      { text: `Область ${frame.w}×${frame.h}`, color: "#4aa8ff" },
       { text: c.loader === "checkpoint" ? "Checkpoint" : "UNET + CLIP + VAE", color: "#ff7a1a" },
       { text: loras.length ? `LoRA ×${loras.length}` : "без LoRA", color: "#b18cff" },
       { text: "Промт + пресеты + LLM", color: "#e7c27a" },
@@ -1912,7 +1942,7 @@
       edit_method: c.method,
       inpaint_mode: c.inpaint_mode,
       inpaint_grow: c.inpaint_grow,
-      qwen_resolution: (usesSource() || state.pipeline === "edit") ? 0 : snapSize(Math.max(state.area.outW, state.area.outH), 32, 32),
+      qwen_resolution: 0,
       krea: c.krea,
       loras: c.loras,
       prompt: state.prompt,
@@ -1925,8 +1955,8 @@
       sampler: s.sampler,
       scheduler: s.scheduler,
       batch: s.batch,
-      width: state.area.outW,
-      height: state.area.outH,
+      width: generationSize().w,
+      height: generationSize().h,
       filename_prefix: "zeroimagestudio/gen",
     };
   }
@@ -2425,6 +2455,8 @@
     editor.requestDraw();
     renderLayers();
     renderInspector();
+    renderPipe();
+    paintStatus();
     updateGenerateButton();
     toast(fit ? `Холст ${w} × ${h}. Слой в полном размере, без уменьшения.` : "Слой добавлен в полном размере, холст не менялся.");
   }

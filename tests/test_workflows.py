@@ -198,6 +198,35 @@ class WorkflowTests(unittest.TestCase):
         with self.assertRaises(WorkflowError):
             build_workflow(spec)
 
+    def test_qwen_create_uses_requested_frame(self):
+        prompt, warnings, built = build_workflow(_diff_spec(
+            encoder="qwen_image_21",
+            clip_type="qwen_image",
+            width=832,
+            height=1216,
+        ))
+        self.assertEqual(built, "create")
+        self.assertNotIn("TextEncodeQwenImage21", classes(prompt))
+        self.assertGreaterEqual(classes(prompt).count("CLIPTextEncode"), 2)
+        latent = next(n for n in prompt.values() if n["class_type"] == "EmptySD3LatentImage")
+        self.assertEqual(latent["inputs"]["width"], 832)
+        self.assertEqual(latent["inputs"]["height"], 1216)
+        sampler = next(n for n in prompt.values() if n["class_type"] == "KSampler")
+        latent_id = next(nid for nid, n in prompt.items() if n["class_type"] == "EmptySD3LatentImage")
+        self.assertEqual(sampler["inputs"]["latent_image"], [latent_id, 0])
+        self.assertFalse(any("квадрат" in w for w in warnings))
+
+    def test_qwen_create_snaps_frame_to_16(self):
+        prompt, _, _ = build_workflow(_diff_spec(
+            encoder="qwen_image_21",
+            clip_type="qwen_image",
+            width=830,
+            height=1210,
+        ))
+        latent = next(n for n in prompt.values() if n["class_type"] == "EmptySD3LatentImage")
+        self.assertEqual(latent["inputs"]["width"], 832)
+        self.assertEqual(latent["inputs"]["height"], 1216)
+
     def test_create_uses_requested_frame(self):
         prompt, _, built = build_workflow(_diff_spec(width=832, height=1216))
         self.assertEqual(built, "create")

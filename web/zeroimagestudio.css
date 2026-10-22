@@ -291,7 +291,23 @@ body { min-width: 0; }
 #layers-node .layers-note { font-size: 11px; line-height: 1.4; }
 .res-pick { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .res-aspects, .res-mps { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
-.res-aspects .b.on, .res-mps .b.on { background: var(--ac); border-color: var(--ac); color: #111; font-weight: 700; }
+.res-aspects .b, .res-mps .b {
+  background: var(--p2); color: var(--tx); border: 1px solid var(--ln);
+  outline: none; box-shadow: none; -webkit-font-smoothing: antialiased;
+}
+.res-aspects .b:hover, .res-mps .b:hover,
+.res-aspects .b:focus, .res-mps .b:focus,
+.res-aspects .b:focus-visible, .res-mps .b:focus-visible,
+.res-aspects .b:active, .res-mps .b:active {
+  outline: none; box-shadow: none; background: var(--p2); color: var(--tx); border-color: var(--ln);
+}
+.res-aspects .b.on, .res-mps .b.on,
+.res-aspects .b.on:hover, .res-mps .b.on:hover,
+.res-aspects .b.on:focus, .res-mps .b.on:focus,
+.res-aspects .b.on:focus-visible, .res-mps .b.on:focus-visible,
+.res-aspects .b.on:active, .res-mps .b.on:active {
+  background: var(--ac); border-color: var(--ac); color: #111; font-weight: 700;
+}
 .res-wh { flex-wrap: wrap; }
 .res-wh input.f { width: 72px; flex: 0 1 72px; }
 .res-live { flex: 1 1 120px; min-width: 0; }

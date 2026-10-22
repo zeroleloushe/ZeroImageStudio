@@ -3,7 +3,8 @@
 Создание (create): checkpoint or diffusion model + text encoder + VAE + LoRAs + sampler.
 Редактирование (edit): the same loaders, then one of
   - inpaint / img2img via core nodes (any model),
-  - Qwen Image 2.1 via core TextEncodeQwenImage21,
+  - Qwen Image 2.1: text-to-image via CLIPTextEncode + EmptySD3LatentImage,
+    edits via core TextEncodeQwenImage21,
   - Krea 2 Edit via the embedded ZeroImageStudioKrea2Edit* nodes (or the optional external pack).
 
 No per-model Python. A hint or a preset only fills this spec.
@@ -297,20 +298,36 @@ def build_create(spec: dict, warnings: list[str]) -> dict:
     return g.nodes
 
 
+def _build_qwen_t2i(g, spec, model, clip, vae, prompt, negative) -> dict:
+    """Text-to-image. Size is the empty latent, not TextEncodeQwenImage21.resolution.
+
+    EmptySD3LatentImage is 16 channels at 1/8. ComfyUI's sampler expands an empty latent
+    to the loaded model (Qwen Image 2.1 is 64 channels at 1/16) using downscale_ratio_spacial,
+    so the pixel size of this node is the picture size.
+    """
+    w, h, batch = _size(spec, 16)
+    pos = _encode_clip(g, clip, prompt, "Positive")
+    neg = _encode_clip(g, clip, negative, "Negative")
+    latent = g.add(
+        "EmptySD3LatentImage",
+        {"width": w, "height": h, "batch_size": batch},
+        "EmptySD3LatentImage",
+    )
+    _save(
+        g,
+        g.ref(_sampler(g, spec, model, g.ref(pos, 0), g.ref(neg, 0), g.ref(latent, 0), 1.0), 0),
+        vae,
+        spec.get("filename_prefix") or "zeroimagestudio/gen",
+    )
+    return g.nodes
+
+
 def _build_qwen(g, spec, warnings, model, clip, vae, prompt, negative, include_image: bool, include_references: bool = True) -> dict:
-    width = int(spec.get("width") or 1024)
-    height = int(spec.get("height") or 1024)
+    if not include_image:
+        return _build_qwen_t2i(g, spec, model, clip, vae, prompt, negative)
     res = int(spec.get("qwen_resolution") or 0)
-    # 0 keeps a reference at its own size (multiples of 32). Text-to-image has no reference,
-    # and the node then falls back to a square; use the longer side of the requested frame.
-    if res <= 0 and not include_image:
-        res = snap(max(width, height), 32, minimum=32)
-        if abs(width - height) > 32:
-            warnings.append(
-                "Qwen Image 2.1 без изображения строит квадратный латент. "
-                f"Запрошено {width}×{height}; сторона квадрата {res}. Кадр будет вписан в холст."
-            )
-    elif res <= 0:
+    # 0 keeps a reference at its own size (multiples of 32).
+    if res <= 0:
         res = 0
     else:
         res = snap(res, 32, minimum=32)
