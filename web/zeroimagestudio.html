@@ -206,7 +206,7 @@
       <div class="nh"><span class="d"></span>Инспектор · Область генерации</div>
       <div class="nb" id="inspector"></div>
     </div>
-    <div class="node" style="--c:#3ddc97">
+    <div class="node" id="layers-node" style="--c:#3ddc97">
       <div class="nh"><span class="d"></span>Слои
         <span class="r">
           <button class="b s" id="btn-layer-add" data-i="plus" data-s="13" title="Пустой слой"></button>
@@ -215,6 +215,7 @@
         </span>
       </div>
       <div class="nb" style="gap:3px">
+        <div class="layers-note mu" id="layers-note" hidden>Весь холст в режиме Создание заменяет кадр. Отдельные слои остаются для области и для Редактирования. Прошлый кадр — в отмене и в галерее.</div>
         <div class="row layer-blend" style="margin-bottom:4px">
           <select id="layer-blend" class="dd"></select>
           <span class="mu">Непрозр.</span>

@@ -298,8 +298,22 @@ def build_create(spec: dict, warnings: list[str]) -> dict:
 
 
 def _build_qwen(g, spec, warnings, model, clip, vae, prompt, negative, include_image: bool, include_references: bool = True) -> dict:
-    res = int(spec.get("qwen_resolution") or spec.get("width") or 1024)
-    res = snap(res, 32, minimum=32)
+    width = int(spec.get("width") or 1024)
+    height = int(spec.get("height") or 1024)
+    res = int(spec.get("qwen_resolution") or 0)
+    # 0 keeps a reference at its own size (multiples of 32). Text-to-image has no reference,
+    # and the node then falls back to a square; use the longer side of the requested frame.
+    if res <= 0 and not include_image:
+        res = snap(max(width, height), 32, minimum=32)
+        if abs(width - height) > 32:
+            warnings.append(
+                "Qwen Image 2.1 без изображения строит квадратный латент. "
+                f"Запрошено {width}×{height}; сторона квадрата {res}. Кадр будет вписан в холст."
+            )
+    elif res <= 0:
+        res = 0
+    else:
+        res = snap(res, 32, minimum=32)
     if res == 1024 and include_image:
         warnings.append(
             "Qwen Image 2.1: при resolution=1024 и подключённом VAE известен шум на референсах "

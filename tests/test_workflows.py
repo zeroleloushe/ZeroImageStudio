@@ -198,6 +198,19 @@ class WorkflowTests(unittest.TestCase):
         with self.assertRaises(WorkflowError):
             build_workflow(spec)
 
+    def test_create_uses_requested_frame(self):
+        prompt, _, built = build_workflow(_diff_spec(width=832, height=1216))
+        self.assertEqual(built, "create")
+        latent = next(n for n in prompt.values() if n["class_type"] == "EmptySD3LatentImage")
+        self.assertEqual(latent["inputs"]["width"], 832)
+        self.assertEqual(latent["inputs"]["height"], 1216)
+
+    def test_create_snaps_frame_to_16(self):
+        prompt, _, _ = build_workflow(_diff_spec(width=830, height=1210))
+        latent = next(n for n in prompt.values() if n["class_type"] == "EmptySD3LatentImage")
+        self.assertEqual(latent["inputs"]["width"], 832)
+        self.assertEqual(latent["inputs"]["height"], 1216)
+
     def test_snap(self):
         self.assertEqual(snap(1000, 16), 1008)
         self.assertEqual(snap(8, 64), 64)

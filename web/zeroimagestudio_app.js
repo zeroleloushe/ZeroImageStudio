@@ -28,7 +28,7 @@
     create: blankPipe("create"),
     edit: blankPipe("edit"),
     references: [],
-    area: { outW: 1024, outH: 1024, aspect: "1:1", context: 0.15, feather: 48, paste: "poisson", colorMatch: true, userPlaced: false },
+    area: { outW: 1024, outH: 1024, aspect: "free", context: 0.15, feather: 48, paste: "poisson", colorMatch: true, userPlaced: false, outputLinked: true, mp: 1 },
     tool: "genarea",
     color: "#e7c27a",
     brush: { size: 64, hardness: 0.3, opacity: 1 },
@@ -38,6 +38,8 @@
     loraFolder: "",
     loraQuery: "",
     loraSelected: "",
+    loraBrowse: "",
+    loraPickQuery: "",
     presets: [],
     gallery: [],
     galleryScope: "all",
@@ -660,6 +662,7 @@
       if (d.kind === "crop" && this.selection && this.selection.w > 4 && this.selection.h > 4) this.applyCrop(this.selection);
       if (d.kind === "transform" && d.snapshot) { this.bakeActive(); this.pushUndo(d.snapshot); }
       renderInspector();
+      renderLayers();
     }
 
     dragGen(d, p) {
@@ -986,13 +989,125 @@
   function activeLoras() { return cfg().loras; }
 
   function renderLoras() {
+    const added = activeLoras();
+    $("lora-count").textContent = String(added.length);
+    if (document.body.dataset.tab === "lora") renderLoraLibrary();
+    else renderLoraStack();
+  }
+
+  function renderLoraStack() {
+    const list = activeLoras();
+    const enabled = list.filter((l) => l.enabled);
+    const sum = enabled.reduce((s, l) => s + Number(l.strength_model || 0), 0);
+    $("lora-sum").textContent = list.length ? `${enabled.length} активны · Σ ${sum.toFixed(2)}` : "только добавленные";
+    const rows = list.map((l) => {
+      const base = l.name.split("/").pop();
+      const triggers = (l.triggers || []).map((t, i) =>
+        `<button type="button" class="tw ${t.enabled === false ? "" : "on"}" data-trig="${i}" data-lora-name="${escapeHtml(l.name)}">${t.enabled === false ? "" : "✓ "}${escapeHtml(t.text)}</button>`
+      ).join(" ");
+      const open = state.loraSelected === l.name;
+      return `<div class="lora-row ${l.enabled ? "" : "off"}">
+        <button type="button" class="cb ${l.enabled ? "on" : ""}" data-lora-enable="${escapeHtml(l.name)}" title="Включить или выключить"></button>
+        <button type="button" class="nm" data-lora-info="${escapeHtml(l.name)}" title="${escapeHtml(l.name)}">${escapeHtml(base)}</button>
+        <input class="range" data-str="model" data-lora-name="${escapeHtml(l.name)}" type="range" min="0" max="2" step="0.05" value="${Number(l.strength_model)}" title="Сила">
+        <input class="f" data-str-num="model" data-lora-name="${escapeHtml(l.name)}" value="${Number(l.strength_model).toFixed(2)}" title="Сила">
+        <button type="button" class="b s" data-lora-remove="${escapeHtml(l.name)}" title="Убрать из стека">×</button>
+      </div>
+      ${open ? `<div class="row" style="flex-wrap:wrap;gap:4px">${triggers || `<span class="mu">Нет триггеров.</span>`}
+        <button type="button" class="b s" data-civitai="1" data-lora-name="${escapeHtml(l.name)}">Civitai</button></div>` : ""}`;
+    }).join("");
+    $("lora-panel").innerHTML = `<div class="lora-stack">
+      <button type="button" class="b" id="btn-lora-add">+ Добавить LoRA</button>
+      ${rows || `<div class="empty">В стеке пусто. Добавьте LoRA из папки models/loras — весь каталог здесь не показывается.</div>`}
+    </div>`;
+    if (window.zeroImageStudioHydrateIcons) window.zeroImageStudioHydrateIcons($("lora-panel"));
+  }
+
+  function loraListing(path, query) {
+    const files = state.loras || [];
+    const q = (query || "").trim().toLowerCase();
+    if (q) return { folders: [], files: files.filter((n) => n.toLowerCase().includes(q)).sort() };
+    const prefix = path ? path.replace(/\/+$/, "") + "/" : "";
+    const folders = new Set();
+    const here = [];
+    for (const name of files) {
+      if (prefix && !name.startsWith(prefix)) continue;
+      const rest = prefix ? name.slice(prefix.length) : name;
+      const slash = rest.indexOf("/");
+      if (slash >= 0) folders.add(rest.slice(0, slash));
+      else here.push(name);
+    }
+    return { folders: [...folders].sort(), files: here.sort() };
+  }
+
+  function knownPreview(name) {
+    const l = activeLoras().find((x) => x.name === name);
+    return (l && l.civitai && l.civitai.preview) || "";
+  }
+
+  function openLoraPicker() {
+    state.loraBrowse = state.loraBrowse || "";
+    openModal(`<h3>Добавить LoRA</h3><div id="lora-picker"></div>`, (box, close) => {
+      box.classList.add("wide");
+      const ok = box.querySelector("[data-ok]");
+      ok.textContent = "Готово";
+      ok.onclick = () => close();
+      const paint = () => {
+        const host = $("lora-picker");
+        if (!host) return;
+        const path = state.loraBrowse || "";
+        const q = state.loraPickQuery || "";
+        const listed = loraListing(path, q);
+        const parts = path ? path.split("/") : [];
+        let acc = "";
+        const crumbs = [`<button type="button" class="b s" data-crumb="">loras</button>`].concat(parts.map((part) => {
+          acc = acc ? acc + "/" + part : part;
+          return `<button type="button" class="b s" data-crumb="${escapeHtml(acc)}">${escapeHtml(part)}</button>`;
+        })).join("");
+        const added = new Set(activeLoras().map((l) => l.name));
+        const dirs = q ? "" : listed.folders.map((f) => {
+          const next = path ? path + "/" + f : f;
+          return `<button type="button" class="lora-dir" data-enter="${escapeHtml(next)}"><span class="lora-ph"></span><span class="nm">${escapeHtml(f)}</span><span class="mu">папка</span></button>`;
+        }).join("");
+        const rows = listed.files.map((name) => {
+          const preview = knownPreview(name);
+          const thumb = preview ? `<img src="${escapeHtml(preview)}" alt="">` : `<span class="lora-ph"></span>`;
+          const mark = added.has(name) ? `<span class="tag tgr">добавлена</span>` : "";
+          return `<button type="button" class="lora-file" data-pick="${escapeHtml(name)}">${thumb}<span class="nm" title="${escapeHtml(name)}">${escapeHtml(q ? name : name.split("/").pop())}</span>${mark}</button>`;
+        }).join("");
+        host.innerHTML = `
+          <input id="lora-pick-search" class="f" style="width:100%;font-family:inherit" placeholder="Поиск по всем папкам" value="${escapeHtml(q)}">
+          <div class="lora-crumbs">${crumbs}</div>
+          <div class="lora-pick-list">${dirs}${rows || `<div class="empty">В этой папке пусто.</div>`}</div>
+          <div class="mu">Стек слева хранит только добавленные LoRA. Папки — как в выборе файла у LoRA Loader Pixaroma: крошки, вложенные каталоги, поиск по всему дереву. Превью Civitai показывается, если оно уже известно.</div>`;
+        const search = $("lora-pick-search");
+        search.oninput = () => {
+          state.loraPickQuery = search.value;
+          const pos = search.selectionStart;
+          paint();
+          const again = $("lora-pick-search");
+          if (again) { again.focus(); again.setSelectionRange(pos, pos); }
+        };
+        host.onclick = (ev) => {
+          const crumb = ev.target.closest("[data-crumb]");
+          const enter = ev.target.closest("[data-enter]");
+          const pick = ev.target.closest("[data-pick]");
+          if (crumb) { state.loraBrowse = crumb.dataset.crumb || ""; state.loraPickQuery = ""; paint(); }
+          if (enter) { state.loraBrowse = enter.dataset.enter; state.loraPickQuery = ""; paint(); }
+          if (pick) { ensureLora(pick.dataset.pick); renderLoras(); renderPipe(); paint(); }
+        };
+      };
+      paint();
+    });
+  }
+
+  function renderLoraLibrary() {
     const searchEl = document.activeElement && document.activeElement.id === "lora-search" ? document.activeElement : null;
     const caret = searchEl ? searchEl.selectionStart : null;
     const files = state.loras || [];
-    $("lora-count").textContent = String(files.length);
     const enabled = activeLoras().filter((l) => l.enabled);
     const sum = enabled.reduce((s, l) => s + Number(l.strength_model || 0), 0);
-    $("lora-sum").textContent = `${enabled.length} активны · Σ ${sum.toFixed(2)}`;
+    $("lora-sum").textContent = `каталог ${files.length} · в стеке ${enabled.length}`;
     const q = state.loraQuery.toLowerCase();
     const folder = state.loraFolder;
     const shown = files.filter((name) => {
@@ -1078,7 +1193,7 @@
     const cat = state.catalog || { samplers: ["euler"], schedulers: ["simple", "normal", "beta"] };
     const opt = (list, cur) => (list || []).map((n) => `<option ${n === cur ? "selected" : ""}>${escapeHtml(n)}</option>`).join("");
     $("sampler-box").innerHTML = `
-      <span>Seed</span><div class="row"><input id="seed" class="f" style="flex:1" value="${s.seed}" title="Последний сид. В режиме «случайный» каждый запуск берёт новый."><button class="b s" id="btn-seed" data-i="dice" data-s="12" type="button" title="Случайный сид"></button>
+      <span>Seed</span><div class="row seed-row"><input id="seed" class="f" value="${s.seed}" title="Последний сид. В режиме «случайный» каждый запуск берёт новый."><button class="b s" id="btn-seed" data-i="dice" data-s="12" type="button" title="Случайный сид"></button>
         <select id="seed-mode" class="dd" title="Режим сида"><option value="random" ${s.seedMode === "random" ? "selected" : ""}>случайный</option><option value="fixed" ${s.seedMode === "fixed" ? "selected" : ""}>фиксированный</option><option value="increment" ${s.seedMode === "increment" ? "selected" : ""}>+1</option></select></div>
       <span>Шаги</span><div class="row"><input id="steps-range" class="range" type="range" min="1" max="80" value="${s.steps}"><input id="steps" class="f" style="width:48px" value="${s.steps}"></div>
       <span>CFG</span><div class="row"><input id="cfg-range" class="range" type="range" min="0" max="12" step="0.1" value="${s.cfg}"><input id="cfg" class="f" style="width:48px" value="${s.cfg}"></div>
@@ -1111,52 +1226,162 @@
     $("btn-seed").onclick = () => { state.sampler.seed = Math.floor(Math.random() * 1e9); $("seed").value = state.sampler.seed; };
   }
 
+  const ASPECTS = [["1:1", 1, 1], ["2:3", 2, 3], ["3:2", 3, 2], ["3:4", 3, 4], ["4:3", 4, 3], ["9:16", 9, 16], ["16:9", 16, 9], ["21:9", 21, 9]];
+  const MPS = [0.5, 1, 1.5, 2, 3, 4];
+
+  function gcd(a, b) {
+    a = Math.abs(a | 0); b = Math.abs(b | 0);
+    while (b) { const t = b; b = a % b; a = t; }
+    return a || 1;
+  }
+  function snapSize(n, step = 16, minimum = 64) {
+    const s = Math.max(1, step | 0);
+    let snapped = Math.round(Number(n) / s) * s;
+    if (!Number.isFinite(snapped) || snapped < minimum) snapped = Math.ceil(minimum / s) * s;
+    return snapped;
+  }
+  function matchAspect(w, h) {
+    if (!w || !h) return "custom";
+    const r = w / h;
+    let best = "custom", err = 0.035;
+    for (const [name, aw, ah] of ASPECTS) {
+      const target = aw / ah;
+      const e = Math.abs(r - target) / target;
+      if (e < err) { err = e; best = name; }
+    }
+    return best;
+  }
+  function ratioText(w, h) {
+    const name = matchAspect(w, h);
+    if (name !== "custom") return name;
+    const g = gcd(Math.round(w), Math.round(h));
+    return Math.round(w / g) + ":" + Math.round(h / g);
+  }
+  function nearestMp(w, h) {
+    const mp = (w * h) / 1e6;
+    return MPS.reduce((best, m) => Math.abs(m - mp) < Math.abs(best - mp) ? m : best, MPS[0]);
+  }
+  function sizeForAspectMp(aspect, mp) {
+    const hit = ASPECTS.find((a) => a[0] === aspect) || ASPECTS[0];
+    const ratio = hit[1] / hit[2];
+    const pixels = Math.max(0.25, Number(mp) || 1) * 1e6;
+    const h = Math.sqrt(pixels / ratio);
+    return { w: snapSize(h * ratio), h: snapSize(h) };
+  }
+  function coversWholeCanvas() {
+    if (!editor) return !state.area.userPlaced;
+    if (editor.maskArea() > 8) return false;
+    if (!state.area.userPlaced) return true;
+    const g = editor.gen;
+    return g.x <= 1 && g.y <= 1 && g.w >= editor.doc.w - 2 && g.h >= editor.doc.h - 2;
+  }
+  function replacesCanvas() {
+    return state.pipeline === "create" && coversWholeCanvas();
+  }
+  function syncOutputFromCanvas() {
+    if (!editor) return;
+    state.area.outW = snapSize(editor.doc.w);
+    state.area.outH = snapSize(editor.doc.h);
+    state.area.mp = nearestMp(state.area.outW, state.area.outH);
+  }
+  function resolutionPickerHtml(w, h) {
+    const aspect = matchAspect(w, h);
+    const exact = ((w * h) / 1e6).toFixed(2);
+    return `<div class="res-pick">
+      <div class="mu">Соотношение</div>
+      <div class="res-aspects">${ASPECTS.map(([n]) => `<button type="button" class="b s ${aspect === n ? "on" : ""}" data-aspect="${n}">${n}</button>`).join("")}<button type="button" class="b s" data-swap="1" title="Портрет или альбом">⇄</button></div>
+      <div class="mu">Мегапиксели</div>
+      <div class="res-mps">${MPS.map((m) => `<button type="button" class="b s ${Math.abs(m - (w * h) / 1e6) < 0.08 ? "on" : ""}" data-mp="${m}">${m}</button>`).join("")}<button type="button" class="b s" data-custom="1">Своё</button></div>
+      <div class="row res-wh"><input class="f" data-rw="1" value="${w}" inputmode="numeric" aria-label="Ширина"><span>×</span><input class="f" data-rh="1" value="${h}" inputmode="numeric" aria-label="Высота"><span class="mu res-live">${w}×${h} · ${exact} МП · кратно 16</span></div>
+    </div>`;
+  }
+  function bindResolutionPicker(root, onSize) {
+    if (!root) return;
+    const read = () => ({
+      w: snapSize(parseInt(root.querySelector("[data-rw]").value, 10) || 64),
+      h: snapSize(parseInt(root.querySelector("[data-rh]").value, 10) || 64),
+    });
+    root.addEventListener("click", (e) => {
+      const aspectBtn = e.target.closest("[data-aspect]");
+      const mpBtn = e.target.closest("[data-mp]");
+      const swap = e.target.closest("[data-swap]");
+      const custom = e.target.closest("[data-custom]");
+      const cur = read();
+      if (aspectBtn) {
+        const size = sizeForAspectMp(aspectBtn.dataset.aspect, nearestMp(cur.w, cur.h));
+        onSize(size.w, size.h);
+      } else if (mpBtn) {
+        const ratio = cur.w / cur.h || 1;
+        const pixels = Math.max(0.25, parseFloat(mpBtn.dataset.mp) || 1) * 1e6;
+        const h = Math.sqrt(pixels / ratio);
+        onSize(snapSize(h * ratio), snapSize(h));
+      } else if (swap) onSize(cur.h, cur.w);
+      else if (custom) root.querySelector("[data-rw]").focus();
+    });
+    root.querySelectorAll("[data-rw],[data-rh]").forEach((input) => {
+      input.addEventListener("change", () => { const cur = read(); onSize(cur.w, cur.h); });
+    });
+  }
+  function useWholeCanvas() {
+    state.area.userPlaced = false;
+    state.area.outputLinked = true;
+    syncDefaultArea();
+    if (editor) editor.requestDraw();
+    renderInspector();
+    renderPipe();
+    renderLayers();
+    paintStatus();
+  }
+
   function renderInspector() {
+    if (!state.area.userPlaced && state.area.outputLinked !== false) syncOutputFromCanvas();
     const g = editor.gen;
     const a = state.area;
     const scale = (g.w > 0) ? (a.outW / g.w) : 1;
+    const linked = a.outputLinked !== false && coversWholeCanvas();
+    const qwenSquare = cfg().encoder === "qwen_image_21" && state.pipeline === "create" && !usesSource() && Math.abs(a.outW - a.outH) > 32;
     $("inspector").innerHTML = `
       <div class="kv" style="grid-template-columns:auto minmax(0,1fr) auto minmax(0,1fr)">
         <span>X</span><input id="gx" class="f" value="${g.x}"><span>Y</span><input id="gy" class="f" value="${g.y}">
         <span>W</span><input id="gw" class="f" value="${g.w}"><span>H</span><input id="gh" class="f" value="${g.h}">
-        <span>Выход</span><select id="gout" class="dd">${[[1024,1024],[768,768],[512,512],[1056,1056],[1280,720],[832,1216],[1536,1024]].map(([w,h]) => `<option ${a.outW===w&&a.outH===h?"selected":""} value="${w}x${h}">${w} × ${h}</option>`).join("")}<option value="custom" ${[[1024,1024],[768,768],[512,512],[1056,1056],[1280,720],[832,1216],[1536,1024]].some(([w,h])=>w===a.outW&&h===a.outH)?"":"selected"}>свои</option></select>
-        <span>Аспект</span><select id="gaspect" class="dd">${[["free","свободно"],["1:1","1:1"],["3:4","3:4"],["4:3","4:3"],["16:9","16:9"],["9:16","9:16"]].map(([v,n]) => `<option value="${v}" ${a.aspect===v?"selected":""}>${n}</option>`).join("")}</select>
+        <span>Аспект</span><b class="mono" id="area-ratio">${ratioText(g.w, g.h)}</b><span></span><span></span>
         <span>Вклейка</span><select id="gpaste" class="dd"><option value="poisson" ${a.paste==="poisson"?"selected":""}>Poisson</option><option value="feather" ${a.paste==="feather"?"selected":""}>Растушёвка</option><option value="hard" ${a.paste==="hard"?"selected":""}>Жёстко</option></select>
         <span>Шов</span><input id="gfeather" class="f" value="${a.feather}">
       </div>
+      <div class="mu">Разрешение генерации${linked ? " · как холст" : ""}</div>
+      ${resolutionPickerHtml(a.outW, a.outH)}
       <div class="row" style="gap:6px"><span class="mu">Контекст</span><input id="gcontext" class="f" style="width:64px" value="${Math.round(a.context*100)}"><span class="mu">%</span>
         <label class="row" style="gap:4px"><input id="gcolor" type="checkbox" ${a.colorMatch?"checked":""}> цвет. подгон</label></div>
       <div class="row" style="gap:5px;flex-wrap:wrap">
         <span class="tag ${editor.maskArea()>8?"tgr":""}">маска ${editor.maskArea()>8?"✓":"—"}</span>
         <span class="tag ${a.colorMatch?"tbl":""}">цвет. подгон ${a.colorMatch?"✓":"—"}</span>
         <span class="tag">масштаб ×${scale.toFixed(2)}</span>
-        <span class="tag to">→ новый слой</span>
-        <button type="button" class="b s" id="btn-gen-full">Весь холст</button>
+        <span class="tag to">${replacesCanvas() ? "→ заменить холст" : "→ новый слой"}</span>
+        <button type="button" class="b s" id="btn-gen-full">Как холст</button>
       </div>
-      ${state.area.userPlaced ? "" : `<div class="banner">Область не задана: берётся весь холст и масштабируется до ${a.outW}×${a.outH} — выход модели.</div>`}`;
-    const num = (id, fn) => $(id).onchange = () => { state.area.userPlaced = true; fn(parseFloat($(id).value)); editor.requestDraw(); renderInspector(); };
+      <div class="banner">${linked
+        ? `Весь холст: генерация ${a.outW}×${a.outH}, кратно 16, по размеру холста ${editor.doc.w}×${editor.doc.h}.`
+        : `Область ${Math.round(g.w)}×${Math.round(g.h)} (${ratioText(g.w, g.h)}), выход модели ${a.outW}×${a.outH}.`}${qwenSquare ? " Qwen Image 2.1 без картинки считает квадрат и потом вписывается в холст." : ""}</div>`;
+    const num = (id, fn) => $(id).onchange = () => { state.area.userPlaced = true; fn(parseFloat($(id).value)); editor.requestDraw(); renderInspector(); renderLayers(); };
     num("gx", (v) => { editor.gen.x = clamp(v || 0, 0, editor.doc.w - 8); });
     num("gy", (v) => { editor.gen.y = clamp(v || 0, 0, editor.doc.h - 8); });
     num("gw", (v) => { editor.gen.w = Math.max(16, v || 16); });
     num("gh", (v) => { editor.gen.h = Math.max(16, v || 16); });
-    $("gout").onchange = () => {
-      if ($("gout").value === "custom") return;
-      const [w, h] = $("gout").value.split("x").map(Number);
-      state.area.outW = w; state.area.outH = h;
-      editor.requestDraw(); renderInspector();
-    };
-    $("gaspect").onchange = () => { state.area.aspect = $("gaspect").value; };
+    bindResolutionPicker($("inspector").querySelector(".res-pick"), (w, h) => {
+      state.area.outputLinked = false;
+      state.area.outW = w;
+      state.area.outH = h;
+      state.area.mp = nearestMp(w, h);
+      editor.requestDraw();
+      renderInspector();
+      renderPipe();
+    });
     $("gpaste").onchange = () => { state.area.paste = $("gpaste").value; };
     $("gfeather").onchange = () => { state.area.feather = Math.max(0, parseInt($("gfeather").value, 10) || 0); renderTags(); };
     $("gcontext").onchange = () => { state.area.context = Math.max(0, (parseFloat($("gcontext").value) || 0) / 100); renderTags(); };
     $("gcolor").onchange = () => { state.area.colorMatch = $("gcolor").checked; renderInspector(); };
     const full = $("btn-gen-full");
-    if (full) full.onclick = () => {
-      state.area.userPlaced = true;
-      editor.gen = { x: 0, y: 0, w: editor.doc.w, h: editor.doc.h };
-      editor.requestDraw();
-      renderInspector();
-    };
+    if (full) full.onclick = () => useWholeCanvas();
   }
 
   function renderTags() { /* status lives in the tool options bar */ }
@@ -1190,12 +1415,7 @@
       $("opt-feather").onchange = () => { state.area.feather = Math.max(0, parseInt($("opt-feather").value, 10) || 0); renderInspector(); };
       $("opt-paste").onchange = () => { state.area.paste = $("opt-paste").value; renderInspector(); };
       $("opt-color").onchange = () => { state.area.colorMatch = $("opt-color").checked; renderInspector(); };
-      $("opt-full").onclick = () => {
-        state.area.userPlaced = true;
-        editor.gen = { x: 0, y: 0, w: editor.doc.w, h: editor.doc.h };
-        editor.requestDraw();
-        renderInspector();
-      };
+      $("opt-full").onclick = () => useWholeCanvas();
       paintStatus();
     } else {
       const hints = {
@@ -1220,13 +1440,14 @@
       const area = editor.maskArea();
       el.textContent = area > 8 ? `маска ${area} px²` : "маска не нарисована";
     } else if (state.tool === "genarea") {
-      el.textContent = state.area.userPlaced ? "своя область" : "весь холст → масштаб модели";
+      el.textContent = state.area.userPlaced ? "своя область" : `весь холст → ${state.area.outW}×${state.area.outH}`;
     }
   }
 
   function syncDefaultArea() {
     if (!editor || state.area.userPlaced) return;
     editor.gen = { x: 0, y: 0, w: editor.doc.w, h: editor.doc.h };
+    if (state.area.outputLinked !== false) syncOutputFromCanvas();
   }
 
   function missingModelFiles() {
@@ -1285,8 +1506,10 @@
     const sizes = $("empty-sizes");
     if (sizes && !sizes.dataset.ready) {
       sizes.dataset.ready = "1";
-      sizes.innerHTML = CANVAS_PRESETS.map(([w, h]) => `<button type="button" class="b s" data-size="${w}x${h}" title="Новый холст ${w}×${h}">${w}×${h}</button>`).join("");
+      sizes.innerHTML = CANVAS_PRESETS.map(([w, h]) => `<button type="button" class="b s" data-size="${w}x${h}" title="Новый холст ${w}×${h}">${w}×${h}</button>`).join("") + `<button type="button" class="b s" data-custom="1">Своё…</button>`;
       sizes.onclick = (e) => {
+        const custom = e.target.closest("[data-custom]");
+        if (custom) { openCanvasSize(); return; }
         const b = e.target.closest("[data-size]");
         if (!b) return;
         const [w, h] = b.dataset.size.split("x").map(Number);
@@ -1334,6 +1557,11 @@
 
   function renderLayers() {
     const host = $("layer-list");
+    const node = $("layers-node");
+    const quiet = replacesCanvas();
+    if (node) node.classList.toggle("quiet", quiet);
+    const note = $("layers-note");
+    if (note) note.hidden = !quiet;
     const blend = $("layer-blend");
     if (blend && !blend.dataset.ready) {
       blend.innerHTML = BLENDS.map(([v, n]) => `<option value="${v}">${n}</option>`).join("");
@@ -1581,7 +1809,7 @@
       { text: loras.length ? `LoRA ×${loras.length}` : "без LoRA", color: "#b18cff" },
       { text: "Промт + пресеты + LLM", color: "#e7c27a" },
       { text: `KSampler · ${state.sampler.steps} / ${state.sampler.cfg}`, color: "#3ddc97" },
-      { text: built.startsWith("edit") ? "Бесшовная вклейка → новый слой" : "Генерация в область → новый слой", color: "#ff5c7a" },
+      { text: built.startsWith("edit") ? "Бесшовная вклейка → новый слой" : (replacesCanvas() ? "Генерация на весь холст" : "Генерация в область → новый слой"), color: "#ff5c7a" },
     ];
     $("pipe-steps").innerHTML = steps.map((s, i) =>
       `<span class="pn" style="--c:${s.color}">${escapeHtml(s.text)}</span>` + (i < steps.length - 1 ? `<span class="pw" style="--c:${s.color}"></span>` : "")
@@ -1684,7 +1912,7 @@
       edit_method: c.method,
       inpaint_mode: c.inpaint_mode,
       inpaint_grow: c.inpaint_grow,
-      qwen_resolution: parseInt(c.qwen_resolution, 10) || state.area.outW,
+      qwen_resolution: (usesSource() || state.pipeline === "edit") ? 0 : snapSize(Math.max(state.area.outW, state.area.outH), 32, 32),
       krea: c.krea,
       loras: c.loras,
       prompt: state.prompt,
@@ -1721,6 +1949,13 @@
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "Не удалось загрузить изображение в ComfyUI");
     return data.subfolder ? data.subfolder + "/" + data.name : data.name;
+  }
+
+  function imageCanvas(img) {
+    const c = document.createElement("canvas");
+    c.width = img.width; c.height = img.height;
+    c.getContext("2d").drawImage(img, 0, 0);
+    return c;
   }
 
   function scaleCanvas(src, w, h) {
@@ -1892,24 +2127,34 @@
       }
       const img = await loadImage(URL.createObjectURL(pasted));
       const snap = editor.fullSnapshot();
-      const n = editor.layers.filter((l) => l.name.startsWith(state.pipeline === "edit" ? "Правка" : "Генерация")).length + 1;
-      const label = state.pipeline === "edit" ? ("Правка " + n) : ("Генерация " + n);
-      if (!crop) {
-        const layerCanvas = scaleCanvas(img, editor.gen.w, editor.gen.h);
-        const layer = editor.makeLayer(label, layerCanvas);
-        layer.x = editor.gen.x; layer.y = editor.gen.y; layer.meta = meta;
-        editor.addLayer(layer);
+      if (replacesCanvas()) {
+        const canvas = crop ? imageCanvas(img) : scaleCanvas(img, editor.doc.w, editor.doc.h);
+        const layer = editor.makeLayer("Холст", canvas);
+        layer.x = 0; layer.y = 0; layer.meta = meta;
+        editor.layers = [layer];
+        editor.active = 0;
+        editor.thumb(layer);
+        editor.pushUndo(snap);
+        renderEmpty();
+        toast("Готово, холст заменён. Сид " + spec.seed + ". Прошлый кадр в отмене и в галерее.");
       } else {
-        const c = document.createElement("canvas");
-        c.width = img.width; c.height = img.height;
-        c.getContext("2d").drawImage(img, 0, 0);
-        const layer = editor.makeLayer(label, c);
-        layer.x = crop.x; layer.y = crop.y; layer.meta = meta;
-        editor.addLayer(layer);
+        const n = editor.layers.filter((l) => l.name.startsWith(state.pipeline === "edit" ? "Правка" : "Генерация")).length + 1;
+        const label = state.pipeline === "edit" ? ("Правка " + n) : ("Генерация " + n);
+        if (!crop) {
+          const layerCanvas = scaleCanvas(img, editor.gen.w, editor.gen.h);
+          const layer = editor.makeLayer(label, layerCanvas);
+          layer.x = editor.gen.x; layer.y = editor.gen.y; layer.meta = meta;
+          editor.addLayer(layer);
+        } else {
+          const c = imageCanvas(img);
+          const layer = editor.makeLayer(label, c);
+          layer.x = crop.x; layer.y = crop.y; layer.meta = meta;
+          editor.addLayer(layer);
+        }
+        editor.pushUndo(snap);
+        renderEmpty();
+        toast("Готово, новый слой. Сид " + spec.seed + ".");
       }
-      editor.pushUndo(snap);
-      renderEmpty();
-      toast("Готово, новый слой. Сид " + spec.seed + ".");
     } catch (err) {
       const msg = err.message || String(err);
       const missing = /не выбран/i.test(msg);
@@ -2288,7 +2533,7 @@
     if (h.qwen_resolution) target.qwen_resolution = h.qwen_resolution;
     if (h.krea) target.krea = { ...target.krea, ...h.krea };
     if (h.sampler) Object.assign(state.sampler, h.sampler);
-    if (h.output) { state.area.outW = h.output[0]; state.area.outH = h.output[1]; }
+    syncDefaultArea();
     if (h.lora && h.lora.name) {
       const existing = target.loras.find((l) => l.name === h.lora.name);
       if (!existing) target.loras.push({ triggers: [], trigger_mode: "off", ...h.lora });
@@ -2454,36 +2699,46 @@
   }
 
   function openCanvasSize() {
+    const curW = editor.doc.w, curH = editor.doc.h;
     openModal(`<h3>Размер холста</h3>
-      <div class="row"><input id="cw" class="f" value="${editor.doc.w}"><span>×</span><input id="ch" class="f" value="${editor.doc.h}"></div>
-      <div class="mu">Новый холст очистит слои. «Применить» меняет только размер документа, пиксели слоёв остаются.</div>
+      <div id="canvas-res">${resolutionPickerHtml(curW, curH)}</div>
+      <div class="mu">Новый холст очищает слои. «Применить» меняет только размер документа. Генерация всего холста берёт этот размер, кратно 16.</div>
       <button class="b" id="cw-new" type="button">Новый пустой холст</button>`, (box, close) => {
-      box.querySelector("[data-ok]").onclick = () => {
-        const w = Math.max(64, parseInt($("cw").value, 10) || editor.doc.w);
-        const h = Math.max(64, parseInt($("ch").value, 10) || editor.doc.h);
-        editor.pushUndo(editor.fullSnapshot());
-        editor.doc = { w, h };
-        editor.resizeMask();
-        editor.gen.w = Math.min(editor.gen.w, w);
-        editor.gen.h = Math.min(editor.gen.h, h);
-        if (!state.area.userPlaced) syncDefaultArea();
-        editor.fit();
+      box.classList.add("wide");
+      let picked = { w: snapSize(curW), h: snapSize(curH) };
+      const paint = () => {
+        const host = $("canvas-res");
+        if (!host) return;
+        host.innerHTML = resolutionPickerHtml(picked.w, picked.h);
+        bindResolutionPicker(host.querySelector(".res-pick"), (w, h) => { picked = { w, h }; paint(); });
+      };
+      paint();
+      const applySize = (blank) => {
+        const root = box.querySelector(".res-pick");
+        if (root) {
+          picked = {
+            w: snapSize(parseInt(root.querySelector("[data-rw]").value, 10) || picked.w),
+            h: snapSize(parseInt(root.querySelector("[data-rh]").value, 10) || picked.h),
+          };
+        }
+        if (blank) newCanvas(picked.w, picked.h);
+        else {
+          editor.pushUndo(editor.fullSnapshot());
+          editor.doc = { w: picked.w, h: picked.h };
+          editor.resizeMask();
+          editor.gen.w = Math.min(editor.gen.w, picked.w);
+          editor.gen.h = Math.min(editor.gen.h, picked.h);
+          state.area.outputLinked = true;
+          if (!state.area.userPlaced) syncDefaultArea();
+          editor.fit();
+          renderInspector();
+          renderPipe();
+        }
         close();
       };
-      $("cw-new").onclick = async () => {
-        editor.pushUndo(editor.fullSnapshot());
-        editor.layers = [];
-        editor.doc = { w: parseInt($("cw").value, 10) || 1024, h: parseInt($("ch").value, 10) || 1024 };
-        editor.resizeMask();
-        editor.maskCtx.clearRect(0, 0, editor.doc.w, editor.doc.h);
-        state.area.userPlaced = false;
-        syncDefaultArea();
-        editor.fit();
-        renderLayers();
-        renderEmpty();
-        renderInspector();
-        close();
-      };
+      box.querySelector("[data-ok]").textContent = "Применить";
+      box.querySelector("[data-ok]").onclick = () => applySize(false);
+      $("cw-new").onclick = () => applySize(true);
     });
   }
 
@@ -2504,6 +2759,7 @@
       document.querySelectorAll(".tabs button").forEach((x) => x.classList.toggle("on", x === b));
       document.body.dataset.tab = b.dataset.tab;
       if (b.dataset.tab === "presets") renderPresetPage();
+      if (b.dataset.tab === "lora" || b.dataset.tab === "canvas") renderLoras();
       if (b.dataset.tab === "canvas") requestAnimationFrame(() => editor.resizeView());
     });
     $("mode").onclick = (e) => {
@@ -2941,6 +3197,24 @@
   }
 
   async function onLoraClick(e) {
+    const add = e.target.closest("#btn-lora-add");
+    if (add) { openLoraPicker(); return; }
+    const rm = e.target.closest("[data-lora-remove]");
+    if (rm) {
+      cfg().loras = activeLoras().filter((l) => l.name !== rm.dataset.loraRemove);
+      if (state.loraSelected === rm.dataset.loraRemove) state.loraSelected = "";
+      renderLoras(); renderPipe(); updateFinal();
+      return;
+    }
+    const en = e.target.closest("[data-lora-enable]");
+    if (en) {
+      const l = activeLoras().find((x) => x.name === en.dataset.loraEnable);
+      if (l) l.enabled = !l.enabled;
+      renderLoras(); renderPipe(); updateFinal();
+      return;
+    }
+    const info = e.target.closest("[data-lora-info]");
+    if (info) { state.loraSelected = state.loraSelected === info.dataset.loraInfo ? "" : info.dataset.loraInfo; renderLoras(); return; }
     const folder = e.target.closest("[data-folder]");
     if (folder) { state.loraFolder = folder.dataset.folder; renderLoras(); return; }
     const toggle = e.target.closest("[data-lora-toggle]");
@@ -2957,8 +3231,10 @@
     if (row && !e.target.closest("[data-lora-toggle]")) { state.loraSelected = row.dataset.lora; renderLoras(); }
     const civ = e.target.closest("[data-civitai]");
     if (civ) {
-      const l = activeLoras().find((x) => x.name === state.loraSelected);
+      const name = civ.dataset.loraName || state.loraSelected;
+      const l = activeLoras().find((x) => x.name === name);
       if (!l) return;
+      state.loraSelected = l.name;
       try {
         const data = await api("/zeroimagestudio/loras/civitai", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: l.name }) });
         l.sha256 = data.sha256;
@@ -2972,7 +3248,8 @@
     }
     const trig = e.target.closest("[data-trig]");
     if (trig) {
-      const l = activeLoras().find((x) => x.name === state.loraSelected);
+      const name = trig.dataset.loraName || state.loraSelected;
+      const l = activeLoras().find((x) => x.name === name);
       if (!l || !l.triggers[trig.dataset.trig]) return;
       const t = l.triggers[trig.dataset.trig];
       t.enabled = t.enabled === false;
@@ -2981,17 +3258,22 @@
   }
 
   function onLoraChange(e) {
-    const l = activeLoras().find((x) => x.name === state.loraSelected);
+    const name = e.target.dataset.loraName || state.loraSelected;
+    const l = activeLoras().find((x) => x.name === name);
     if (!l) return;
     if (e.target.dataset.trigMode) { l.trigger_mode = e.target.value; updateFinal(); }
   }
 
   function onLoraInput(e) {
-    const l = activeLoras().find((x) => x.name === state.loraSelected);
+    const name = e.target.dataset.loraName || state.loraSelected;
+    const l = activeLoras().find((x) => x.name === name);
     if (!l) return;
     if (e.target.dataset.str) {
       const v = parseFloat(e.target.value);
-      if (e.target.dataset.str === "model") l.strength_model = v; else l.strength_clip = v;
+      if (e.target.dataset.str === "model") {
+        l.strength_model = v;
+        if (!e.target.closest("#lora-detail")) l.strength_clip = v;
+      } else l.strength_clip = v;
       const num = e.target.parentElement.querySelector("[data-str-num]");
       if (num) num.value = v.toFixed(2);
     }

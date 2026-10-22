@@ -151,6 +151,16 @@ def _civitai_summarize(payload: dict) -> dict:
         size = files[0].get("sizeKB")
     stats = payload.get("stats") or {}
     words = payload.get("trainedWords") or []
+    preview = None
+    for img in payload.get("images") or []:
+        if not isinstance(img, dict):
+            continue
+        flag = img.get("nsfw")
+        level = img.get("nsfwLevel")
+        allowed = flag in (None, False, "None", "Soft", "none", "soft") and level in (None, 0, 1, 2, "None", "Soft")
+        if allowed and img.get("url"):
+            preview = img.get("url")
+            break
     return {
         "id": payload.get("id"),
         "model_id": model.get("id") or payload.get("modelId"),
@@ -163,6 +173,7 @@ def _civitai_summarize(payload: dict) -> dict:
         "download_count": stats.get("downloadCount"),
         "rating": stats.get("rating"),
         "size_kb": size,
+        "preview": preview,
         "url": f"https://civitai.com/models/{model.get('id') or payload.get('modelId')}" if (model.get("id") or payload.get("modelId")) else None,
         "version_url": f"https://civitai.com/models/{model.get('id') or payload.get('modelId')}?modelVersionId={payload.get('id')}" if payload.get("id") else None,
     }
