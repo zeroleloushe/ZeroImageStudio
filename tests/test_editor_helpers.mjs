@@ -26,6 +26,29 @@ test("removal matches verbs and skips substrings", () => {
   assert.equal(U.requestsRemoval("убер"), false);
 });
 
+test("a selected mask is what the brush and the eraser paint", () => {
+  assert.equal(U.brushTargetsMask("mask", false), true);
+  assert.equal(U.brushTargetsMask("brush", true), true);
+  assert.equal(U.brushTargetsMask("brush", false), false);
+  assert.equal(U.brushTargetsMask("eraser", true), true);
+  assert.equal(U.brushTargetsMask("eraser", false), false);
+  assert.equal(U.workMaskRowVisible(false, "move", null), false);
+  assert.equal(U.workMaskRowVisible(false, "mask", null), true);
+  assert.equal(U.workMaskRowVisible(true, "brush", null), true);
+  assert.equal(U.workMaskRowVisible(false, "brush", "work"), true);
+  assert.equal(U.maskShortcutClears("d", true, null), "clear");
+  assert.equal(U.maskShortcutClears("Delete", false, "work"), "clear");
+  assert.equal(U.maskShortcutClears("Backspace", false, "work"), "clear");
+  assert.equal(U.maskShortcutClears("Delete", false, null), "");
+  assert.equal(U.maskShortcutClears("Delete", true, "work"), "");
+  const inverse = U.inverseHistory(
+    { type: "patch", id: "m", maskStroke: true, layerMaskId: "L1", x: 1, y: 2, w: 4, h: 4 },
+    { data: { byteLength: 8 }, mask: null },
+  );
+  assert.equal(inverse.maskStroke, true);
+  assert.equal(inverse.layerMaskId, "L1");
+});
+
 test("undo inverse is recorded for pixels, patches and moves", () => {
   const pixels = U.inverseHistory(
     { type: "pixels", id: "a", data: { byteLength: 4 } },

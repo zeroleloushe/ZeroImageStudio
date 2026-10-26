@@ -56,6 +56,8 @@
     galleryLimit: 48,
     studioPaused: false,
     collapsed: false,
+    maskFocus: null,
+    workMaskHidden: false,
   };
   state.edit.method = "krea2_edit";
   state.edit.clip_type = "krea2";
@@ -299,6 +301,7 @@
         name, canvas: c, ctx: c.getContext("2d"),
         x: 0, y: 0, visible: true, opacity: 1, blend: "normal",
         locked: false, rotation: 0, scaleX: 1, scaleY: 1, meta: null, thumb: "",
+        mask: null, maskThumb: "",
       };
     }
 
@@ -352,14 +355,26 @@
         ctx.translate(layer.x, layer.y);
         ctx.rotate(layer.rotation || 0);
         ctx.scale(layer.scaleX || 1, layer.scaleY || 1);
-        ctx.drawImage(layer.canvas, 0, 0);
+        ctx.drawImage(this.composited(layer), 0, 0);
         ctx.restore();
       }
-      if (this._maskLive || this.maskArea() > 0) {
+      if ((this._maskLive || !state.workMaskHidden) && (this._maskLive || this.maskArea() > 0)) {
         ctx.save();
         ctx.globalAlpha = 0.42;
         ctx.drawImage(this.maskTint(), 0, 0);
         ctx.restore();
+      }
+      if (state.maskFocus && state.maskFocus.id) {
+        const masked = this.layers.find((l) => l.id === state.maskFocus.id && l.mask);
+        if (masked) {
+          ctx.save();
+          ctx.globalAlpha = 0.42;
+          ctx.translate(masked.x, masked.y);
+          ctx.rotate(masked.rotation || 0);
+          ctx.scale(masked.scaleX || 1, masked.scaleY || 1);
+          ctx.drawImage(this.greenTint(masked.mask.canvas), 0, 0);
+          ctx.restore();
+        }
       }
       if (this.selection) this.strokeSelection(ctx);
       ctx.restore();
@@ -373,6 +388,30 @@
       if (zoom) zoom.textContent = Math.round(this.zoom * 100) + "%";
     }
 
+    composited(layer) {
+      if (!layer || !layer.mask || layer.mask.visible === false) return layer.canvas;
+      const c = document.createElement("canvas");
+      c.width = layer.canvas.width;
+      c.height = layer.canvas.height;
+      const g = c.getContext("2d");
+      g.drawImage(layer.canvas, 0, 0);
+      g.globalCompositeOperation = "destination-in";
+      g.drawImage(layer.mask.canvas, 0, 0);
+      return c;
+    }
+
+    greenTint(source) {
+      const c = document.createElement("canvas");
+      c.width = source.width;
+      c.height = source.height;
+      const g = c.getContext("2d");
+      g.fillStyle = "rgba(61,220,151,1)";
+      g.fillRect(0, 0, c.width, c.height);
+      g.globalCompositeOperation = "destination-in";
+      g.drawImage(source, 0, 0);
+      return c;
+    }
+
     maskTint() {
       const c = this._tint || (this._tint = document.createElement("canvas"));
       if (c.width !== this.maskCanvas.width || c.height !== this.maskCanvas.height) {
@@ -380,6 +419,7 @@
         c.height = this.maskCanvas.height;
       }
       const g = c.getContext("2d");
+      g.globalCompositeOperation = "source-over";
       g.clearRect(0, 0, c.width, c.height);
       g.fillStyle = "rgba(61,220,151,1)";
       g.fillRect(0, 0, c.width, c.height);
@@ -447,7 +487,7 @@
         ctx.translate(layer.x, layer.y);
         ctx.rotate(layer.rotation || 0);
         ctx.scale(layer.scaleX || 1, layer.scaleY || 1);
-        ctx.drawImage(layer.canvas, 0, 0);
+        ctx.drawImage(this.composited(layer), 0, 0);
         ctx.restore();
       }
       return c;
@@ -465,6 +505,42 @@
 
     touchMask() {
       this._maskDirty = true;
+      this._maskThumb = "";
+    }
+
+    maskSelected() {
+      if (state.maskFocus === "work") return true;
+      return !!(state.maskFocus && state.maskFocus.id);
+    }
+
+    paintTarget(tool) {
+      if (tool === "mask") return { kind: "work" };
+      if (tool !== "brush" && tool !== "eraser") return null;
+      if (state.maskFocus === "work") return { kind: "work" };
+      if (state.maskFocus && state.maskFocus.id) {
+        const layer = this.layers.find((l) => l.id === state.maskFocus.id && l.mask);
+        if (layer) return { kind: "layer", layer };
+        state.maskFocus = null;
+      }
+      return null;
+    }
+
+    patchCtx(patch) {
+      if (!patch) return null;
+      if (patch.maskStroke) return this.maskCtx;
+      if (patch.layerMaskId) {
+        const layer = this.layers.find((l) => l.id === patch.layerMaskId);
+        return layer && layer.mask && layer.mask.ctx;
+      }
+      const layer = this.layers.find((l) => l.id === patch.id);
+      return layer && layer.ctx;
+    }
+
+    patchLocal(patch, x, y) {
+      if (!patch || patch.maskStroke) return { x, y };
+      const id = patch.layerMaskId || patch.id;
+      const layer = this.layers.find((l) => l.id === id);
+      return { x: x - (layer ? layer.x : 0), y: y - (layer ? layer.y : 0) };
     }
 
     exportMask() {
@@ -522,11 +598,19 @@
         gen: { ...this.gen },
         active: this.active,
         mask: this.maskCtx.getImageData(0, 0, this.maskCanvas.width, this.maskCanvas.height),
+        maskFocus: state.maskFocus === "work" ? "work" : (state.maskFocus && state.maskFocus.id ? { id: state.maskFocus.id } : null),
+        workMaskHidden: !!state.workMaskHidden,
         layers: this.layers.map((l) => ({
           id: l.id, name: l.name, x: l.x, y: l.y, visible: l.visible, opacity: l.opacity,
           blend: l.blend, locked: l.locked, meta: l.meta,
           w: l.canvas.width, h: l.canvas.height,
           data: l.ctx.getImageData(0, 0, l.canvas.width, l.canvas.height),
+          mask: l.mask ? {
+            visible: l.mask.visible !== false,
+            w: l.mask.canvas.width,
+            h: l.mask.canvas.height,
+            data: l.mask.ctx.getImageData(0, 0, l.mask.canvas.width, l.mask.canvas.height),
+          } : null,
         })),
       };
     }
@@ -545,16 +629,27 @@
           ctx.putImageData(s.data, 0, 0);
           const layer = this.makeLayer(s.name, c);
           Object.assign(layer, { id: s.id, x: s.x, y: s.y, visible: s.visible, opacity: s.opacity, blend: s.blend, locked: s.locked, meta: s.meta });
+          if (s.mask && s.mask.data) {
+            const mc = document.createElement("canvas");
+            mc.width = s.mask.w; mc.height = s.mask.h;
+            const mctx = mc.getContext("2d");
+            mctx.putImageData(s.mask.data, 0, 0);
+            layer.mask = { canvas: mc, ctx: mctx, visible: s.mask.visible !== false };
+            this.maskThumb(layer);
+          }
           this.thumb(layer);
           return layer;
         });
         this.active = Math.min(rec.active, this.layers.length - 1);
+        state.workMaskHidden = !!rec.workMaskHidden;
+        state.maskFocus = rec.maskFocus === "work" ? "work" : (rec.maskFocus && rec.maskFocus.id ? { id: rec.maskFocus.id } : null);
         this.touchMask();
       } else if (rec.type === "patch") {
-        const layer = this.layers.find((l) => l.id === rec.id);
-        const ctx = rec.maskStroke ? this.maskCtx : (layer && layer.ctx);
+        const layer = this.layers.find((l) => l.id === (rec.layerMaskId || rec.id));
+        const ctx = this.patchCtx(rec);
         if (ctx && rec.data) ctx.putImageData(rec.data, rec.x || 0, rec.y || 0);
         if (rec.maskStroke) this.touchMask();
+        else if (rec.layerMaskId) this.maskThumb(layer);
         else this.thumb(layer);
       } else if (rec.type === "pixels") {
         const layer = this.layers.find((l) => l.id === rec.id);
@@ -596,10 +691,9 @@
         return U.inverseHistory(rec, { x: layer ? layer.x : rec.x, y: layer ? layer.y : rec.y });
       }
       if (rec.type === "patch") {
-        const layer = this.layers.find((l) => l.id === rec.id);
-        const ctx = rec.maskStroke ? this.maskCtx : (layer && layer.ctx);
+        const ctx = this.patchCtx(rec);
         const data = ctx && rec.w ? ctx.getImageData(rec.x, rec.y, rec.w, rec.h) : rec.data;
-        return { type: "patch", id: rec.id, maskStroke: !!rec.maskStroke, x: rec.x, y: rec.y, w: rec.w, h: rec.h, data };
+        return { type: "patch", id: rec.id, maskStroke: !!rec.maskStroke, layerMaskId: rec.layerMaskId || "", x: rec.x, y: rec.y, w: rec.w, h: rec.h, data };
       }
       if (rec.type === "pixels") {
         const layer = this.layers.find((l) => l.id === rec.id);
@@ -638,6 +732,146 @@
       layer.thumb = c.toDataURL("image/png");
     }
 
+    maskThumb(layer) {
+      if (!layer) return;
+      if (!layer.mask) { layer.maskThumb = ""; return; }
+      const c = document.createElement("canvas");
+      c.width = 32; c.height = 32;
+      const g = c.getContext("2d");
+      g.fillStyle = "#000";
+      g.fillRect(0, 0, 32, 32);
+      const s = Math.max(layer.mask.canvas.width, layer.mask.canvas.height) || 1;
+      const dw = 32 * layer.mask.canvas.width / s;
+      const dh = 32 * layer.mask.canvas.height / s;
+      g.drawImage(layer.mask.canvas, (32 - dw) / 2, (32 - dh) / 2, dw, dh);
+      layer.maskThumb = c.toDataURL("image/png");
+    }
+
+    workMaskPreview() {
+      if (this._maskThumb) return this._maskThumb;
+      if (this.maskArea() <= 0) return "";
+      const c = document.createElement("canvas");
+      c.width = 32; c.height = 32;
+      const g = c.getContext("2d");
+      g.fillStyle = "#10241c";
+      g.fillRect(0, 0, 32, 32);
+      const s = Math.max(this.maskCanvas.width, this.maskCanvas.height) || 1;
+      const dw = 32 * this.maskCanvas.width / s;
+      const dh = 32 * this.maskCanvas.height / s;
+      g.drawImage(this.maskCanvas, (32 - dw) / 2, (32 - dh) / 2, dw, dh);
+      this._maskThumb = c.toDataURL("image/png");
+      return this._maskThumb;
+    }
+
+    clearWorkMask() {
+      this.pushUndo(this.fullSnapshot());
+      this.consumeWorkMask();
+      this.requestDraw();
+      renderLayers();
+      renderInspector();
+    }
+
+    consumeWorkMask() {
+      this.maskCtx.clearRect(0, 0, this.maskCanvas.width, this.maskCanvas.height);
+      this.touchMask();
+      state.workMaskHidden = false;
+      if (state.maskFocus === "work" && state.tool !== "mask") state.maskFocus = null;
+    }
+
+    invertWorkMask() {
+      this.pushUndo(this.fullSnapshot());
+      const w = this.maskCanvas.width;
+      const h = this.maskCanvas.height;
+      const img = this.maskCtx.getImageData(0, 0, w, h);
+      const d = img.data;
+      for (let i = 0; i < d.length; i += 4) {
+        const inv = 255 - d[i + 3];
+        d[i] = d[i + 1] = d[i + 2] = inv ? 255 : 0;
+        d[i + 3] = inv;
+      }
+      this.maskCtx.putImageData(img, 0, 0);
+      this.touchMask();
+      state.maskFocus = "work";
+      this.requestDraw();
+      renderLayers();
+    }
+
+    toggleWorkMask() {
+      this.pushUndo(this.fullSnapshot());
+      state.workMaskHidden = !state.workMaskHidden;
+      this.requestDraw();
+      renderLayers();
+    }
+
+    focusWorkMask() {
+      state.maskFocus = "work";
+      if (state.tool !== "brush" && state.tool !== "eraser" && state.tool !== "mask") setTool("mask");
+      else { this.requestDraw(); renderLayers(); }
+    }
+
+    copyMask(from, to) {
+      if (!from || !from.mask || !to) return;
+      const c = document.createElement("canvas");
+      c.width = from.mask.canvas.width;
+      c.height = from.mask.canvas.height;
+      c.getContext("2d").drawImage(from.mask.canvas, 0, 0);
+      to.mask = { canvas: c, ctx: c.getContext("2d"), visible: from.mask.visible !== false };
+      this.maskThumb(to);
+    }
+
+    attachLayerMask(layer, maskSource, featherPx) {
+      if (!layer || !maskSource) return;
+      const w = layer.canvas.width;
+      const h = layer.canvas.height;
+      const blurred = document.createElement("canvas");
+      blurred.width = w;
+      blurred.height = h;
+      const bg = blurred.getContext("2d");
+      const px = Math.max(0, Number(featherPx) || 0);
+      if (px > 0) bg.filter = `blur(${px}px)`;
+      bg.drawImage(maskSource, 0, 0, w, h);
+      bg.filter = "none";
+      const img = bg.getImageData(0, 0, w, h);
+      const d = img.data;
+      for (let i = 0; i < d.length; i += 4) {
+        const lum = Math.max(d[i], d[i + 1], d[i + 2]);
+        d[i] = d[i + 1] = d[i + 2] = 255;
+        d[i + 3] = lum;
+      }
+      bg.putImageData(img, 0, 0);
+      layer.mask = { canvas: blurred, ctx: bg, visible: true };
+      this.maskThumb(layer);
+    }
+
+    deleteLayerMask(layer) {
+      layer = layer || this.activeLayer();
+      if (!layer || !layer.mask) return;
+      this.pushUndo(this.fullSnapshot());
+      if (state.maskFocus && state.maskFocus.id === layer.id) state.maskFocus = null;
+      layer.mask = null;
+      layer.maskThumb = "";
+      this.thumb(layer);
+      this.requestDraw();
+      renderLayers();
+    }
+
+    applyLayerMask(layer) {
+      layer = layer || this.activeLayer();
+      if (!layer || !layer.mask) return;
+      this.pushUndo(this.fullSnapshot());
+      const baked = this.composited(layer);
+      const g = baked.getContext("2d");
+      g.globalCompositeOperation = "source-over";
+      layer.canvas = baked;
+      layer.ctx = g;
+      layer.mask = null;
+      layer.maskThumb = "";
+      if (state.maskFocus && state.maskFocus.id === layer.id) state.maskFocus = null;
+      this.thumb(layer);
+      this.requestDraw();
+      renderLayers();
+    }
+
     bind() {
       const down = (e) => this.pointerDown(e);
       this.canvas.addEventListener("pointerdown", down);
@@ -668,13 +902,28 @@
           if (e.key === "1") { e.preventDefault(); this.zoom100(); return; }
           if (key === "s") { e.preventDefault(); saveProject().then(() => toast("Проект сохранён.")).catch((err) => toast(err.message || String(err))); return; }
           if (key === "n") { e.preventDefault(); newProject(); return; }
+          if (U.maskShortcutClears(e.key, true, state.maskFocus) === "clear") {
+            const typing = /^(input|textarea|select)$/i.test(e.target.tagName || "");
+            if (typing) return;
+            e.preventDefault();
+            this.clearWorkMask();
+            return;
+          }
         }
         const tag = (e.target.tagName || "").toLowerCase();
         if (tag === "input" || tag === "textarea" || tag === "select") return;
         const map = { KeyV: "move", KeyM: "select", KeyL: "lasso", KeyT: "transform", KeyC: "crop", KeyB: "brush", KeyE: "eraser", KeyI: "eyedrop", KeyQ: "mask", KeyG: "genarea", KeyH: "hand", KeyZ: "zoom" };
         if (e.key === "?" || (e.shiftKey && e.code === "Slash")) { e.preventDefault(); toggleHelp(true); return; }
         if (e.ctrlKey || e.metaKey || e.altKey) return;
-        if (e.key === "Delete" || e.key === "Backspace") { this.deleteActive(); return; }
+        if (e.key === "Delete" || e.key === "Backspace") {
+          if (U.maskShortcutClears(e.key, false, state.maskFocus) === "clear") { e.preventDefault(); this.clearWorkMask(); return; }
+          if (state.maskFocus && state.maskFocus.id) {
+            const masked = this.layers.find((l) => l.id === state.maskFocus.id && l.mask);
+            if (masked) { e.preventDefault(); this.deleteLayerMask(masked); return; }
+          }
+          this.deleteActive();
+          return;
+        }
         if (e.key === "[") { state.brush.size = Math.max(1, state.brush.size - 4); const b = $("brush-size"); if (b) b.value = state.brush.size; renderToolOptions(); }
         if (e.key === "]") { state.brush.size = Math.min(300, state.brush.size + 4); const b = $("brush-size"); if (b) b.value = state.brush.size; renderToolOptions(); }
         if (map[e.code]) { setTool(map[e.code]); }
@@ -726,10 +975,20 @@
       }
       if (tool === "brush" || tool === "eraser" || tool === "mask") {
         const layer = this.activeLayer();
-        if (tool !== "mask" && (!layer || layer.locked)) { toast(layer && layer.locked ? "Слой заблокирован." : "Нет слоя."); return; }
-        const patch = { type: "patch", id: layer && layer.id, maskStroke: tool === "mask", x: 0, y: 0, w: 0, h: 0, data: null };
+        const onMask = U.brushTargetsMask(tool, this.maskSelected());
+        const target = onMask ? this.paintTarget(tool) : null;
+        if (target && target.kind === "layer" && target.layer.locked) { toast("Слой заблокирован."); return; }
+        if (!target && (!layer || layer.locked)) { toast(layer && layer.locked ? "Слой заблокирован." : "Нет слоя."); return; }
+        if (tool === "mask") state.maskFocus = "work";
+        const patch = {
+          type: "patch",
+          id: target && target.kind === "layer" ? target.layer.id : (layer && layer.id),
+          maskStroke: !!(target && target.kind === "work"),
+          layerMaskId: target && target.kind === "layer" ? target.layer.id : "",
+          x: 0, y: 0, w: 0, h: 0, data: null,
+        };
         this.drag = { kind: "paint", x: p.x, y: p.y, patch };
-        if (tool === "mask") this._maskLive = true;
+        if (patch.maskStroke) this._maskLive = true;
         this.notePatch(patch, p.x, p.y);
         this.stamp(p.x, p.y);
       }
@@ -774,7 +1033,9 @@
         this._maskLive = false;
         this.touchMask();
         this.pushUndo(d.patch);
-        this.thumb(this.activeLayer());
+        const painted = d.patch.layerMaskId ? this.layers.find((l) => l.id === d.patch.layerMaskId) : this.activeLayer();
+        this.thumb(painted);
+        if (d.patch.layerMaskId) this.maskThumb(painted);
         renderLayers();
         renderTags();
       }
@@ -827,12 +1088,12 @@
 
     notePatch(patch, x, y) {
       if (!patch) return;
-      const layer = this.layers.find((l) => l.id === patch.id);
-      const ctx = patch.maskStroke ? this.maskCtx : (layer && layer.ctx);
+      const ctx = this.patchCtx(patch);
       if (!ctx) return;
       const rad = Math.max(1, state.brush.size / 2 + 2);
-      const lx = patch.maskStroke ? x : x - (layer ? layer.x : 0);
-      const ly = patch.maskStroke ? y : y - (layer ? layer.y : 0);
+      const local = this.patchLocal(patch, x, y);
+      const lx = local.x;
+      const ly = local.y;
       const canvas = ctx.canvas;
       const x0 = Math.max(0, Math.floor(lx - rad));
       const y0 = Math.max(0, Math.floor(ly - rad));
@@ -866,15 +1127,19 @@
     stamp(x, y) {
       const size = state.brush.size;
       const hard = state.brush.hardness;
-      if (state.tool === "mask") {
-        const ctx = this.maskCtx;
+      const patch = this.drag && this.drag.patch;
+      if (patch && (patch.maskStroke || patch.layerMaskId)) {
+        const ctx = this.patchCtx(patch);
+        if (!ctx) return;
+        const local = this.patchLocal(patch, x, y);
         ctx.save();
-        const grd = ctx.createRadialGradient(x, y, size * hard * 0.5, x, y, size / 2);
+        if (state.tool === "eraser") ctx.globalCompositeOperation = "destination-out";
+        const grd = ctx.createRadialGradient(local.x, local.y, size * hard * 0.5, local.x, local.y, size / 2);
         grd.addColorStop(0, `rgba(255,255,255,${state.brush.opacity})`);
         grd.addColorStop(1, "rgba(255,255,255,0)");
         ctx.fillStyle = grd;
         ctx.beginPath();
-        ctx.arc(x, y, size / 2, 0, Math.PI * 2);
+        ctx.arc(local.x, local.y, size / 2, 0, Math.PI * 2);
         ctx.fill();
         ctx.restore();
         return;
@@ -923,6 +1188,14 @@
         c.getContext("2d").drawImage(layer.canvas, layer.x - x, layer.y - y);
         layer.canvas = c;
         layer.ctx = c.getContext("2d");
+        if (layer.mask) {
+          const mc = document.createElement("canvas");
+          mc.width = w; mc.height = h;
+          mc.getContext("2d").drawImage(layer.mask.canvas, layer.x - x, layer.y - y);
+          layer.mask.canvas = mc;
+          layer.mask.ctx = mc.getContext("2d");
+          this.maskThumb(layer);
+        }
         layer.x = 0; layer.y = 0;
         this.thumb(layer);
       }
@@ -962,6 +1235,7 @@
       const layer = this.activeLayer();
       if (!layer || layer.locked) { toast(layer && layer.locked ? "Слой заблокирован." : "Нет слоя."); return; }
       this.pushUndo(this.fullSnapshot());
+      if (state.maskFocus && state.maskFocus.id === layer.id) state.maskFocus = null;
       this.layers.splice(this.active, 1);
       this.active = Math.max(0, this.active - 1);
       this.requestDraw();
@@ -977,6 +1251,7 @@
         mask: "mask.png",
         layers: this.layers.map((l) => ({
           id: l.id, name: l.name, file: "layers/" + l.id + ".png",
+          mask: l.mask ? "layers/" + l.id + ".mask.png" : "",
           x: l.x, y: l.y, visible: l.visible, opacity: l.opacity, blend: l.blend,
           locked: l.locked, meta: l.meta,
         })),
@@ -1012,7 +1287,9 @@
     if (meta && editor) meta.textContent = inspectorContext();
     const cursors = { brush: "crosshair", eraser: "crosshair", mask: "crosshair", hand: "grab", zoom: "zoom-in", move: "move", genarea: "crosshair", crop: "crosshair", select: "crosshair", lasso: "crosshair", eyedrop: "crosshair", transform: "move" };
     editor.canvas.style.cursor = cursors[name] || "default";
+    if (name === "mask") state.maskFocus = "work";
     editor.requestDraw();
+    renderLayers();
   }
 
   function renderAll() {
@@ -1962,8 +2239,11 @@
     editor.doc = { w, h };
     editor.resizeMask();
     editor.maskCtx.clearRect(0, 0, w, h);
+    editor.touchMask();
     editor.layers = [];
     editor.active = 0;
+    state.maskFocus = null;
+    state.workMaskHidden = false;
     state.area.userPlaced = false;
     syncDefaultArea();
     editor.fit();
@@ -1990,6 +2270,7 @@
         <div><kbd>[</kbd> <kbd>]</kbd> размер кисти · колесо — масштаб вокруг курсора</div>
         <div><kbd>Ctrl+0</kbd> вместить · <kbd>Ctrl+1</kbd> 100% · <kbd>Ctrl+Z</kbd> отмена · <kbd>Ctrl+Shift+Z</kbd> повтор</div>
         <div><kbd>Ctrl+S</kbd> сохранить · <kbd>Ctrl+N</kbd> новый проект · <kbd>Ctrl+Enter</kbd> генерировать · <kbd>?</kbd> эта шпаргалка</div>
+        <div><kbd>Delete</kbd> очищает выбранную маску · <kbd>Ctrl+D</kbd> очищает маску</div>
         <div><kbd>Alt</kbd> меню · стрелки по пунктам · <kbd>Esc</kbd> закрыть меню</div>`;
       document.body.appendChild(pop);
       pop.querySelector("#help-close").onclick = () => { pop.hidden = true; };
@@ -2034,18 +2315,31 @@
       blend.disabled = true;
       $("layer-opacity").disabled = true;
     }
-    host.innerHTML = [...editor.layers].reverse().map((l) => {
+    const showMask = U.workMaskRowVisible(editor.maskArea() > 0, state.tool, state.maskFocus);
+    const maskPreview = showMask ? editor.workMaskPreview() : "";
+    const maskRow = showMask ? `<div class="layer mask-row ${state.maskFocus === "work" ? "on" : ""}" data-mask-row="1">
+        <button class="e ${state.workMaskHidden ? "off" : ""}" data-mask-eye="1" data-i="${state.workMaskHidden ? "eyeoff" : "eye"}" data-s="15" type="button" title="${state.workMaskHidden ? "Показать" : "Скрыть"}"></button>
+        <div class="t mask-ico" title="Маска">${maskPreview ? `<img src="${maskPreview}" alt="">` : `<span data-i="mask" data-s="16"></span>`}</div>
+        <div class="n"><b>Маска</b><small>${state.workMaskHidden ? "скрыта" : "кисть проявляет"}</small></div>
+        <button class="e" data-mask-inv="1" data-i="invert" data-s="14" type="button" title="Инвертировать"></button>
+        <button class="e" data-mask-clear="1" data-i="trash" data-s="14" type="button" title="Очистить"></button>
+      </div>` : "";
+    const rows = [...editor.layers].reverse().map((l) => {
       const idx = editor.layers.indexOf(l);
-      const on = idx === editor.active;
+      const on = idx === editor.active && state.maskFocus !== "work";
       const blendName = (BLENDS.find((b) => b[0] === l.blend) || ["", l.blend])[1];
       const lid = escapeHtml(l.id);
+      const maskOn = state.maskFocus && state.maskFocus.id === l.id;
+      const maskBtn = l.mask ? `<button class="mt ${maskOn ? "on" : ""}" data-lmask="${lid}" type="button" title="Маска слоя">${l.maskThumb ? `<img src="${l.maskThumb}" alt="">` : ""}</button>` : "";
       return `<div class="layer ${on ? "on" : ""}" data-layer="${lid}">
         <button class="e ${l.visible ? "" : "off"}" data-eye="${lid}" data-i="${l.visible ? "eye" : "eyeoff"}" data-s="15" type="button" title="${l.visible ? "Скрыть слой" : "Показать слой"}"></button>
         <div class="t" title="Миниатюра">${l.thumb ? `<img src="${l.thumb}" alt="">` : ""}</div>
+        ${maskBtn}
         <div class="n"><b title="Двойной щелчок — переименовать">${escapeHtml(l.name)}</b><small>${escapeHtml(blendName)} · ${Math.round(Number(l.opacity) * 100) || 0}%${l.locked ? " · замок" : ""}${l.visible ? "" : " · скрыт"}</small></div>
         <button data-lock="${lid}" data-i="lock" data-s="13" type="button" title="${l.locked ? "Разблокировать" : "Заблокировать"}" style="color:${l.locked ? "var(--ac)" : "var(--mu)"}"></button>
       </div>`;
-    }).join("") || `<div class="empty">Нет слоёв. Загрузите изображение или сгенерируйте.</div>`;
+    }).join("");
+    host.innerHTML = maskRow + (rows || `<div class="empty">Нет слоёв. Загрузите изображение или сгенерируйте.</div>`);
     if (window.zeroImageStudioHydrateIcons) window.zeroImageStudioHydrateIcons(host);
     sealCollapsed(node);
   }
@@ -2838,14 +3132,16 @@
       }
       const img = await loadImage(URL.createObjectURL(pasted));
       const snap = editor.fullSnapshot();
-      if (replacesCanvas()) {
+      const replace = replacesCanvas();
+      const usedMask = !!(crop && spec.has_mask);
+      let placed = null;
+      if (replace) {
         const canvas = crop ? imageCanvas(img) : scaleCanvas(img, editor.doc.w, editor.doc.h);
         const layer = editor.makeLayer("Холст", canvas);
         layer.x = 0; layer.y = 0; layer.meta = meta;
         editor.layers = [layer];
         editor.active = 0;
-        editor.thumb(layer);
-        editor.pushUndo(snap);
+        placed = layer;
         toast("Готово, холст заменён. Сид " + spec.seed + ". Прошлый кадр в отмене и в галерее.");
       } else {
         const n = editor.layers.filter((l) => l.name.startsWith(state.pipeline === "edit" ? "Правка" : "Генерация")).length + 1;
@@ -2855,15 +3151,21 @@
           const layer = editor.makeLayer(label, layerCanvas);
           layer.x = editor.gen.x; layer.y = editor.gen.y; layer.meta = meta;
           editor.addLayer(layer);
+          placed = layer;
         } else {
           const c = imageCanvas(img);
           const layer = editor.makeLayer(label, c);
           layer.x = crop.x; layer.y = crop.y; layer.meta = meta;
           editor.addLayer(layer);
+          placed = layer;
         }
-        editor.pushUndo(snap);
         toast("Готово, новый слой. Сид " + spec.seed + ".");
       }
+      if (usedMask && placed && !replace) editor.attachLayerMask(placed, crop.mask, state.area.feather);
+      if (usedMask) editor.consumeWorkMask();
+      if (placed) editor.thumb(placed);
+      editor.pushUndo(snap);
+      renderLayers();
     } catch (err) {
       const msg = err.message || String(err);
       const missing = /не выбран/i.test(msg);
@@ -2949,6 +3251,7 @@
     c.getContext("2d").drawImage(l.canvas, 0, 0);
     const copy = editor.makeLayer(l.name + " копия", c);
     copy.x = l.x + 16; copy.y = l.y + 16; copy.blend = l.blend; copy.opacity = l.opacity;
+    editor.copyMask(l, copy);
     editor.addLayer(copy);
   }
 
@@ -2966,7 +3269,7 @@
     lower.ctx.translate(upper.x - lower.x, upper.y - lower.y);
     lower.ctx.rotate(upper.rotation || 0);
     lower.ctx.scale(upper.scaleX || 1, upper.scaleY || 1);
-    lower.ctx.drawImage(upper.canvas, 0, 0);
+    lower.ctx.drawImage(editor.composited(upper), 0, 0);
     lower.ctx.restore();
     editor.layers.splice(i, 1);
     editor.active = i - 1;
@@ -2993,7 +3296,9 @@
     editor.maskCtx.clearRect(0, 0, editor.doc.w, editor.doc.h);
     editor.maskCtx.drawImage(tmp, layer.x, layer.y);
     editor.touchMask();
+    state.maskFocus = "work";
     editor.requestDraw();
+    renderLayers();
     renderInspector();
     toast("Маска взята из непрозрачности слоя.");
   }
@@ -3011,14 +3316,18 @@
       });
     }
     const layer = editor.activeLayer();
+    const maskActs = layer && layer.mask ? `
+      <button type="button" data-act="delmask">Удалить маску</button>
+      <button type="button" data-act="applymask">Применить маску</button>` : "";
     menu.innerHTML = `
       <button type="button" data-act="dup">Дублировать</button>
       <button type="button" data-act="merge">Объединить с нижним</button>
       <button type="button" data-act="mask">Маска из слоя</button>
+      ${maskActs}
       <button type="button" data-act="del">Удалить</button>`;
     menu.hidden = false;
-    menu.style.left = Math.min(x, window.innerWidth - 200) + "px";
-    menu.style.top = Math.min(y, window.innerHeight - 160) + "px";
+    menu.style.left = Math.min(x, window.innerWidth - 220) + "px";
+    menu.style.top = Math.min(y, window.innerHeight - 220) + "px";
     menu.onclick = (e) => {
       const act = e.target.closest("[data-act]");
       menu.hidden = true;
@@ -3026,6 +3335,8 @@
       if (act.dataset.act === "dup") duplicateActive();
       if (act.dataset.act === "merge") mergeDown();
       if (act.dataset.act === "mask") maskFromLayer();
+      if (act.dataset.act === "delmask") editor.deleteLayerMask();
+      if (act.dataset.act === "applymask") editor.applyLayerMask();
       if (act.dataset.act === "del") editor.deleteActive();
     };
     void layer;
@@ -3037,11 +3348,15 @@
       projectName: state.projectName, pipeline: state.pipeline, hintId: state.hintId,
       prompt: state.prompt, negative: state.negative, promptPresets: state.promptPresets,
       sampler: state.sampler, create: state.create, edit: state.edit, area: state.area, color: state.color, brush: state.brush,
+      maskFocus: state.maskFocus, workMaskHidden: !!state.workMaskHidden,
     };
     const fd = new FormData();
     fd.append("meta", JSON.stringify(meta));
     fd.append("mask.png", await canvasBlob(editor.maskCanvas), "mask.png");
-    for (const layer of editor.layers) fd.append("layers/" + layer.id + ".png", await canvasBlob(layer.canvas), layer.id + ".png");
+    for (const layer of editor.layers) {
+      fd.append("layers/" + layer.id + ".png", await canvasBlob(layer.canvas), layer.id + ".png");
+      if (layer.mask) fd.append("layers/" + layer.id + ".mask.png", await canvasBlob(layer.mask.canvas), layer.id + ".mask.png");
+    }
     for (const ref of state.references) fd.append("refs/" + ref.id + ".png", await canvasBlob(ref.canvas), ref.id + ".png");
     const path = state.projectId ? "/zeroimagestudio/project/" + state.projectId : "/zeroimagestudio/project";
     const saved = await api(path, { method: "POST", body: fd });
@@ -3098,6 +3413,8 @@
       area: meta.state.area || state.area,
       color: meta.state.color || state.color,
       brush: meta.state.brush || state.brush,
+      maskFocus: meta.state.maskFocus || null,
+      workMaskHidden: !!meta.state.workMaskHidden,
     });
     state.hintId = canonicalHintId(state.hintId);
     state.hintByMode[state.pipeline] = state.hintId;
@@ -3124,8 +3441,19 @@
         meta: layer.meta || null,
       });
       editor.thumb(obj);
+      if (layer.mask) {
+        try {
+          const mimg = await loadImage(projectFileUrl(id, layer.mask));
+          const mc = document.createElement("canvas");
+          mc.width = mimg.width; mc.height = mimg.height;
+          mc.getContext("2d").drawImage(mimg, 0, 0);
+          obj.mask = { canvas: mc, ctx: mc.getContext("2d"), visible: true };
+          editor.maskThumb(obj);
+        } catch { /* layer has no stored mask */ }
+      }
       editor.layers.push(obj);
     }
+    if (state.maskFocus && state.maskFocus.id && !editor.layers.some((l) => l.id === state.maskFocus.id && l.mask)) state.maskFocus = null;
     if (meta.mask) {
       try {
         const img = await loadImage(projectFileUrl(id, meta.mask));
@@ -3163,8 +3491,11 @@
       editor.doc = { w: canvas.width, h: canvas.height };
       editor.resizeMask();
       editor.maskCtx.clearRect(0, 0, canvas.width, canvas.height);
+      editor.touchMask();
       editor.layers = [layer];
       editor.active = 0;
+      state.maskFocus = null;
+      state.workMaskHidden = false;
       state.area.userPlaced = false;
       syncDefaultArea();
     } else {
@@ -4481,8 +4812,13 @@
     });
     $("layer-list").onclick = (e) => {
       if (suppressLayerClick) { suppressLayerClick = false; return; }
+      if (e.target.closest("[data-mask-eye]")) { editor.toggleWorkMask(); return; }
+      if (e.target.closest("[data-mask-inv]")) { editor.invertWorkMask(); return; }
+      if (e.target.closest("[data-mask-clear]")) { editor.clearWorkMask(); return; }
+      if (e.target.closest("[data-mask-row]")) { editor.focusWorkMask(); return; }
       const eye = e.target.closest("[data-eye]");
       const lock = e.target.closest("[data-lock]");
+      const lmask = e.target.closest("[data-lmask]");
       const row = e.target.closest("[data-layer]");
       if (eye) {
         const l = editor.layers.find((x) => x.id === eye.dataset.eye);
@@ -4490,7 +4826,12 @@
       } else if (lock) {
         const l = editor.layers.find((x) => x.id === lock.dataset.lock);
         if (l) { editor.pushUndo(editor.fullSnapshot()); l.locked = !l.locked; }
+      } else if (lmask) {
+        editor.active = editor.layers.findIndex((x) => x.id === lmask.dataset.lmask);
+        state.maskFocus = { id: lmask.dataset.lmask };
+        if (state.tool !== "brush" && state.tool !== "eraser") { setTool("brush"); return; }
       } else if (row) {
+        state.maskFocus = null;
         editor.active = editor.layers.findIndex((x) => x.id === row.dataset.layer);
       } else return;
       editor.requestDraw();
@@ -4525,6 +4866,8 @@
       if (!row) return;
       e.preventDefault();
       editor.active = editor.layers.findIndex((x) => x.id === row.dataset.layer);
+      if (e.target.closest("[data-lmask]")) state.maskFocus = { id: row.dataset.layer };
+      else if (state.maskFocus === "work") state.maskFocus = null;
       renderLayers();
       openLayerMenu(e.clientX, e.clientY);
     });
@@ -4542,6 +4885,7 @@
       c.getContext("2d").drawImage(l.canvas, 0, 0);
       const copy = editor.makeLayer(l.name + " копия", c);
       copy.x = l.x + 16; copy.y = l.y + 16; copy.blend = l.blend; copy.opacity = l.opacity;
+      editor.copyMask(l, copy);
       editor.addLayer(copy);
     };
     $("btn-layer-del").onclick = () => editor.deleteActive();

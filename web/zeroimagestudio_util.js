@@ -83,6 +83,8 @@
         h: rec.h,
         data: current.data,
         mask: current.mask,
+        maskStroke: !!rec.maskStroke,
+        layerMaskId: rec.layerMaskId || "",
       };
     }
     return null;
@@ -98,9 +100,28 @@
     if (!rec) return 0;
     let n = imageBytes(rec.data) + imageBytes(rec.mask);
     if (rec.type === "full" && rec.layers) {
-      for (const layer of rec.layers) n += imageBytes(layer && layer.data);
+      for (const layer of rec.layers) {
+        n += imageBytes(layer && layer.data);
+        n += imageBytes(layer && layer.mask && (layer.mask.data || layer.mask));
+      }
     }
     return n;
+  }
+
+  function brushTargetsMask(tool, maskSelected) {
+    if (tool === "mask") return true;
+    return (tool === "brush" || tool === "eraser") && !!maskSelected;
+  }
+
+  function workMaskRowVisible(hasMask, tool, focus) {
+    return !!hasMask || tool === "mask" || focus === "work";
+  }
+
+  function maskShortcutClears(key, ctrl, focus) {
+    const k = String(key || "");
+    if (ctrl && k.toLowerCase() === "d") return "clear";
+    if (!ctrl && (k === "Delete" || k === "Backspace") && focus === "work") return "clear";
+    return "";
   }
 
   function imageBytes(data) {
@@ -120,6 +141,9 @@
     finiteNumber,
     requestsRemoval,
     inverseHistory,
+    brushTargetsMask,
+    workMaskRowVisible,
+    maskShortcutClears,
     historyBytes,
     recordBytes,
   };
