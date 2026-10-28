@@ -232,6 +232,12 @@
       this.contextBox.className = "ga-context";
       this.contextBox.hidden = true;
       this.stage.appendChild(this.contextBox);
+      this.seamBox = document.createElement("div");
+      this.seamBox.id = "ga-seam";
+      this.seamBox.className = "ga-seam";
+      this.seamBox.hidden = true;
+      this.seamBox.title = "Зона шва: маска, grow и шов. Модель перерисовывает её, вклейка использует тот же край.";
+      this.stage.appendChild(this.seamBox);
       this.doc = { w: 1024, h: 1024 };
       this.layers = [];
       this.active = 0;
@@ -513,14 +519,13 @@
       paintStatus();
       lab.classList.toggle("inside", (this.panY + g.y * this.zoom) < 26);
       const run = $("ga-run");
-      const region = state.pipeline === "edit" && state.area.editScope === "region";
-      const crop = region
-        ? window.ZeroImageStudioSize.contextRect(g, this.doc.w, this.doc.h, state.area.context || 0)
-        : { x: 0, y: 0, w: this.doc.w, h: this.doc.h };
-      const gen = frame;
-      const fitFrame = region ? window.ZeroImageStudioSize.frameForRegion(crop.w, crop.h, gen.w, gen.h) : gen;
-      const placed = region ? window.ZeroImageStudioSize.containRect(crop.w, crop.h, fitFrame.w, fitFrame.h) : { x: 0, y: 0, w: gen.w, h: gen.h };
-      const mapped = region ? window.ZeroImageStudioSize.previewMap(crop, fitFrame.w, fitFrame.h, placed) : crop;
+      const editing = state.pipeline === "edit";
+      const geom = editing ? currentEditGeom() : null;
+      const crop = geom ? geom.crop : { x: 0, y: 0, w: this.doc.w, h: this.doc.h };
+      const fitFrame = geom ? geom.gen : frame;
+      const placed = geom ? geom.placed : { x: 0, y: 0, w: frame.w, h: frame.h };
+      const mapped = geom ? window.ZeroImageStudioSize.previewMap(crop, fitFrame.w, fitFrame.h, placed) : crop;
+      if (editing && geom) lab.textContent = geom.gen.w + "×" + geom.gen.h;
       if (run) {
         run.hidden = !state.running;
         run.style.left = (this.panX + mapped.x * this.zoom) + "px";
@@ -529,20 +534,31 @@
         run.style.height = Math.max(8, mapped.h * this.zoom) + "px";
       }
       if (this.contextBox) {
-        const showContext = !!(state.running && region && (crop.w > g.w + 1 || crop.h > g.h + 1 || crop.x < g.x - 1 || crop.y < g.y - 1));
+        const showContext = !!(editing && geom && (crop.w > geom.blend.w + 2 || crop.h > geom.blend.h + 2));
         this.contextBox.hidden = !showContext;
         this.contextBox.style.left = (this.panX + crop.x * this.zoom) + "px";
         this.contextBox.style.top = (this.panY + crop.y * this.zoom) + "px";
         this.contextBox.style.width = Math.max(8, crop.w * this.zoom) + "px";
         this.contextBox.style.height = Math.max(8, crop.h * this.zoom) + "px";
       }
+      if (this.seamBox) {
+        const blend = geom && geom.blend;
+        const coversDoc = blend && blend.x <= 1 && blend.y <= 1 && blend.w >= this.doc.w - 2 && blend.h >= this.doc.h - 2;
+        const showSeam = !!(editing && blend && !coversDoc);
+        this.seamBox.hidden = !showSeam;
+        if (showSeam) {
+          this.seamBox.style.left = (this.panX + blend.x * this.zoom) + "px";
+          this.seamBox.style.top = (this.panY + blend.y * this.zoom) + "px";
+          this.seamBox.style.width = Math.max(8, blend.w * this.zoom) + "px";
+          this.seamBox.style.height = Math.max(8, blend.h * this.zoom) + "px";
+        }
+      }
       const preview = $("variant-preview");
       if (preview && !preview.hidden) {
-        const region = state.pipeline === "edit" && state.area.editScope === "region";
-        const rx = region ? g.x : 0;
-        const ry = region ? g.y : 0;
-        const rw = region ? g.w : this.doc.w;
-        const rh = region ? g.h : this.doc.h;
+        const rx = mapped.x;
+        const ry = mapped.y;
+        const rw = mapped.w;
+        const rh = mapped.h;
         preview.style.left = (this.panX + rx * this.zoom) + "px";
         preview.style.top = (this.panY + ry * this.zoom) + "px";
         preview.style.width = Math.max(8, rw * this.zoom) + "px";
@@ -573,12 +589,35 @@
 
     maskArea() {
       if (!this._maskDirty) return this._maskCount;
-      const data = this.maskCtx.getImageData(0, 0, this.maskCanvas.width, this.maskCanvas.height).data;
+      const w = this.maskCanvas.width;
+      const h = this.maskCanvas.height;
+      const data = this.maskCtx.getImageData(0, 0, w, h).data;
       let n = 0;
-      for (let i = 0; i < data.length; i += 4) if (data[i] > 16) n++;
+      let minX = w;
+      let minY = h;
+      let maxX = -1;
+      let maxY = -1;
+      for (let y = 0; y < h; y++) {
+        const row = y * w * 4;
+        for (let x = 0; x < w; x++) {
+          if (data[row + x * 4] > 16) {
+            n++;
+            if (x < minX) minX = x;
+            if (y < minY) minY = y;
+            if (x > maxX) maxX = x;
+            if (y > maxY) maxY = y;
+          }
+        }
+      }
       this._maskCount = n;
+      this._maskBounds = n ? { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 } : null;
       this._maskDirty = false;
       return n;
+    }
+
+    maskBounds() {
+      this.maskArea();
+      return this._maskBounds;
     }
 
     touchMask() {
@@ -667,6 +706,35 @@
         mg.fillRect(0, 0, w, h);
       }
       return { canvas: c, mask: mc, x, y, w, h };
+    }
+
+    cropRect(geom) {
+      const r = geom.crop;
+      const flat = this.flatten();
+      const c = document.createElement("canvas");
+      c.width = r.w;
+      c.height = r.h;
+      c.getContext("2d").drawImage(flat, r.x, r.y, r.w, r.h, 0, 0, r.w, r.h);
+      const mc = document.createElement("canvas");
+      mc.width = r.w;
+      mc.height = r.h;
+      const mg = mc.getContext("2d");
+      mg.fillStyle = "#000";
+      mg.fillRect(0, 0, r.w, r.h);
+      if (this.maskArea() > 8) {
+        mg.drawImage(this.exportMask(), r.x, r.y, r.w, r.h, 0, 0, r.w, r.h);
+      } else {
+        mg.fillStyle = "#fff";
+        mg.fillRect(Math.round(geom.frame.x - r.x), Math.round(geom.frame.y - r.y), geom.frame.w, geom.frame.h);
+      }
+      return {
+        canvas: c,
+        mask: dilateMask(mc, geom.growDoc),
+        sampler: dilateMask(mc, geom.seamDoc + geom.growDoc),
+        x: r.x, y: r.y, w: r.w, h: r.h,
+        feather: geom.seamDoc,
+        geom: geom,
+      };
     }
 
     fullSnapshot() {
@@ -915,6 +983,8 @@
       blurred.height = h;
       const bg = blurred.getContext("2d");
       const px = Math.max(0, Number(featherPx) || 0);
+      bg.fillStyle = "#000";
+      bg.fillRect(0, 0, w, h);
       if (px > 0) bg.filter = `blur(${px}px)`;
       bg.drawImage(maskSource, 0, 0, w, h);
       bg.filter = "none";
@@ -986,6 +1056,13 @@
         if (document.querySelector(".modal-back")) return;
         if (e.code === "Space") { this.space = true; if (!/^(input|textarea|select)$/i.test((e.target.tagName || ""))) e.preventDefault(); }
         if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+          const arrange = U.layerArrangeCommand(e);
+          if (arrange) {
+            if (typingTarget(e.target)) return;
+            e.preventDefault();
+            moveActiveLayer(arrange);
+            return;
+          }
           const key = e.key.toLowerCase();
           if (key === "z") { e.preventDefault(); e.shiftKey ? this.redo() : this.undo(); return; }
           if (key === "y") { e.preventDefault(); this.redo(); return; }
@@ -2381,7 +2458,8 @@
       renderCreateInspector();
       return;
     }
-    const frame = generationSize();
+    const geom = state.pipeline === "edit" && editor ? currentEditGeom() : null;
+    const frame = geom ? geom.gen : generationSize();
     const g = editor.gen;
     const a = state.area;
     const exact = ((frame.w * frame.h) / 1e6).toFixed(2);
@@ -2420,7 +2498,9 @@
               <option value="feather" ${a.paste === "feather" ? "selected" : ""}>Растушёвка</option>
               <option value="hard" ${a.paste === "hard" ? "selected" : ""}>Жёстко</option>
             </select>
-            <span class="lbl">Шов</span><input id="gfeather" class="f" value="${a.feather}" inputmode="numeric" aria-label="Шов, пиксели">
+            <span class="lbl">Шов</span>
+            <div class="insp-inline"><input id="gfeather" class="f" value="${a.feather}" inputmode="numeric" aria-label="Шов, px холста"><span class="mu">px холста</span></div>
+            <p class="mu" id="gfeather-note" style="grid-column:1 / -1;margin:0">${geom ? ("Эффективно " + geom.seamDoc + " px холста · " + geom.seamGen + " px в маске") : ""}</p>
             <span class="lbl">Контекст</span>
             <div class="insp-inline"><input id="gcontext" class="f" value="${Math.round(a.context * 100)}" inputmode="numeric" aria-label="Контекст, проценты" style="width:72px;flex:0 0 72px"><span class="mu">%</span></div>
             <span class="lbl">Цвет</span>
@@ -2463,7 +2543,13 @@
     if (paste) {
       paste.addEventListener("toggle", () => { state.area.pasteOpen = paste.open; });
       $("gpaste").onchange = () => { state.area.paste = $("gpaste").value; };
-      $("gfeather").onchange = () => { state.area.feather = Math.max(0, parseInt($("gfeather").value, 10) || 0); };
+      $("gfeather").onchange = () => {
+        state.area.feather = Math.max(0, parseInt($("gfeather").value, 10) || 0);
+        const note = $("gfeather-note");
+        const next = currentEditGeom();
+        if (note && next) note.textContent = "Эффективно " + next.seamDoc + " px холста · " + next.seamGen + " px в маске";
+        if (editor) editor.requestDraw();
+      };
       $("gcontext").onchange = () => { state.area.context = Math.max(0, (parseFloat($("gcontext").value) || 0) / 100); };
       $("gcolor").onchange = () => { state.area.colorMatch = $("gcolor").checked; };
     }
@@ -3000,7 +3086,27 @@
     }).join("");
     host.innerHTML = maskRow + (rows || `<div class="empty">Нет слоёв. Загрузите изображение или сгенерируйте.</div>`);
     if (window.zeroImageStudioHydrateIcons) window.zeroImageStudioHydrateIcons(host);
+    const up = $("btn-layer-up");
+    const down = $("btn-layer-down");
+    const count = editor.layers.length;
+    const index = editor.active;
+    if (up) up.disabled = U.layerMoveIndex(index, count, "up") === index;
+    if (down) down.disabled = U.layerMoveIndex(index, count, "down") === index;
     sealCollapsed(node);
+  }
+
+  function moveActiveLayer(where) {
+    if (!editor) return false;
+    const from = editor.active;
+    const to = U.layerMoveIndex(from, editor.layers.length, where);
+    if (to === from || to < 0 || to >= editor.layers.length) return false;
+    editor.pushUndo(editor.fullSnapshot());
+    const [item] = editor.layers.splice(from, 1);
+    editor.layers.splice(to, 0, item);
+    editor.active = to;
+    editor.requestDraw();
+    renderLayers();
+    return true;
   }
 
   let ppEditingId = null;
@@ -3487,6 +3593,127 @@
     if (el) el.value = state.sampler.seed;
   }
 
+  function currentEditGeom() {
+    if (!editor) return null;
+    const region = editIsRegion();
+    const frame = region ? editor.gen : { x: 0, y: 0, w: editor.doc.w, h: editor.doc.h };
+    const maskBBox = editor.maskArea() > 8 ? editor.maskBounds() : null;
+    const budget = generationSize();
+    return window.ZeroImageStudioSize.editGeometry({
+      docW: editor.doc.w,
+      docH: editor.doc.h,
+      frame: frame,
+      maskBBox: maskBBox,
+      seamDoc: state.area.feather,
+      growDoc: U.finiteNumber(cfg().inpaint_grow, 6),
+      context: state.area.context || 0,
+      mp: state.area.mp,
+      step: modelStep(),
+      genW: budget.w,
+      genH: budget.h,
+    });
+  }
+
+  function dilateMask(src, radius) {
+    const r = Math.max(0, Math.round(Number(radius) || 0));
+    const w = src.width;
+    const h = src.height;
+    const out = document.createElement("canvas");
+    out.width = w;
+    out.height = h;
+    const og = out.getContext("2d");
+    og.fillStyle = "#000";
+    og.fillRect(0, 0, w, h);
+    og.drawImage(src, 0, 0);
+    if (r <= 0) return out;
+    const sd = og.getImageData(0, 0, w, h).data;
+    const bin = new Uint8Array(w * h);
+    for (let i = 0; i < w * h; i++) bin[i] = sd[i * 4] > 16 ? 1 : 0;
+    const horiz = new Uint8Array(w * h);
+    const prefix = new Uint32Array(w + 1);
+    for (let y = 0; y < h; y++) {
+      prefix[0] = 0;
+      const row = y * w;
+      for (let x = 0; x < w; x++) prefix[x + 1] = prefix[x] + bin[row + x];
+      for (let x = 0; x < w; x++) {
+        const x0 = Math.max(0, x - r);
+        const x1 = Math.min(w - 1, x + r);
+        horiz[row + x] = prefix[x1 + 1] - prefix[x0] > 0 ? 1 : 0;
+      }
+    }
+    const outData = og.createImageData(w, h);
+    const od = outData.data;
+    const col = new Uint32Array(h + 1);
+    for (let x = 0; x < w; x++) {
+      col[0] = 0;
+      for (let y = 0; y < h; y++) col[y + 1] = col[y] + horiz[y * w + x];
+      for (let y = 0; y < h; y++) {
+        const y0 = Math.max(0, y - r);
+        const y1 = Math.min(h - 1, y + r);
+        const on = col[y1 + 1] - col[y0] > 0;
+        const i = (y * w + x) * 4;
+        const v = on ? 255 : 0;
+        od[i] = od[i + 1] = od[i + 2] = v;
+        od[i + 3] = 255;
+      }
+    }
+    og.putImageData(outData, 0, 0);
+    return out;
+  }
+
+  function letterboxPlaced(src, genW, genH, placed, smooth) {
+    const canvas = document.createElement("canvas");
+    canvas.width = genW;
+    canvas.height = genH;
+    const g = canvas.getContext("2d");
+    g.fillStyle = "#000";
+    g.fillRect(0, 0, genW, genH);
+    g.imageSmoothingEnabled = !!smooth;
+    if (smooth) g.imageSmoothingQuality = "high";
+    g.drawImage(src, placed.x, placed.y, placed.w, placed.h);
+    return { canvas: canvas, frame: { w: genW, h: genH }, placed: placed };
+  }
+
+  function maskHasEdge(canvas) {
+    const data = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height).data;
+    let white = 0;
+    let black = 0;
+    const step = Math.max(4, Math.floor(data.length / 16000) * 4);
+    for (let i = 0; i < data.length; i += step) {
+      if (data[i] > 200) white++;
+      else if (data[i] < 16) black++;
+    }
+    return white > 0 && black > 0;
+  }
+
+  function splitPasteAlpha(img) {
+    const src = imageCanvas(img);
+    const g = src.getContext("2d");
+    const data = g.getImageData(0, 0, src.width, src.height);
+    const d = data.data;
+    let minA = 255;
+    let maxA = 0;
+    for (let i = 3; i < d.length; i += 4) {
+      const a = d[i];
+      if (a < minA) minA = a;
+      if (a > maxA) maxA = a;
+    }
+    if (!window.ZeroImageStudioSize.pasteSuppliesCoverage(minA, maxA)) return { color: src, mask: null };
+    const mask = document.createElement("canvas");
+    mask.width = src.width;
+    mask.height = src.height;
+    const md = mask.getContext("2d").createImageData(src.width, src.height);
+    for (let i = 0; i < d.length; i += 4) {
+      const a = d[i + 3];
+      md.data[i] = md.data[i + 1] = md.data[i + 2] = a;
+      md.data[i + 3] = 255;
+      d[i + 3] = 255;
+    }
+    g.putImageData(data, 0, 0);
+    mask.getContext("2d").putImageData(md, 0, 0);
+    return { color: src, mask: mask };
+  }
+
   function fitRegionCanvas(src, boxW, boxH) {
     const frame = window.ZeroImageStudioSize.frameForRegion(src.width, src.height, boxW, boxH);
     const placed = window.ZeroImageStudioSize.containRect(src.width, src.height, frame.w, frame.h);
@@ -3718,16 +3945,27 @@
         keepGrounding(spec);
       } else {
         const source = usesSource();
-        const expand = source && state.pipeline === "edit" ? state.area.context : (editor.maskArea() > 8 ? state.area.context : 0);
-        crop = source ? editor.cropOf(expand) : null;
-        spec.has_mask = !!(crop && editor.maskArea() > 8);
-        if (crop) {
-          regionFit = fitRegionCanvas(crop.canvas, spec.width, spec.height);
-          const maskFit = fitRegionCanvas(crop.mask, spec.width, spec.height);
-          spec.width = regionFit.frame.w;
-          spec.height = regionFit.frame.h;
+        const painted = editor.maskArea() > 8;
+        if (source && (state.pipeline === "edit" || painted)) {
+          const geom = currentEditGeom();
+          crop = editor.cropRect(geom);
+          spec.width = geom.gen.w;
+          spec.height = geom.gen.h;
+          spec.inpaint_grow = 0;
+          regionFit = letterboxPlaced(crop.canvas, geom.gen.w, geom.gen.h, geom.placed, true);
+          const maskFit = letterboxPlaced(crop.sampler, geom.gen.w, geom.gen.h, geom.placed, false);
           spec.image = await uploadCanvas(regionFit.canvas, jobName("crop"));
-          if (spec.has_mask || state.pipeline === "edit") spec.mask = await uploadCanvas(maskFit.canvas, jobName("mask"));
+          spec.mask = await uploadCanvas(maskFit.canvas, jobName("mask"));
+          spec.has_mask = maskHasEdge(crop.sampler);
+        } else if (source) {
+          crop = editor.cropOf(0);
+          spec.has_mask = false;
+          if (crop) {
+            regionFit = fitRegionCanvas(crop.canvas, spec.width, spec.height);
+            spec.width = regionFit.frame.w;
+            spec.height = regionFit.frame.h;
+            spec.image = await uploadCanvas(regionFit.canvas, jobName("crop"));
+          }
         }
         const refs = [];
         if (state.pipeline === "edit" && !(kreaOn && task === "general")) {
@@ -3834,8 +4072,20 @@
     const m = document.createElement("canvas");
     m.width = w; m.height = h;
     const mg = m.getContext("2d");
-    mg.filter = `blur(${Math.max(0, state.area.feather / 2)}px)`;
+    mg.fillStyle = "#000";
+    mg.fillRect(0, 0, w, h);
+    const seam = crop.feather != null ? crop.feather : 0;
+    if (seam > 0) mg.filter = `blur(${Math.max(1, Math.round(seam / 3))}px)`;
     mg.drawImage(crop.mask, 0, 0, w, h);
+    mg.filter = "none";
+    const maskPx = mg.getImageData(0, 0, w, h);
+    const md = maskPx.data;
+    for (let i = 0; i < md.length; i += 4) {
+      const lum = Math.max(md[i], md[i + 1], md[i + 2]);
+      md[i] = md[i + 1] = md[i + 2] = 255;
+      md[i + 3] = lum;
+    }
+    mg.putImageData(maskPx, 0, 0);
     ctx.globalCompositeOperation = "destination-in";
     ctx.drawImage(m, 0, 0);
     return canvasBlob(out);
@@ -3857,7 +4107,7 @@
         fd.append("original", await canvasBlob(crop.canvas), "original.png");
         fd.append("mask", await canvasBlob(crop.mask), "mask.png");
         fd.append("mode", state.area.paste);
-        fd.append("feather", String(state.area.feather));
+        fd.append("feather", String(crop.feather != null ? crop.feather : 0));
         fd.append("color_match", state.area.colorMatch ? "1" : "0");
         const res = await fetch("/zeroimagestudio/paste", { method: "POST", body: fd });
         if (!res.ok) throw new Error(await res.text());
@@ -3869,11 +4119,19 @@
     }
     const img = await loadImage(URL.createObjectURL(pasted));
     const replace = !(opts && opts.forceLayer) && replacesCanvas();
-    const usedMask = !!(crop && spec.has_mask);
+    const painted = !!(crop && spec.has_mask);
+    const split = crop ? splitPasteAlpha(img) : null;
+    const color = split ? split.color : (crop ? imageCanvas(img) : null);
     let placed = null;
-    if (replace) {
-      const canvas = crop ? imageCanvas(img) : scaleCanvas(img, editor.doc.w, editor.doc.h);
+    if (replace && !crop) {
+      const canvas = scaleCanvas(img, editor.doc.w, editor.doc.h);
       const layer = editor.makeLayer("Холст", canvas);
+      layer.x = 0; layer.y = 0; layer.meta = meta;
+      editor.layers = [layer];
+      editor.active = 0;
+      placed = layer;
+    } else if (replace && crop && crop.x <= 1 && crop.y <= 1 && crop.w >= editor.doc.w - 2 && crop.h >= editor.doc.h - 2) {
+      const layer = editor.makeLayer("Холст", color);
       layer.x = 0; layer.y = 0; layer.meta = meta;
       editor.layers = [layer];
       editor.active = 0;
@@ -3888,15 +4146,14 @@
         editor.addLayer(layer);
         placed = layer;
       } else {
-        const c = imageCanvas(img);
-        const layer = editor.makeLayer(label, c);
+        const layer = editor.makeLayer(label, color);
         layer.x = crop.x; layer.y = crop.y; layer.meta = meta;
         editor.addLayer(layer);
         placed = layer;
       }
     }
-    if (usedMask && placed && !replace) editor.attachLayerMask(placed, crop.mask, state.area.feather);
-    if (usedMask && !(opts && opts.keepMask)) editor.consumeWorkMask();
+    if (split && split.mask && placed) editor.attachLayerMask(placed, split.mask, 0);
+    if (painted && !(opts && opts.keepMask)) editor.consumeWorkMask();
     if (placed) editor.thumb(placed);
     return { placed, replace, meta };
   }
@@ -4066,17 +4323,27 @@
   function placeLayerMenu(menu, x, y) {
     menu.hidden = false;
     menu.style.left = Math.min(x, window.innerWidth - 220) + "px";
-    menu.style.top = Math.min(y, window.innerHeight - 240) + "px";
+    menu.style.top = Math.min(y, window.innerHeight - 360) + "px";
   }
 
   function openLayerMenu(x, y) {
     const menu = layerMenuEl();
     const layer = editor.activeLayer();
+    const count = editor.layers.length;
+    const index = editor.active;
+    const orderBtn = (act, where, label) => {
+      const disabled = U.layerMoveIndex(index, count, where) === index ? " disabled" : "";
+      return `<button type="button" data-act="${act}"${disabled}>${label}</button>`;
+    };
     const maskActs = layer && layer.mask ? `
       <button type="button" data-act="delmask">Удалить маску</button>
       <button type="button" data-act="applymask">Применить маску</button>` : "";
     menu.innerHTML = `
       <button type="button" data-act="dup">Дублировать</button>
+      ${orderBtn("up", "up", "Выше")}
+      ${orderBtn("down", "down", "Ниже")}
+      ${orderBtn("top", "top", "Наверх")}
+      ${orderBtn("bottom", "bottom", "Вниз")}
       <button type="button" data-act="merge">Объединить с нижним</button>
       <button type="button" data-act="mask">Маска из слоя</button>
       <button type="button" data-act="fit-canvas">Холст по слою</button>
@@ -4091,6 +4358,10 @@
       menu.hidden = true;
       if (!act) return;
       if (act.dataset.act === "dup") duplicateActive();
+      if (act.dataset.act === "up") moveActiveLayer("up");
+      if (act.dataset.act === "down") moveActiveLayer("down");
+      if (act.dataset.act === "top") moveActiveLayer("top");
+      if (act.dataset.act === "bottom") moveActiveLayer("bottom");
       if (act.dataset.act === "merge") mergeDown();
       if (act.dataset.act === "mask") maskFromLayer();
       if (act.dataset.act === "fit-canvas") fitCanvasToContent("layer");
@@ -6264,6 +6535,8 @@
       renderLayers();
       openLayerMenu(e.clientX, e.clientY);
     });
+    $("btn-layer-up").onclick = () => moveActiveLayer("up");
+    $("btn-layer-down").onclick = () => moveActiveLayer("down");
     $("btn-layer-add").onclick = () => {
       editor.pushUndo(editor.fullSnapshot());
       const layer = editor.makeLayer("Слой " + (editor.layers.length + 1));

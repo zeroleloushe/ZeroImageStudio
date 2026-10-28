@@ -6,7 +6,7 @@
   <title>ZeroImageStudio</title>
   <link rel="stylesheet" href="zeroimagestudio.css">
   <script>window.__ZEROIMAGESTUDIO_PAGE = true;</script>
-  <script src="icons.js?v=framecrop"></script>
+  <script src="icons.js?v=layermove"></script>
 </head>
 <body data-tab="canvas">
 <header class="chrome" id="chrome">
@@ -274,6 +274,8 @@
     <div class="node" id="layers-node" data-panel="layers" style="--c:#3ddc97">
       <div class="nh"><span class="d"></span>Слои
         <span class="r">
+          <button class="b s icon-btn" id="btn-layer-up" type="button" title="Слой выше" aria-label="Слой выше">▲</button>
+          <button class="b s icon-btn" id="btn-layer-down" type="button" title="Слой ниже" aria-label="Слой ниже">▼</button>
           <button class="b s" id="btn-layer-add" data-i="plus" data-s="13" title="Пустой слой"></button>
           <button class="b s" id="btn-layer-dup" data-i="layers" data-s="13" title="Дублировать"></button>
           <button class="b s" id="btn-layer-del" data-i="trash" data-s="13" title="Удалить"></button>
@@ -337,10 +339,10 @@ try {
   }
 } catch (e) {}
 </script>
-<script src="zeroimagestudio_size.js?v=framecrop"></script>
-<script src="zeroimagestudio_util.js?v=framecrop"></script>
-<script src="zeroimagestudio_models.js?v=framecrop"></script>
-<script src="zeroimagestudio_ux.js?v=framecrop"></script>
-<script src="zeroimagestudio_app.js?v=framecrop"></script>
+<script src="zeroimagestudio_size.js?v=layermove"></script>
+<script src="zeroimagestudio_util.js?v=layermove"></script>
+<script src="zeroimagestudio_models.js?v=layermove"></script>
+<script src="zeroimagestudio_ux.js?v=layermove"></script>
+<script src="zeroimagestudio_app.js?v=layermove"></script>
 </body>
 </html>

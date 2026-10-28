@@ -621,6 +621,8 @@ textarea.prompt { height: 76px; }
 .ga-run img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: fill; background: #0c0e12; opacity: 1; }
 .ga-context { position: absolute; z-index: 5; pointer-events: none; border: 1px dashed rgba(255, 255, 255, .55); box-sizing: border-box; }
 .ga-context[hidden] { display: none !important; }
+.ga-seam { position: absolute; z-index: 5; pointer-events: none; border: 1px solid rgba(197, 204, 216, .9); box-sizing: border-box; }
+.ga-seam[hidden] { display: none !important; }
 .brush-cursor { position: absolute; z-index: 6; pointer-events: none; border-radius: 50%; box-sizing: border-box; }
 .brush-cursor[hidden] { display: none !important; }
 .brush-cursor i { position: absolute; border-radius: 50%; box-sizing: border-box; }
@@ -654,6 +656,8 @@ body[data-pipe="create"] [data-for="edit"] { display: none; }
 }
 .layer-menu button { text-align: left; padding: 6px 8px; border-radius: 4px; }
 .layer-menu button:hover { background: #2c313b; }
+.layer-menu button:disabled { opacity: .35; pointer-events: none; }
+.nh .r .icon-btn { width: 24px; height: 24px; padding: 0; font-size: 11px; line-height: 1; }
 .help-pop {
   position: fixed; z-index: 46; right: 16px; bottom: 16px; width: min(420px, calc(100vw - 24px));
   background: #22262e; border: 1px solid #3a404c; border-radius: 10px; box-shadow: 0 16px 40px rgba(0,0,0,.55);

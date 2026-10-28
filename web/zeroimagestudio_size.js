@@ -82,6 +82,71 @@
 
   const FRAME_HANDLES = { n: 1, s: 1, e: 1, w: 1, nw: 1, ne: 1, sw: 1, se: 1 };
 
+  function effectiveSeam(requested, maskW, maskH) {
+    const side = Math.max(1, Math.min(Number(maskW) || 1, Number(maskH) || 1));
+    const cap = Math.max(0, Math.round(side * 0.25));
+    const req = Number(requested);
+    if (!req) return Math.min(cap, Math.max(0, Math.round(side * 0.08)));
+    return Math.min(Math.max(0, Math.round(req)), cap);
+  }
+
+  function clampRect(rect, docW, docH) {
+    const dw = Math.max(1, Number(docW) || 1);
+    const dh = Math.max(1, Number(docH) || 1);
+    let x = Math.max(0, Math.round(rect.x || 0));
+    let y = Math.max(0, Math.round(rect.y || 0));
+    let x2 = Math.min(dw, Math.round((rect.x || 0) + (rect.w || 0)));
+    let y2 = Math.min(dh, Math.round((rect.y || 0) + (rect.h || 0)));
+    if (x2 <= x) x2 = Math.min(dw, x + 1);
+    if (y2 <= y) y2 = Math.min(dh, y + 1);
+    return { x: x, y: y, w: x2 - x, h: y2 - y };
+  }
+
+  function editGeometry(opts) {
+    const docW = Math.max(1, Number(opts && opts.docW) || 1);
+    const docH = Math.max(1, Number(opts && opts.docH) || 1);
+    const frame = (opts && opts.frame) || { x: 0, y: 0, w: docW, h: docH };
+    const mask = opts && opts.maskBBox;
+    const seam = mask
+      ? effectiveSeam(opts.seamDoc, mask.w, mask.h)
+      : effectiveSeam(opts.seamDoc, frame.w, frame.h);
+    const grow = Math.max(0, Math.round(Number(opts && opts.growDoc) || 0));
+    const context = Math.max(0, Number(opts && opts.context) || 0);
+    const band = seam + grow;
+    const framed = contextRect(frame, docW, docH, context);
+    const crop = clampRect({
+      x: framed.x - band,
+      y: framed.y - band,
+      w: framed.w + band * 2,
+      h: framed.h + band * 2,
+    }, docW, docH);
+    const core = mask || frame;
+    const step = Math.max(1, Number(opts && opts.step) || 16);
+    const mp = Number(opts && opts.mp) || 1;
+    const budget = (opts && opts.genW && opts.genH)
+      ? { w: Number(opts.genW), h: Number(opts.genH) }
+      : sizeForMegapixels(crop.w, crop.h, mp, step);
+    const gen = frameForRegion(crop.w, crop.h, budget.w, budget.h, step);
+    const placed = containRect(crop.w, crop.h, gen.w, gen.h);
+    const scale = placed.w / Math.max(1, crop.w);
+    const blend = clampRect({ x: core.x - band, y: core.y - band, w: core.w + band * 2, h: core.h + band * 2 }, docW, docH);
+    return {
+      seamDoc: seam,
+      seamRequested: Math.max(0, Math.round(Number(opts && opts.seamDoc) || 0)),
+      growDoc: grow,
+      seamGen: Math.max(0, Math.round(seam * scale)),
+      growGen: Math.max(0, Math.round(grow * scale)),
+      inpaintGen: Math.max(0, Math.round((seam + grow) * scale)),
+      scale: scale,
+      crop: crop,
+      blend: blend,
+      frame: { x: frame.x, y: frame.y, w: frame.w, h: frame.h },
+      maskBBox: mask ? { x: mask.x, y: mask.y, w: mask.w, h: mask.h } : null,
+      gen: gen,
+      placed: placed,
+    };
+  }
+
   function contextRect(frame, docW, docH, frac) {
     const g = frame || { x: 0, y: 0, w: docW, h: docH };
     const docWidth = Math.max(1, Number(docW) || 1);
@@ -108,6 +173,10 @@
     w = Math.max(1, Math.min(docWidth - x, w));
     h = Math.max(1, Math.min(docHeight - y, h));
     return { x: x, y: y, w: w, h: h };
+  }
+
+  function pasteSuppliesCoverage(minAlpha, maxAlpha) {
+    return Number(minAlpha) < 250 && Number(maxAlpha) > Number(minAlpha);
   }
 
   function previewMap(crop, genW, genH, placed) {
@@ -226,7 +295,10 @@
     snapRect: snapRect,
     frameGesture: frameGesture,
     contextRect: contextRect,
+    effectiveSeam: effectiveSeam,
+    editGeometry: editGeometry,
     previewMap: previewMap,
+    pasteSuppliesCoverage: pasteSuppliesCoverage,
     FRAME_HANDLES: FRAME_HANDLES,
     cropSizeToStep: cropSizeToStep,
     containInside: containInside,

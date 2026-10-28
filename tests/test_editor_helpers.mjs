@@ -42,6 +42,20 @@ test("a lora listing puts folders first and strips the weight extension", () => 
   assert.equal(html.includes("Выберите файл"), false);
 });
 
+test("layer order uses the stack index and the physical bracket keys", () => {
+  assert.equal(U.layerMoveIndex(1, 4, "up"), 2);
+  assert.equal(U.layerMoveIndex(1, 4, "down"), 0);
+  assert.equal(U.layerMoveIndex(3, 4, "up"), 3);
+  assert.equal(U.layerMoveIndex(0, 4, "down"), 0);
+  assert.equal(U.layerMoveIndex(1, 4, "top"), 3);
+  assert.equal(U.layerMoveIndex(1, 4, "bottom"), 0);
+  assert.equal(U.layerArrangeCommand({ key: "ъ", code: "BracketRight", ctrlKey: true }), "up");
+  assert.equal(U.layerArrangeCommand({ key: "х", code: "BracketLeft", ctrlKey: true }), "down");
+  assert.equal(U.layerArrangeCommand({ key: "Ъ", code: "BracketRight", ctrlKey: true, shiftKey: true }), "top");
+  assert.equal(U.layerArrangeCommand({ key: "Х", code: "BracketLeft", ctrlKey: true, shiftKey: true }), "bottom");
+  assert.equal(U.layerArrangeCommand({ key: "]", code: "BracketRight" }), "");
+});
+
 test("arrow keys and digits move the variant selection", () => {
   assert.equal(U.nextVariantIndex(0, 4, "ArrowRight"), 1);
   assert.equal(U.nextVariantIndex(0, 4, "ArrowLeft"), 3);

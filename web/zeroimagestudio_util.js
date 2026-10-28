@@ -274,6 +274,24 @@
     return { name: suggested, strength_model: 1, strength_clip: 1, enabled: true, remembered: false };
   }
 
+  function layerMoveIndex(index, count, where) {
+    const n = Math.max(0, Number(count) || 0);
+    const i = Number(index);
+    if (!n || !Number.isFinite(i) || i < 0 || i >= n) return i;
+    if (where === "up") return Math.min(n - 1, i + 1);
+    if (where === "down") return Math.max(0, i - 1);
+    if (where === "top") return n - 1;
+    if (where === "bottom") return 0;
+    return i;
+  }
+
+  function layerArrangeCommand(event) {
+    if (!event || event.altKey || !(event.ctrlKey || event.metaKey)) return "";
+    if (event.code === "BracketRight") return event.shiftKey ? "top" : "up";
+    if (event.code === "BracketLeft") return event.shiftKey ? "bottom" : "down";
+    return "";
+  }
+
   function maskShortcutClears(key, ctrl, focus) {
     const k = String(key || "");
     if (ctrl && k.toLowerCase() === "d") return "clear";
@@ -312,6 +330,8 @@
     importPlacement,
     workMaskRowVisible,
     maskShortcutClears,
+    layerMoveIndex,
+    layerArrangeCommand,
     historyBytes,
     recordBytes,
   };

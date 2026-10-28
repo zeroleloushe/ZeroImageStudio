@@ -54,6 +54,15 @@ class PasteTests(unittest.TestCase):
         matched = color_match(src, dst, mask)
         self.assertGreater(float(matched[..., 0].mean()), 0.5)
 
+    def test_poisson_alpha_stays_inside_the_seam(self):
+        result = Image.new("RGB", (64, 64), (255, 0, 0))
+        original = Image.new("RGB", (64, 64), (0, 0, 255))
+        mask = Image.new("L", (64, 64), 0)
+        mask.paste(255, (24, 24, 40, 40))
+        out = np.asarray(paste(result, original, mask, mode="poisson", feather=6, color=False))
+        self.assertEqual(int(out[0, 0, 3]), 0)
+        self.assertGreater(int(out[32, 32, 3]), 200)
+
     def test_hard_mask_is_binary(self):
         result = Image.new("RGB", (8, 8), (10, 20, 30))
         original = Image.new("RGB", (8, 8), (1, 2, 3))

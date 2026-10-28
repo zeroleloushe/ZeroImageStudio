@@ -177,14 +177,16 @@ def paste(
         src = color_match(src, dst, m)
     if mode == "poisson":
         solved = poisson_blend(src, dst, m)
-        # Keep a one-pixel feather at the crop border so a partial crop doesn't ring.
-        alpha = np.ones(m.shape, dtype=np.float32)
+        # Alpha is the seam, not the whole crop. An opaque layer ghosts every pixel
+        # of a regenerated crop when the paste is even one pixel off.
+        alpha = box_blur(m, max(1, int(feather or 0) // 3)) if int(feather or 0) > 0 else m
         rgba = np.dstack([solved, alpha])
     elif mode == "hard":
         alpha = (m > 0.5).astype(np.float32)
         rgba = np.dstack([src, alpha])
     else:
-        alpha = box_blur(m, int(feather or 0))
+        support = int(feather or 0)
+        alpha = box_blur(m, max(1, support // 3)) if support > 0 else m
         rgba = np.dstack([src, alpha])
     out = (np.clip(rgba, 0.0, 1.0) * 255.0 + 0.5).astype(np.uint8)
     return Image.fromarray(out, "RGBA")
