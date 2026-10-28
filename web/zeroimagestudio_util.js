@@ -118,6 +118,11 @@
   }
 
   // A saved task-LoRA choice wins. The suggested file is only the first visit.
+  function presetCategory(item) {
+    const name = item && String(item.category || "").trim();
+    return name || "Общее";
+  }
+
   function resolveTaskLora(saved, suggestedName) {
     const suggested = String(suggestedName || "");
     if (saved && String(saved.name || "").trim()) {
@@ -161,6 +166,7 @@
     inverseHistory,
     brushTargetsMask,
     resolveTaskLora,
+    presetCategory,
     workMaskRowVisible,
     maskShortcutClears,
     historyBytes,

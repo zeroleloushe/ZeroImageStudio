@@ -2416,10 +2416,11 @@
     return {
       id: U.safeId(p.id || ("p" + Date.now().toString(36) + i), "p" + i),
       name: String(p.name || "Пресет"),
-      category: String(p.category || "Общее"),
+      category: U.presetCategory(p),
       text: String(p.text || ""),
       position: p.position === "after" ? "after" : "before",
       enabled: !!p.enabled,
+      favorite: !!p.favorite,
       order: Number.isFinite(Number(p.order)) ? Number(p.order) : i,
     };
   }
@@ -2671,7 +2672,7 @@
     const cur = sel.value;
     sel.innerHTML = `<option value="">— без пресета —</option>` + state.presets.map((p) => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)}</option>`).join("");
     if ([...sel.options].some((o) => o.value === cur)) sel.value = cur;
-    $("preset-count").textContent = String(state.presets.length);
+    $("preset-count").textContent = String(state.presets.length + state.promptPresets.length);
   }
 
   function galleryInProject(it) {
@@ -4336,16 +4337,392 @@
     });
   }
 
+  const presetUi = { filter: "all", query: "", sort: "name" };
+  const PRESET_CATS_KEY = "zeroimagestudio.presetCats";
+
+  function extraPresetCats() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(PRESET_CATS_KEY) || "[]");
+      return Array.isArray(raw) ? raw.map((c) => String(c || "").trim()).filter(Boolean) : [];
+    } catch { return []; }
+  }
+
+  function storeExtraCats(list) {
+    try { localStorage.setItem(PRESET_CATS_KEY, JSON.stringify([...new Set(list)])); } catch { /* private mode */ }
+  }
+
+  function latestGalleryThumb() {
+    const it = (state.gallery || []).find((g) => g && g.file && !g.example);
+    if (!it) return "";
+    const file = String(it.file).split("/").pop();
+    return "/view?filename=" + encodeURIComponent(file) + "&type=output&subfolder=zeroimagestudio/gallery";
+  }
+
+  function genLoraCount(p) {
+    const pipe = p && (p.pipeline === "create" ? p.create : p.edit);
+    return ((pipe && pipe.loras) || []).filter((l) => l && l.enabled !== false && l.role !== "task" && !l.system).length;
+  }
+
+  function genSummary(p) {
+    const hint = (state.hints || []).find((h) => h.id === p.hintId);
+    const model = (hint && hint.name) || p.hintId || "Текущая модель";
+    const s = p.sampler || {};
+    const steps = s.steps != null ? s.steps : "—";
+    const cfg = s.cfg != null ? s.cfg : "—";
+    return { model, line: (s.sampler || "euler") + " · " + steps + " / " + cfg, loras: genLoraCount(p) };
+  }
+
+  function presetEntries() {
+    const prompts = state.promptPresets.map((p) => ({
+      kind: "prompt", id: p.id, name: p.name || "Пресет", category: U.presetCategory(p),
+      favorite: !!p.favorite, updated: Number(p.updated) || 0, raw: p,
+    }));
+    const gens = state.presets.map((p) => ({
+      kind: "gen", id: p.id, name: p.name || "Пресет", category: U.presetCategory(p),
+      favorite: !!p.favorite, updated: Number(p.updated) || 0, raw: p,
+    }));
+    return [...gens, ...prompts];
+  }
+
+  function visiblePresets() {
+    const q = presetUi.query.trim().toLowerCase();
+    let list = presetEntries().filter((item) => {
+      if (presetUi.filter === "gen" && item.kind !== "gen") return false;
+      if (presetUi.filter === "prompt" && item.kind !== "prompt") return false;
+      if (presetUi.filter === "fav" && !item.favorite) return false;
+      if (presetUi.filter.startsWith("cat:") && item.category !== presetUi.filter.slice(4)) return false;
+      if (!q) return true;
+      const summary = item.kind === "gen" ? genSummary(item.raw).model : (item.raw.text || "");
+      return (item.name + " " + item.category + " " + summary).toLowerCase().includes(q);
+    });
+    list.sort((a, b) => {
+      if (a.favorite !== b.favorite) return a.favorite ? -1 : 1;
+      if (presetUi.sort === "new") return (b.updated - a.updated) || a.name.localeCompare(b.name, "ru");
+      return a.name.localeCompare(b.name, "ru");
+    });
+    return list;
+  }
+
+  function presetCategories() {
+    const set = new Set(extraPresetCats());
+    presetEntries().forEach((item) => set.add(item.category));
+    return [...set].sort((a, b) => a.localeCompare(b, "ru"));
+  }
+
   function renderPresetPage() {
     const host = $("preset-page");
     if (!host) return;
-    host.innerHTML = `<div class="preset-cols">
-      <div><b>Пресеты генерации</b><div class="mu">Модель, LoRA, сэмплер, область. Холст не входит.</div>
-        ${state.presets.map((p) => `<div class="row" style="margin-top:6px"><button class="b" data-load-preset="${escapeHtml(p.id)}">${escapeHtml(p.name)}</button><button class="b s" data-del-preset="${escapeHtml(p.id)}">удалить</button></div>`).join("") || `<div class="empty">Пока пусто. «Сохранить как» в шапке.</div>`}
-      </div>
-      <div><b>Пресеты промта</b><div class="mu">Вставляются до или после текста только в момент генерации.</div>
-        ${state.promptPresets.map((p) => `<div class="row" style="margin-top:6px"><span class="tag">${p.position === "after" ? "ПОСЛЕ" : "ДО"}</span><input class="f" style="flex:1" data-pp-name="${escapeHtml(p.id)}" value="${escapeHtml(p.name)}"><button class="b s" data-pp-del="${escapeHtml(p.id)}">×</button></div><textarea class="f" style="height:48px;width:100%;margin-top:4px" data-pp-text="${escapeHtml(p.id)}">${escapeHtml(p.text)}</textarea>`).join("")}
-      </div></div>`;
+    if (!host.dataset.ready) {
+      host.dataset.ready = "1";
+      host.innerHTML = `<div class="preset-mgr">
+        <aside class="preset-side" id="preset-side"></aside>
+        <div class="preset-main">
+          <div class="preset-bar">
+            <input id="preset-search" class="f" placeholder="Поиск по имени, категории, тексту" style="font-family:inherit">
+            <select id="preset-sort" class="dd" title="Сортировка">
+              <option value="name">По имени</option>
+              <option value="new">Сначала новые</option>
+            </select>
+            <button type="button" class="b ac" id="preset-new" data-i="plus" data-s="13">Новый пресет</button>
+          </div>
+          <div class="preset-grid" id="preset-grid"></div>
+        </div>
+        <aside class="preset-drawer" id="preset-drawer" hidden></aside>
+      </div>`;
+      $("preset-search").addEventListener("input", () => {
+        presetUi.query = $("preset-search").value;
+        const pos = $("preset-search").selectionStart;
+        paintPresetGrid();
+        const again = $("preset-search");
+        if (again) { again.focus(); again.setSelectionRange(pos, pos); }
+      });
+      $("preset-sort").onchange = () => { presetUi.sort = $("preset-sort").value; paintPresetGrid(); };
+      host.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && e.target && e.target.id === "preset-newcat") {
+          e.preventDefault();
+          const btn = $("preset-addcat");
+          if (btn) btn.click();
+        }
+      });
+    }
+    const search = $("preset-search");
+    if (search && search.value !== presetUi.query) search.value = presetUi.query;
+    const sort = $("preset-sort");
+    if (sort) sort.value = presetUi.sort === "new" ? "new" : "name";
+    paintPresetSide();
+    paintPresetGrid();
+    const badge = $("preset-count");
+    if (badge) badge.textContent = String(state.presets.length + state.promptPresets.length);
+    if (window.zeroImageStudioHydrateIcons) window.zeroImageStudioHydrateIcons(host);
+  }
+
+  function paintPresetSide() {
+    const host = $("preset-side");
+    if (!host) return;
+    const all = presetEntries();
+    const filters = [
+      ["all", "Все", all.length],
+      ["gen", "Генерация", all.filter((i) => i.kind === "gen").length],
+      ["prompt", "Промт", all.filter((i) => i.kind === "prompt").length],
+      ["fav", "Избранное", all.filter((i) => i.favorite).length],
+    ];
+    const cats = presetCategories();
+    host.innerHTML = filters.map(([id, label, n]) =>
+      `<button type="button" class="nav ${presetUi.filter === id ? "on" : ""}" data-preset-filter="${id}"><span>${label}</span><span class="c">${n}</span></button>`
+    ).join("") + `<div class="lbl">Категории</div><div class="preset-cats">${cats.map((name) => {
+      const n = all.filter((i) => i.category === name).length;
+      const on = presetUi.filter === "cat:" + name;
+      return `<div class="preset-cat">
+        <button type="button" class="nav ${on ? "on" : ""}" data-preset-filter="${escapeHtml("cat:" + name)}"><span class="nm">${escapeHtml(name)}</span><span class="c">${n}</span></button>
+        <button type="button" class="mini" data-cat-rename="${escapeHtml(name)}" title="Переименовать">✎</button>
+        <button type="button" class="mini" data-cat-del="${escapeHtml(name)}" title="Удалить категорию">×</button>
+      </div>`;
+    }).join("") || `<div class="mu" style="padding:4px 6px">Пока только «Общее».</div>`}</div>
+      <div class="preset-addcat"><input id="preset-newcat" class="f" placeholder="Новая категория" style="font-family:inherit"><button type="button" class="b s" id="preset-addcat">+</button></div>`;
+  }
+
+  function paintPresetGrid() {
+    const host = $("preset-grid");
+    if (!host) return;
+    const list = visiblePresets();
+    if (!list.length) {
+      host.innerHTML = `<div class="preset-empty"><b>${presetUi.query ? "Ничего не найдено" : "Здесь будут пресеты"}</b><div>${presetUi.query ? "Смените запрос или категорию." : "Сниппеты промта и снимки настроек генерации лежат карточками."}</div><button type="button" class="b ac" data-preset-new="1">+ Новый пресет</button></div>`;
+      return;
+    }
+    host.innerHTML = list.map((item) => {
+      const id = escapeHtml(item.id);
+      const kind = item.kind;
+      let body = "";
+      if (kind === "prompt") {
+        const pos = item.raw.position === "after" ? "ПОСЛЕ" : "ДО";
+        body = `<div class="meta"><span class="chip">${escapeHtml(item.category)}</span><span class="chip pos">${pos}</span></div><p class="preview">${escapeHtml(item.raw.text || "Пустой текст")}</p>`;
+      } else {
+        const sum = genSummary(item.raw);
+        const shot = item.raw.thumb ? `<img class="shot" src="${escapeHtml(item.raw.thumb)}" alt="">` : "";
+        body = `${shot}<div class="meta"><span class="chip">${escapeHtml(item.category)}</span><span class="chip">генерация</span></div><p class="preview">${escapeHtml(sum.model)} · ${escapeHtml(sum.line)} · LoRA ${sum.loras}</p>`;
+      }
+      return `<article class="preset-card ${item.favorite ? "fav" : ""}">
+        <div class="top"><h3>${escapeHtml(item.name)}</h3><button type="button" class="star ${item.favorite ? "on" : ""}" data-preset-fav="${id}" data-preset-kind="${kind}" data-i="star" data-s="14" title="В избранное"></button></div>
+        ${body}
+        <div class="acts">
+          <button type="button" class="b apply" data-preset-apply="${id}" data-preset-kind="${kind}">Применить</button>
+          <button type="button" class="ic" data-preset-edit="${id}" data-preset-kind="${kind}" data-i="pen" data-s="13" title="Изменить"></button>
+          <button type="button" class="ic" data-preset-dup="${id}" data-preset-kind="${kind}" data-i="layers" data-s="13" title="Дублировать"></button>
+          <button type="button" class="ic" data-preset-del="${id}" data-preset-kind="${kind}" data-i="trash" data-s="13" title="Удалить"></button>
+        </div>
+      </article>`;
+    }).join("");
+    if (window.zeroImageStudioHydrateIcons) window.zeroImageStudioHydrateIcons(host);
+  }
+
+  function findPreset(kind, id) {
+    const list = kind === "gen" ? state.presets : state.promptPresets;
+    return list.find((p) => p.id === id) || null;
+  }
+
+  function openPresetDrawer(kind, id) {
+    const drawer = $("preset-drawer");
+    if (!drawer) return;
+    const existing = id ? findPreset(kind, id) : null;
+    const isNew = !existing;
+    const useKind = existing ? kind : (kind || "prompt");
+    drawer.hidden = false;
+    drawer.dataset.kind = useKind;
+    drawer.dataset.id = existing ? existing.id : "";
+    const cats = presetCategories();
+    const cat = existing ? U.presetCategory(existing) : (presetUi.filter.startsWith("cat:") ? presetUi.filter.slice(4) : "Общее");
+    const options = [...new Set([cat, ...cats, "Общее"])].map((name) =>
+      `<option value="${escapeHtml(name)}" ${name === cat ? "selected" : ""}>${escapeHtml(name)}</option>`
+    ).join("");
+    const promptFields = `<label>Позиция<select id="pd-pos" class="dd"><option value="before" ${!existing || existing.position !== "after" ? "selected" : ""}>ДО промта</option><option value="after" ${existing && existing.position === "after" ? "selected" : ""}>ПОСЛЕ промта</option></select></label>
+      <label>Текст<textarea id="pd-text">${escapeHtml(existing ? existing.text : "")}</textarea></label>`;
+    const sum = existing && useKind === "gen" ? genSummary(existing) : null;
+    const genFields = `<div class="preset-facts"><div><span>Модель</span><b>${escapeHtml(sum ? sum.model : "текущая")}</b></div><div><span>Сэмплер</span><b>${escapeHtml(sum ? sum.line : "из холста")}</b></div><div><span>LoRA</span><b>${sum ? sum.loras : "из стека"}</b></div></div>
+      <p class="mu">${isNew ? "Новый пресет снимет модель, LoRA, сэмплер и область. Холст не входит." : "Поля ниже меняют карточку. Снимок настроек обновляется отдельной кнопкой."}</p>
+      ${isNew ? "" : `<button type="button" class="b" id="pd-recapture">Обновить из текущих настроек</button>`}`;
+    drawer.innerHTML = `<h3>${isNew ? "Новый пресет" : "Изменить пресет"}</h3>
+      ${isNew ? `<div class="preset-kind" id="pd-kind"><button type="button" data-pd-kind="prompt" class="${useKind === "prompt" ? "on" : ""}">Промт</button><button type="button" data-pd-kind="gen" class="${useKind === "gen" ? "on" : ""}">Генерация</button></div>` : `<div class="mu">${useKind === "gen" ? "Пресет генерации" : "Сниппет промта"}</div>`}
+      <label>Имя<input id="pd-name" class="f" style="font-family:inherit" value="${escapeHtml(existing ? existing.name : "")}"></label>
+      <label>Категория<select id="pd-cat" class="dd">${options}</select></label>
+      <label>Или новая<input id="pd-cat-new" class="f" style="font-family:inherit" placeholder="Портрет, Стиль, Кожа…"></label>
+      <label class="row" style="flex-direction:row;align-items:center"><input id="pd-fav" type="checkbox" ${existing && existing.favorite ? "checked" : ""}> В избранном</label>
+      <div id="pd-body">${useKind === "gen" ? genFields : promptFields}</div>
+      <div class="row"><button type="button" class="b ac" id="pd-save">Сохранить</button><button type="button" class="b" id="pd-cancel">Отмена</button></div>`;
+    drawer.querySelectorAll("[data-pd-kind]").forEach((btn) => {
+      btn.onclick = () => openPresetDrawer(btn.dataset.pdKind, "");
+    });
+  }
+
+  function closePresetDrawer() {
+    const drawer = $("preset-drawer");
+    if (drawer) { drawer.hidden = true; drawer.innerHTML = ""; }
+  }
+
+  function drawerCategory() {
+    const typed = ($("pd-cat-new") && $("pd-cat-new").value.trim()) || "";
+    return typed || ($("pd-cat") && $("pd-cat").value) || "Общее";
+  }
+
+  async function persistGenPreset(p) {
+    try {
+      const saved = await api("/zeroimagestudio/collection/presets", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(p),
+      });
+      if (saved && saved.id) p.id = saved.id;
+      if (saved && saved.updated) p.updated = saved.updated;
+    } catch (err) {
+      toast(err.message || String(err));
+    }
+  }
+
+  function captureGenPreset(name, category, favorite, previous) {
+    return {
+      id: previous && previous.id,
+      name,
+      category: category || "Общее",
+      favorite: !!favorite,
+      thumb: (previous && previous.thumb) || latestGalleryThumb(),
+      pipeline: state.pipeline,
+      hintId: state.hintId,
+      prompt: state.prompt,
+      negative: state.negative,
+      promptPresets: state.promptPresets,
+      sampler: state.sampler,
+      create: state.create,
+      edit: state.edit,
+      area: state.area,
+      updated: Date.now(),
+    };
+  }
+
+  async function savePresetDrawer() {
+    const drawer = $("preset-drawer");
+    if (!drawer || drawer.hidden) return;
+    const kind = drawer.dataset.kind === "gen" ? "gen" : "prompt";
+    const id = drawer.dataset.id || "";
+    const name = ($("pd-name").value || "").trim();
+    if (!name) { toast("У пресета нет имени."); return; }
+    const category = drawerCategory();
+    const favorite = !!($("pd-fav") && $("pd-fav").checked);
+    storeExtraCats([...extraPresetCats(), category]);
+    if (kind === "prompt") {
+      const existing = id ? findPreset("prompt", id) : null;
+      const draft = normalizePreset({
+        id: existing && existing.id,
+        name,
+        category,
+        text: $("pd-text") ? $("pd-text").value : "",
+        position: $("pd-pos") ? $("pd-pos").value : "before",
+        enabled: existing ? existing.enabled : false,
+        favorite,
+        order: existing ? existing.order : state.promptPresets.length,
+      }, state.promptPresets.length);
+      if (existing) Object.assign(existing, draft);
+      else state.promptPresets.push(draft);
+      await persistPreset(existing || draft);
+    } else if (id) {
+      const existing = findPreset("gen", id);
+      if (!existing) return;
+      existing.name = name;
+      existing.category = category;
+      existing.favorite = favorite;
+      await persistGenPreset(existing);
+    } else {
+      const previous = id ? findPreset("gen", id) : null;
+      const draft = captureGenPreset(name, category, favorite, previous);
+      if (previous) Object.assign(previous, draft);
+      else state.presets.unshift(draft);
+      await persistGenPreset(previous || draft);
+    }
+    closePresetDrawer();
+    renderPresetSelect();
+    renderPresetPage();
+    renderChips();
+  }
+
+  async function applyPresetCard(kind, id) {
+    if (kind === "gen") {
+      const p = findPreset("gen", id);
+      if (!p) return;
+      applyPreset(p);
+      document.querySelector('.tabs [data-tab="canvas"]').click();
+      return;
+    }
+    const p = findPreset("prompt", id);
+    if (!p) return;
+    p.enabled = true;
+    p.order = Math.max(-1, ...state.promptPresets.map((x) => Number(x.order) || 0)) + 1;
+    await persistPreset(p);
+    renderChips();
+    toast("Пресет «" + p.name + "» включён в промт.");
+    document.querySelector('.tabs [data-tab="canvas"]').click();
+  }
+
+  async function duplicatePresetCard(kind, id) {
+    const src = findPreset(kind, id);
+    if (!src) return;
+    if (kind === "prompt") {
+      const copy = normalizePreset({ ...src, id: undefined, name: src.name + " копия", enabled: false, favorite: false, order: state.promptPresets.length }, state.promptPresets.length);
+      state.promptPresets.push(copy);
+      await persistPreset(copy);
+    } else {
+      const copy = { ...JSON.parse(JSON.stringify(src)), id: "g" + Math.random().toString(36).slice(2, 8), name: (src.name || "Пресет") + " копия", favorite: false, updated: Date.now() };
+      state.presets.unshift(copy);
+      await persistGenPreset(copy);
+    }
+    renderPresetSelect();
+    renderPresetPage();
+  }
+
+  async function deletePresetCard(kind, id) {
+    const src = findPreset(kind, id);
+    if (!src) return;
+    if (!window.confirm("Удалить пресет «" + (src.name || "") + "»?")) return;
+    const path = kind === "gen" ? "/zeroimagestudio/collection/presets/" : "/zeroimagestudio/collection/prompt_presets/";
+    try { await api(path + encodeURIComponent(id), { method: "DELETE" }); }
+    catch (err) { toast(err.message || String(err)); }
+    if (kind === "gen") state.presets = state.presets.filter((p) => p.id !== id);
+    else state.promptPresets = state.promptPresets.filter((p) => p.id !== id);
+    renderPresetSelect();
+    renderChips();
+    renderPresetPage();
+  }
+
+  async function togglePresetFav(kind, id) {
+    const src = findPreset(kind, id);
+    if (!src) return;
+    src.favorite = !src.favorite;
+    if (kind === "prompt") await persistPreset(src);
+    else await persistGenPreset(src);
+    renderPresetPage();
+  }
+
+  async function renamePresetCategory(name) {
+    const next = window.prompt("Новое имя категории", name);
+    if (!next || !next.trim() || next.trim() === name) return;
+    const label = next.trim();
+    const changedP = [];
+    const changedG = [];
+    state.promptPresets.forEach((p) => { if (U.presetCategory(p) === name) { p.category = label; changedP.push(p); } });
+    state.presets.forEach((p) => { if (U.presetCategory(p) === name) { p.category = label; changedG.push(p); } });
+    storeExtraCats(extraPresetCats().map((c) => (c === name ? label : c)));
+    if (presetUi.filter === "cat:" + name) presetUi.filter = "cat:" + label;
+    await Promise.all(changedP.map((p) => persistPreset(p)));
+    await Promise.all(changedG.map((p) => persistGenPreset(p)));
+    renderPresetPage();
+  }
+
+  async function deletePresetCategory(name) {
+    if (!window.confirm("Удалить категорию «" + name + "»? Пресеты перейдут в «Общее».")) return;
+    const changedP = [];
+    const changedG = [];
+    state.promptPresets.forEach((p) => { if (U.presetCategory(p) === name) { p.category = "Общее"; changedP.push(p); } });
+    state.presets.forEach((p) => { if (U.presetCategory(p) === name) { p.category = "Общее"; changedG.push(p); } });
+    storeExtraCats(extraPresetCats().filter((c) => c !== name));
+    if (presetUi.filter === "cat:" + name) presetUi.filter = "all";
+    await Promise.all(changedP.map((p) => persistPreset(p)));
+    await Promise.all(changedG.map((p) => persistGenPreset(p)));
+    renderPresetPage();
   }
 
   let menuName = null;
@@ -4709,10 +5086,9 @@
     $("btn-save-preset").onclick = async () => {
       const name = window.prompt("Имя пресета", "Портрет HQ");
       if (!name) return;
-      const item = await api("/zeroimagestudio/collection/presets", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
-        name, pipeline: state.pipeline, hintId: state.hintId, prompt: state.prompt, negative: state.negative,
-        promptPresets: state.promptPresets, sampler: state.sampler, create: state.create, edit: state.edit, area: state.area,
-      }) });
+      const item = await api("/zeroimagestudio/collection/presets", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(
+        captureGenPreset(name, "Общее", false, null)
+      ) });
       state.presets.unshift(item);
       renderPresetSelect();
       toast("Пресет сохранён.");
@@ -5083,34 +5459,47 @@
     $("gal-lora").onchange = renderGallery;
     $("gal-sort").onchange = () => { $("gal-sort-label").textContent = "сортировка: " + ($("gal-sort").value === "old" ? "старые" : "новые"); renderGallery(); };
     document.addEventListener("click", (e) => { if (!$("pop").hidden && !e.target.closest("#pop") && !e.target.closest("[data-gal]")) $("pop").hidden = true; });
-    $("preset-page").addEventListener("change", (e) => {
-      const id = e.target.dataset.ppName || e.target.dataset.ppText;
-      const p = state.promptPresets.find((x) => x.id === id);
-      if (!p) return;
-      if (e.target.dataset.ppName) p.name = e.target.value;
-      if (e.target.dataset.ppText) p.text = e.target.value;
-      persistPreset(p);
-      renderChips();
-    });
     $("preset-page").addEventListener("click", async (e) => {
-      const load = e.target.closest("[data-load-preset]");
-      const del = e.target.closest("[data-del-preset]");
-      const pp = e.target.closest("[data-pp-del]");
-      if (load) applyPreset(state.presets.find((p) => p.id === load.dataset.loadPreset));
-      if (del) {
-        await api("/zeroimagestudio/collection/presets/" + encodeURIComponent(del.dataset.delPreset), { method: "DELETE" });
-        state.presets = state.presets.filter((p) => p.id !== del.dataset.delPreset);
-        renderPresetSelect(); renderPresetPage();
-      }
-      if (pp) {
-        const id = pp.dataset.ppDel;
-        try {
-          await api("/zeroimagestudio/collection/prompt_presets/" + encodeURIComponent(id), { method: "DELETE" });
-        } catch (err) { toast(err.message || String(err)); return; }
-        state.promptPresets = state.promptPresets.filter((p) => p.id !== id);
-        renderChips();
+      const filter = e.target.closest("[data-preset-filter]");
+      if (filter) { presetUi.filter = filter.dataset.presetFilter; paintPresetSide(); paintPresetGrid(); return; }
+      if (e.target.closest("#preset-addcat")) {
+        const input = $("preset-newcat");
+        const name = input && input.value.trim();
+        if (!name) return;
+        storeExtraCats([...extraPresetCats(), name]);
+        presetUi.filter = "cat:" + name;
         renderPresetPage();
+        return;
       }
+      const rename = e.target.closest("[data-cat-rename]");
+      if (rename) { await renamePresetCategory(rename.dataset.catRename); return; }
+      const dropCat = e.target.closest("[data-cat-del]");
+      if (dropCat) { await deletePresetCategory(dropCat.dataset.catDel); return; }
+      if (e.target.closest("#preset-new") || e.target.closest("[data-preset-new]")) { openPresetDrawer("prompt", ""); return; }
+      if (e.target.closest("#pd-cancel")) { closePresetDrawer(); return; }
+      if (e.target.closest("#pd-save")) { await savePresetDrawer(); return; }
+      if (e.target.closest("#pd-recapture")) {
+        const drawer = $("preset-drawer");
+        const existing = findPreset("gen", drawer.dataset.id);
+        if (!existing) return;
+        Object.assign(existing, captureGenPreset(existing.name, U.presetCategory(existing), existing.favorite, existing));
+        existing.thumb = latestGalleryThumb() || existing.thumb;
+        await persistGenPreset(existing);
+        openPresetDrawer("gen", existing.id);
+        toast("Снимок настроек обновлён.");
+        return;
+      }
+      const kindOf = (node) => (node && node.dataset.presetKind) === "gen" ? "gen" : "prompt";
+      const apply = e.target.closest("[data-preset-apply]");
+      const edit = e.target.closest("[data-preset-edit]");
+      const dup = e.target.closest("[data-preset-dup]");
+      const del = e.target.closest("[data-preset-del]");
+      const fav = e.target.closest("[data-preset-fav]");
+      if (apply) { await applyPresetCard(kindOf(apply), apply.dataset.presetApply); return; }
+      if (edit) { openPresetDrawer(kindOf(edit), edit.dataset.presetEdit); return; }
+      if (dup) { await duplicatePresetCard(kindOf(dup), dup.dataset.presetDup); return; }
+      if (del) { await deletePresetCard(kindOf(del), del.dataset.presetDel); return; }
+      if (fav) { await togglePresetFav(kindOf(fav), fav.dataset.presetFav); return; }
     });
     window.addEventListener("keydown", (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); generate(); }

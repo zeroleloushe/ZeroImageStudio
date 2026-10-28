@@ -66,6 +66,12 @@ test("a saved task LoRA is not replaced by the suggested file", () => {
   assert.equal(U.resolveTaskLora({ name: "  " }, "suggested.safetensors").name, "suggested.safetensors");
 });
 
+test("a preset without a category lands in Общее", () => {
+  assert.equal(U.presetCategory({}), "Общее");
+  assert.equal(U.presetCategory({ category: "  " }), "Общее");
+  assert.equal(U.presetCategory({ category: "Портрет" }), "Портрет");
+});
+
 test("undo inverse is recorded for pixels, patches and moves", () => {
   const pixels = U.inverseHistory(
     { type: "pixels", id: "a", data: { byteLength: 4 } },
