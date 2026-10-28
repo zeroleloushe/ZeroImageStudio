@@ -378,7 +378,7 @@ input.range::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; heigh
   flex: none; font-size: 9px; font-weight: 700; line-height: 16px; padding: 0 4px; border-radius: 3px;
   color: #ffd2b0; background: rgba(255, 122, 26, .18); border: 1px solid rgba(255, 122, 26, .45);
 }
-.menubar { display: flex; align-items: center; gap: 1px; flex: none; min-width: 0; }
+.menubar { display: flex; align-items: center; gap: 1px; flex: none; min-width: max-content; }
 .menu { position: relative; }
 .menu-btn {
   height: 22px; padding: 0 8px; border-radius: 4px; color: var(--tx); font-weight: 600; background: transparent;
@@ -451,13 +451,23 @@ details.adv summary { cursor: pointer; font-size: 11px; }
 
 body { min-width: 0; }
 .menu-gap, .work-gap { flex: 1 1 8px; min-width: 4px; }
-.project { flex: 0 1 220px; min-width: 72px; display: flex; flex-direction: row; align-items: center; gap: 6px; }
+.project { flex: 0 0 180px; width: 180px; min-width: 180px; max-width: 180px; display: flex; flex-direction: row; align-items: center; gap: 2px; }
 .project-name {
   height: 20px; border: 0; background: transparent; font-weight: 700; font-size: 12px;
-  font-family: inherit; padding: 0; width: auto; flex: 1 1 auto; min-width: 48px; color: inherit;
+  font-family: inherit; padding: 0; width: auto; flex: 1 1 auto; min-width: 0; color: inherit;
   text-overflow: ellipsis; overflow: hidden; white-space: nowrap;
 }
-#project-sub { font-size: 10px; flex: none; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-dirty {
+  flex: 0 0 12px; width: 12px; text-align: center; font-weight: 700; color: var(--mu);
+  visibility: hidden;
+}
+.project-dirty.on { visibility: visible; }
+.save-state {
+  flex: none; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
+  font-size: 11px; color: var(--mu);
+}
+.save-state i { width: 7px; height: 7px; border-radius: 50%; background: #c5ccd8; flex: none; }
+.save-state[hidden] { display: none !important; }
 .tabs { flex: none; }
 .tabs button { white-space: nowrap; }
 #preset-select { flex: 0 1 180px; width: 160px; max-width: 220px; min-width: 88px; height: 22px; }
@@ -589,10 +599,9 @@ textarea.prompt { height: 76px; }
   #preset-select { max-width: 140px; }
   .tabs button { padding: 0 8px; }
   .left, .right { width: 332px; }
-  #project-sub { display: none; }
 }
 @media (max-width: 1360px) {
-  .project { flex-basis: 110px; }
+  .project { flex-basis: 120px; width: 120px; min-width: 120px; max-width: 120px; }
   .menu-btn { padding: 0 6px; }
 }
 .canvas-head .ht { flex: none; }

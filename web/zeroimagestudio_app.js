@@ -2336,6 +2336,7 @@
     syncDefaultArea();
     editor.fit();
     state.dirty = true;
+    paintSaveState();
     editor.requestDraw();
     renderInspector();
     renderPipe();
@@ -2992,6 +2993,7 @@
     syncDefaultArea();
     editor.fit();
     state.dirty = true;
+    paintSaveState();
     renderLayers();
     renderInspector();
     renderPipe();
@@ -4437,7 +4439,7 @@
     const saved = await api(path, { method: "POST", body: fd });
     state.projectId = saved.id;
     state.dirty = false;
-    $("project-sub").textContent = (opts && opts.auto ? "автосохранение " : "сохранено ") + new Date().toLocaleTimeString();
+    paintSaveState();
     rememberProject(saved.id, state.projectName);
     return saved.id;
   }
@@ -4564,6 +4566,7 @@
     if (!state.area.userPlaced) syncDefaultArea();
     editor.fit();
     state.dirty = false;
+    paintSaveState();
     rememberProject(id, state.projectName);
     renderAll();
   }
@@ -4657,6 +4660,7 @@
     editor.thumb(editor.activeLayer());
     editor.fit();
     state.dirty = true;
+    paintSaveState();
     editor.requestDraw();
     renderLayers();
     renderInspector();
@@ -4701,6 +4705,7 @@
     }
     editor.fit();
     state.dirty = true;
+    paintSaveState();
     editor.requestDraw();
     renderLayers();
     renderInspector();
@@ -5997,7 +6002,7 @@
     editor.clearHistory();
     state.dirty = false;
     $("project-name").value = state.projectName;
-    $("project-sub").textContent = "новый проект";
+    paintSaveState();
     updateFinal();
     updateGenerateButton();
   }
@@ -6191,7 +6196,7 @@
     $("swatch-swap").onclick = () => swapColors();
     $("swatch-reset").onclick = () => resetColors();
     $("tools-more").onclick = () => setMoreOpen(!state.moreTools);
-    $("prompt").oninput = () => { state.prompt = $("prompt").value; state.dirty = true; updateFinal(); updateGenerateButton(); fitPromptField(); if (isKreaEdit()) renderKreaChrome(); };
+    $("prompt").oninput = () => { state.prompt = $("prompt").value; state.dirty = true; paintSaveState(); updateFinal(); updateGenerateButton(); fitPromptField(); if (isKreaEdit()) renderKreaChrome(); };
     $("prompt-fold").onclick = () => setPromptMode($("prompt-node").dataset.prompt === "full" ? "compact" : "full", true);
     $("negative").oninput = () => { state.negative = $("negative").value; };
     $("project-name").onchange = () => { state.projectName = $("project-name").value || "zeroimagestudio"; };
@@ -7081,6 +7086,14 @@
     else toast("Команда возвращает к ноде, когда ZeroImageStudio открыт из графа.");
   }
 
+  function paintSaveState() {
+    const sub = $("project-sub");
+    const mark = $("project-dirty");
+    const dirty = !!state.dirty;
+    if (sub) sub.hidden = !dirty;
+    if (mark) mark.classList.toggle("on", dirty);
+  }
+
   let booted = false;
   let pendingGraphOpen = null;
 
@@ -7093,8 +7106,7 @@
     editor = new Editor($("stage"));
     editor.onChange = () => {
       state.dirty = true;
-      const sub = $("project-sub");
-      if (sub) sub.textContent = "есть несохранённые правки";
+      paintSaveState();
     };
     bindStatic();
     connectWs();
@@ -7142,6 +7154,7 @@
       }
     }
     state.dirty = false;
+    paintSaveState();
     modelMemory = true;
     renderGallery();
     pollStats();

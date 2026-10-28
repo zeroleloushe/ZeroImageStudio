@@ -4,9 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>ZeroImageStudio</title>
-  <link rel="stylesheet" href="zeroimagestudio.css">
+  <link rel="stylesheet" href="zeroimagestudio.css?v=menufix">
   <script>window.__ZEROIMAGESTUDIO_PAGE = true;</script>
-  <script src="icons.js?v=layermove"></script>
+  <script src="icons.js?v=menufix"></script>
 </head>
 <body data-tab="canvas">
 <header class="chrome" id="chrome">
@@ -14,7 +14,7 @@
     <div class="logo" title="ZeroImageStudio">Z</div>
     <div class="project">
       <input id="project-name" class="project-name" value="Новый проект" title="Имя проекта">
-      <span class="mu" id="project-sub">проект</span>
+      <span id="project-dirty" class="project-dirty" title="Есть несохранённые правки">*</span>
     </div>
     <nav class="menubar" id="menubar" aria-label="Меню">
       <div class="menu" data-menu="file">
@@ -72,6 +72,7 @@
     </nav>
     <span class="menu-gap"></span>
     <span class="sys-ind mu mono" id="sys-stats" title="GPU и очередь">…</span>
+    <span class="save-state" id="project-sub" hidden title="Есть несохранённые правки"><i></i>Не сохранено</span>
     <button class="b ac" id="btn-collapse" type="button">Свернуть в ноду</button>
   </div>
   <div class="work-bar">
@@ -339,10 +340,10 @@ try {
   }
 } catch (e) {}
 </script>
-<script src="zeroimagestudio_size.js?v=layermove"></script>
-<script src="zeroimagestudio_util.js?v=layermove"></script>
-<script src="zeroimagestudio_models.js?v=layermove"></script>
-<script src="zeroimagestudio_ux.js?v=layermove"></script>
-<script src="zeroimagestudio_app.js?v=layermove"></script>
+<script src="zeroimagestudio_size.js?v=menufix"></script>
+<script src="zeroimagestudio_util.js?v=menufix"></script>
+<script src="zeroimagestudio_models.js?v=menufix"></script>
+<script src="zeroimagestudio_ux.js?v=menufix"></script>
+<script src="zeroimagestudio_app.js?v=menufix"></script>
 </body>
 </html>
