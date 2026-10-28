@@ -34,6 +34,8 @@
     area: { outW: 1024, outH: 1024, aspect: "free", context: 0.15, feather: 48, paste: "poisson", colorMatch: true, userPlaced: false, outputLinked: true, mp: 1, mpFilter: 1, pasteOpen: false, editScope: "full", region: null, exactOpen: false, createAspect: "1:1", resPanel: "" },
     tool: "genarea",
     color: "#e7c27a",
+    color2: "#1b1e24",
+    moreTools: false,
     brush: { size: 64, hardness: 0.3, opacity: 1 },
     hints: [],
     catalog: null,
@@ -550,7 +552,7 @@
     }
 
     paintTarget(tool) {
-      if (tool === "mask") return { kind: "work" };
+      if (tool === "mask" || tool === "maskerase") return { kind: "work" };
       if (tool !== "brush" && tool !== "eraser") return null;
       if (state.maskFocus === "work") return { kind: "work" };
       if (state.maskFocus && state.maskFocus.id) {
@@ -930,6 +932,11 @@
       window.addEventListener("pointermove", (e) => this.pointerMove(e));
       window.addEventListener("pointerup", (e) => this.pointerUp(e));
       this.stage.addEventListener("pointerleave", () => { this._pointer = null; this.syncBrushCursor(); });
+      this.stage.addEventListener("contextmenu", (e) => {
+        if (!this.selection) return;
+        e.preventDefault();
+        openSelectionMenu(e.clientX, e.clientY);
+      });
       this.stage.addEventListener("wheel", (e) => {
         e.preventDefault();
         const factor = e.deltaY < 0 ? 1.08 : 1 / 1.08;
@@ -957,6 +964,10 @@
         const tag = (e.target.tagName || "").toLowerCase();
         if (tag === "input" || tag === "textarea" || tag === "select") return;
         const map = { KeyV: "move", KeyM: "select", KeyL: "lasso", KeyT: "transform", KeyC: "crop", KeyB: "brush", KeyE: "eraser", KeyI: "eyedrop", KeyQ: "mask", KeyG: "genarea", KeyH: "hand", KeyZ: "zoom" };
+        if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.code === "KeyM") { e.preventDefault(); selectionToMask(); return; }
+        if (e.shiftKey && e.code === "KeyQ") { setTool("maskerase"); return; }
+        if ((e.key === "x" || e.key === "X" || e.key === "ч" || e.key === "Ч") && pixelToolActive()) { swapColors(); return; }
+        if ((e.key === "d" || e.key === "D" || e.key === "в" || e.key === "В") && pixelToolActive()) { resetColors(); return; }
         if (e.key === "?" || (e.shiftKey && e.code === "Slash")) { e.preventDefault(); toggleHelp(true); return; }
         if (e.ctrlKey || e.metaKey || e.altKey) return;
         if (e.key === "Delete" || e.key === "Backspace") {
@@ -1020,8 +1031,9 @@
         const x = Math.max(0, Math.min(flat.width - 1, Math.floor(p.x)));
         const y = Math.max(0, Math.min(flat.height - 1, Math.floor(p.y)));
         const px = flat.getContext("2d").getImageData(x, y, 1, 1).data;
-        state.color = "#" + [px[0], px[1], px[2]].map((n) => n.toString(16).padStart(2, "0")).join("");
-        $("swatch").value = state.color;
+        const hex = "#" + [px[0], px[1], px[2]].map((n) => n.toString(16).padStart(2, "0")).join("");
+        if (e.altKey) state.color2 = hex; else state.color = hex;
+        syncSwatches();
         return;
       }
       if (tool === "genarea") {
@@ -1045,13 +1057,13 @@
         this.drag = { kind: "transform", id: this.activeLayer() && this.activeLayer().id, x: p.x, y: p.y, snapshot: this.fullSnapshot() };
         return;
       }
-      if (tool === "brush" || tool === "eraser" || tool === "mask") {
+      if (tool === "brush" || tool === "eraser" || tool === "mask" || tool === "maskerase") {
         const layer = this.activeLayer();
         const onMask = U.brushTargetsMask(tool, this.maskSelected());
         const target = onMask ? this.paintTarget(tool) : null;
         if (target && target.kind === "layer" && target.layer.locked) { toast("Слой заблокирован."); return; }
         if (!target && (!layer || layer.locked)) { toast(layer && layer.locked ? "Слой заблокирован." : "Нет слоя."); return; }
-        if (tool === "mask") state.maskFocus = "work";
+        if (tool === "mask" || tool === "maskerase") state.maskFocus = "work";
         const patch = {
           type: "patch",
           id: target && target.kind === "layer" ? target.layer.id : (layer && layer.id),
@@ -1069,7 +1081,7 @@
     syncBrushCursor() {
       const el = this.brushCursor;
       if (!el) return;
-      const show = state.tool === "brush" || state.tool === "eraser" || state.tool === "mask";
+      const show = state.tool === "brush" || state.tool === "eraser" || state.tool === "mask" || state.tool === "maskerase";
       const pt = this._pointer;
       const rect = this.canvas.getBoundingClientRect();
       const inside = pt && pt.x >= rect.left && pt.x <= rect.right && pt.y >= rect.top && pt.y <= rect.bottom;
@@ -1155,6 +1167,7 @@
       renderLayers();
       renderPipe();
       paintStatus();
+      if (d.kind === "select" || d.kind === "lasso" || d.kind === "crop") renderToolOptions();
     }
 
     dragGen(d, p) {
@@ -1247,7 +1260,7 @@
         if (!ctx) return;
         const local = this.patchLocal(patch, x, y);
         ctx.save();
-        if (state.tool === "eraser") ctx.globalCompositeOperation = "destination-out";
+        if (state.tool === "eraser" || state.tool === "maskerase") ctx.globalCompositeOperation = "destination-out";
         const grd = ctx.createRadialGradient(local.x, local.y, size * hard * 0.5, local.x, local.y, size / 2);
         grd.addColorStop(0, `rgba(255,255,255,${state.brush.opacity})`);
         grd.addColorStop(1, "rgba(255,255,255,0)");
@@ -1393,16 +1406,133 @@
 
   let editor;
 
+  const MORE_TOOLS = ["brush", "eraser", "eyedrop", "transform"];
+  const COLOR_DEFAULTS = { primary: "#e7c27a", secondary: "#1b1e24" };
+
+  function pixelToolActive() {
+    return state.tool === "brush" || state.tool === "eraser" || state.tool === "eyedrop";
+  }
+
+  function setMoreOpen(open) {
+    state.moreTools = !!open;
+    const box = $("tools-extra");
+    const btn = $("tools-more");
+    if (box) box.hidden = !state.moreTools;
+    if (btn) {
+      btn.setAttribute("aria-expanded", state.moreTools ? "true" : "false");
+      btn.classList.toggle("on", state.moreTools);
+    }
+    try { localStorage.setItem("zeroimagestudio.moreTools", state.moreTools ? "1" : "0"); } catch { /* private mode */ }
+  }
+
+  function syncSwatches() {
+    const box = $("swatches");
+    if (!box) return;
+    box.hidden = !pixelToolActive();
+    const primary = $("swatch-primary");
+    const secondary = $("swatch-bg");
+    if (primary) primary.style.background = state.color;
+    if (secondary) secondary.style.background = state.color2;
+    if ($("swatch")) $("swatch").value = state.color;
+    if ($("swatch-2")) $("swatch-2").value = state.color2;
+  }
+
+  function swapColors() {
+    const next = state.color;
+    state.color = state.color2;
+    state.color2 = next;
+    syncSwatches();
+  }
+
+  function resetColors() {
+    state.color = COLOR_DEFAULTS.primary;
+    state.color2 = COLOR_DEFAULTS.secondary;
+    syncSwatches();
+  }
+
+  function toolHeading(name) {
+    const map = {
+      move: ["move", "Перемещение"],
+      genarea: ["genarea", "Рамка генерации"],
+      mask: ["mask", "Маска"],
+      maskerase: ["maskerase", "Ластик маски"],
+      select: ["select", "Выделение"],
+      lasso: ["lasso", "Лассо"],
+      crop: ["crop", "Кадрирование"],
+      hand: ["hand", "Рука"],
+      zoom: ["zoom", "Масштаб"],
+      brush: ["brush", "Кисть"],
+      eraser: ["eraser", "Ластик"],
+      eyedrop: ["eyedrop", "Пипетка"],
+      transform: ["transform", "Трансформ"],
+    };
+    const hit = map[name] || ["move", "Инструмент"];
+    return `<span class="tool-name" data-i="${hit[0]}" data-s="16"><b>${hit[1]}</b></span>`;
+  }
+
+  function selectionToMask() {
+    if (!editor || !editor.selection) { toast("Нет выделения."); return; }
+    const sel = editor.selection;
+    editor.pushUndo(editor.fullSnapshot());
+    const ctx = editor.maskCtx;
+    ctx.save();
+    ctx.globalCompositeOperation = "source-over";
+    ctx.fillStyle = "#000";
+    ctx.fillRect(0, 0, editor.doc.w, editor.doc.h);
+    ctx.fillStyle = "#fff";
+    ctx.beginPath();
+    if (sel.type === "rect") ctx.rect(sel.x, sel.y, sel.w, sel.h);
+    else {
+      const pts = sel.points || [];
+      if (pts.length) {
+        ctx.moveTo(pts[0].x, pts[0].y);
+        pts.forEach((p) => ctx.lineTo(p.x, p.y));
+        ctx.closePath();
+      }
+    }
+    ctx.fill();
+    ctx.restore();
+    editor.touchMask();
+    state.maskFocus = "work";
+    editor.requestDraw();
+    renderLayers();
+    toast("Выделение записано в маску. Белое — менять, чёрное — оставить.");
+  }
+
+  function clearSelection() {
+    if (!editor) return;
+    editor.selection = null;
+    editor.requestDraw();
+    renderToolOptions();
+  }
+
+  function openSelectionMenu(x, y) {
+    const menu = layerMenuEl();
+    menu.innerHTML = `
+      <button type="button" data-act="mask">В маску</button>
+      <button type="button" data-act="clear">Снять выделение</button>`;
+    placeLayerMenu(menu, x, y);
+    menu.onclick = (e) => {
+      const act = e.target.closest("[data-act]");
+      menu.hidden = true;
+      if (!act) return;
+      if (act.dataset.act === "mask") selectionToMask();
+      if (act.dataset.act === "clear") clearSelection();
+    };
+  }
+
   function setTool(name) {
-    if (state.pipeline === "create" && (name === "mask" || name === "genarea")) return;
+    if (state.pipeline === "create" && (name === "mask" || name === "maskerase" || name === "genarea")) return;
     state.tool = name;
-    document.querySelectorAll(".tool").forEach((b) => b.classList.toggle("on", b.dataset.tool === name));
+    if (MORE_TOOLS.includes(name)) setMoreOpen(true);
+    document.querySelectorAll(".tool[data-tool]").forEach((b) => b.classList.toggle("on", b.dataset.tool === name));
     renderToolOptions();
     const meta = $("insp-meta");
     if (meta && editor) meta.textContent = inspectorContext();
-    const cursors = { brush: "none", eraser: "none", mask: "none", hand: "grab", zoom: "zoom-in", move: "move", genarea: "crosshair", crop: "crosshair", select: "crosshair", lasso: "crosshair", eyedrop: "crosshair", transform: "move" };
+    const cursors = { brush: "none", eraser: "none", mask: "none", maskerase: "none", hand: "grab", zoom: "zoom-in", move: "move", genarea: "crosshair", crop: "crosshair", select: "crosshair", lasso: "crosshair", eyedrop: "crosshair", transform: "move" };
     editor.canvas.style.cursor = cursors[name] || "default";
-    if (name === "mask") state.maskFocus = "work";
+    if (name === "mask" || name === "maskerase") state.maskFocus = "work";
+    syncSwatches();
     if (name === "genarea" && state.pipeline === "edit" && state.area.editScope !== "region") applyEditScope("region");
     editor.syncBrushCursor();
     editor.requestDraw();
@@ -1410,9 +1540,9 @@
   }
 
   function renderAll() {
-    if (state.pipeline === "create" && (state.tool === "mask" || state.tool === "genarea")) {
+    if (state.pipeline === "create" && (state.tool === "mask" || state.tool === "maskerase" || state.tool === "genarea")) {
       state.tool = "move";
-      document.querySelectorAll(".tool").forEach((b) => b.classList.toggle("on", b.dataset.tool === "move"));
+      document.querySelectorAll(".tool[data-tool]").forEach((b) => b.classList.toggle("on", b.dataset.tool === "move"));
       if (editor) editor.canvas.style.cursor = "default";
     }
     renderHints();
@@ -2275,9 +2405,8 @@
     if (!host || !editor) return;
     const tool = state.tool;
     const b = state.brush;
-    if (tool === "brush" || tool === "eraser" || tool === "mask") {
-      const title = tool === "mask" ? "Маска" : (tool === "eraser" ? "Ластик" : "Кисть");
-      host.innerHTML = `<b>${title}</b>
+    if (tool === "brush" || tool === "eraser" || tool === "mask" || tool === "maskerase") {
+      host.innerHTML = `${toolHeading(tool)}
         <label>Размер <input id="brush-size" class="range" type="range" min="1" max="300" value="${b.size}" title="Размер кисти ([ и ])"></label>
         <label>Жёсткость <input id="brush-hard" class="range" type="range" min="0" max="100" value="${Math.round(b.hardness * 100)}" title="Жёсткость"></label>
         <label>Непрозр. <input id="brush-op" class="range" type="range" min="1" max="100" value="${Math.round(b.opacity * 100)}" title="Непрозрачность"></label>
@@ -2286,21 +2415,29 @@
       $("brush-hard").oninput = () => { state.brush.hardness = (parseInt($("brush-hard").value, 10) || 0) / 100; paintStatus(); };
       $("brush-op").oninput = () => { state.brush.opacity = Math.min(1, (parseInt($("brush-op").value, 10) || 1) / 100); paintStatus(); };
       paintStatus();
+    } else if (tool === "select" || tool === "lasso") {
+      const ready = editor.selection ? "" : "disabled";
+      host.innerHTML = `${toolHeading(tool)}
+        <button type="button" class="b s" id="sel-to-mask" ${ready} title="Записать выделение в маску. Белое — то, что менять. Чёрное — оставить. Ctrl+Shift+M">В маску</button>
+        <button type="button" class="b s" id="sel-clear" ${ready} title="Снять выделение (Esc)">Снять выделение</button>
+        <span class="mu">Выделение остаётся пиксельным. Само в модель не уходит.</span>`;
+      const toMask = $("sel-to-mask");
+      const clear = $("sel-clear");
+      if (toMask) toMask.onclick = () => selectionToMask();
+      if (clear) clear.onclick = () => clearSelection();
     } else if (tool === "genarea") {
-      host.innerHTML = `<b>Область</b><span class="mu" id="opt-status"></span>`;
+      host.innerHTML = `${toolHeading(tool)}<span class="mu" id="opt-status"></span>`;
       paintStatus();
     } else {
       const hints = {
-        move: "Перемещение слоя (V). Пробел — панорама.",
-        select: "Прямоугольное выделение (M).",
-        lasso: "Лассо (L).",
-        transform: "Масштаб слоя перетаскиванием (T).",
-        crop: "Кадрирование холста (C).",
-        eyedrop: "Пипетка (I) — цвет кисти.",
-        hand: "Рука (H или пробел).",
-        zoom: "Масштаб (Z). Колёсико крутит вокруг курсора. Ctrl+0 вмещает, Ctrl+1 — 100%.",
+        move: "Перемещение слоя. Пробел — панорама.",
+        transform: "Масштаб слоя перетаскиванием.",
+        crop: "Кадрирование холста.",
+        eyedrop: "Берёт основной цвет. Alt — фоновый.",
+        hand: "Рука. Пробел временно включает её.",
+        zoom: "Колёсико крутит вокруг курсора. Ctrl+0 вмещает, Ctrl+1 — 100%.",
       };
-      host.innerHTML = `<span class="mu">${hints[tool] || "Выберите инструмент."}</span>`;
+      host.innerHTML = `${toolHeading(tool)}<span class="mu">${hints[tool] || ""}</span>`;
     }
     if (window.zeroImageStudioHydrateIcons) window.zeroImageStudioHydrateIcons(host);
   }
@@ -2708,7 +2845,8 @@
       pop.className = "help-pop";
       pop.innerHTML = `<div class="row"><b>Клавиши</b><button type="button" class="b s" id="help-close" style="margin-left:auto" title="Закрыть">Закрыть</button></div>
         <div>V перемещение · M рамка · L лассо · T трансформ · C кадр</div>
-        <div>B кисть · E ластик · I пипетка · Q маска · G область</div>
+        <div>B кисть · E ластик пикселей · I пипетка · Q маска · Shift+Q ластик маски · G рамка генерации</div>
+        <div>Ctrl+Shift+M выделение в маску · Esc снимает выделение · X меняет цвета · D сбрасывает</div>
         <div>H рука · Z масштаб · Пробел+перетаскивание панорама</div>
         <div><kbd>[</kbd> <kbd>]</kbd> размер кисти · колесо — масштаб вокруг курсора</div>
         <div><kbd>Ctrl+0</kbd> вместить · <kbd>Ctrl+1</kbd> 100% · <kbd>Ctrl+Z</kbd> отмена · <kbd>Ctrl+Shift+Z</kbd> повтор</div>
@@ -5657,7 +5795,13 @@
     $("graph-options").addEventListener("change", onFileChange);
     $("inspector").addEventListener("change", onFileChange);
     $("tools").onclick = (e) => { const b = e.target.closest("[data-tool]"); if (b) setTool(b.dataset.tool); };
-    $("swatch").oninput = () => { state.color = $("swatch").value; };
+    $("swatch").oninput = () => { state.color = $("swatch").value; syncSwatches(); };
+    $("swatch-2").oninput = () => { state.color2 = $("swatch-2").value; syncSwatches(); };
+    $("swatch-primary").onclick = () => $("swatch").click();
+    $("swatch-bg").onclick = () => $("swatch-2").click();
+    $("swatch-swap").onclick = () => swapColors();
+    $("swatch-reset").onclick = () => resetColors();
+    $("tools-more").onclick = () => setMoreOpen(!state.moreTools);
     $("prompt").oninput = () => { state.prompt = $("prompt").value; state.dirty = true; updateFinal(); updateGenerateButton(); fitPromptField(); if (isKreaEdit()) renderKreaChrome(); };
     $("prompt-fold").onclick = () => setPromptMode($("prompt-node").dataset.prompt === "full" ? "compact" : "full", true);
     $("negative").oninput = () => { state.negative = $("negative").value; };
@@ -5681,7 +5825,6 @@
     $("btn-undo").onclick = () => editor.undo();
     $("btn-redo").onclick = () => editor.redo();
     $("btn-system").onclick = () => openSystem();
-    $("btn-canvas-size").onclick = () => openCanvasSize();
     $("btn-canvas-fit").onclick = () => fitCanvasToContent("all");
     $("btn-open-image").onclick = () => $("file-layer").click();
     $("btn-help").onclick = () => toggleHelp();
@@ -6129,11 +6272,12 @@
     });
     window.addEventListener("keydown", (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); generate(); }
-      if (e.key === "Escape") {
+        if (e.key === "Escape") {
         if (menuName) { closeMenus(); return; }
         if (!$("pp-pop").hidden) { closePromptPop(); return; }
         if (document.querySelector(".modal-back")) return;
         if (typingTarget(e.target)) return;
+        if (editor && editor.selection) { clearSelection(); return; }
         collapseZeroImageStudio();
       }
     });
@@ -6538,6 +6682,7 @@
   async function boot() {
     loadModelSlots();
     try { state.placeMode = localStorage.getItem("zeroimagestudio.placeMode") || ""; } catch { /* private mode */ }
+    try { setMoreOpen(localStorage.getItem("zeroimagestudio.moreTools") === "1"); } catch { /* private mode */ }
     applyLayout(readLayout());
     bindPanelChrome();
     editor = new Editor($("stage"));

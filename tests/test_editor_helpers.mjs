@@ -28,6 +28,8 @@ test("removal matches verbs and skips substrings", () => {
 
 test("a selected mask is what the brush and the eraser paint", () => {
   assert.equal(U.brushTargetsMask("mask", false), true);
+  assert.equal(U.brushTargetsMask("maskerase", false), true);
+  assert.equal(U.workMaskRowVisible(false, "maskerase", null), true);
   assert.equal(U.brushTargetsMask("brush", true), true);
   assert.equal(U.brushTargetsMask("brush", false), false);
   assert.equal(U.brushTargetsMask("eraser", true), true);

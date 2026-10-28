@@ -109,12 +109,12 @@
   }
 
   function brushTargetsMask(tool, maskSelected) {
-    if (tool === "mask") return true;
+    if (tool === "mask" || tool === "maskerase") return true;
     return (tool === "brush" || tool === "eraser") && !!maskSelected;
   }
 
   function workMaskRowVisible(hasMask, tool, focus) {
-    return !!hasMask || tool === "mask" || focus === "work";
+    return !!hasMask || tool === "mask" || tool === "maskerase" || focus === "work";
   }
 
   // A saved task-LoRA choice wins. The suggested file is only the first visit.

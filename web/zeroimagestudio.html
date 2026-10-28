@@ -6,7 +6,7 @@
   <title>ZeroImageStudio</title>
   <link rel="stylesheet" href="zeroimagestudio.css">
   <script>window.__ZEROIMAGESTUDIO_PAGE = true;</script>
-  <script src="icons.js"></script>
+  <script src="icons.js?v=tools"></script>
 </head>
 <body data-tab="canvas">
 <header class="chrome" id="chrome">
@@ -92,23 +92,34 @@
 
 <div class="cols">
   <div class="toolcol" id="tools">
-    <button class="tool" data-tool="move" data-i="move" data-s="17" title="Перемещение (V)"><small>V</small></button>
-    <button class="tool" data-tool="select" data-i="select" data-s="17" title="Выделение (M)"><small>M</small></button>
-    <button class="tool" data-tool="lasso" data-i="lasso" data-s="17" title="Лассо (L)"><small>L</small></button>
-    <button class="tool" data-tool="transform" data-i="transform" data-s="17" title="Свободное трансформирование (T)"><small>T</small></button>
-    <button class="tool" data-tool="crop" data-i="crop" data-s="17" title="Кадрирование (C)"><small>C</small></button>
+    <button class="tool" data-tool="move" data-i="move" data-s="17" title="Перемещение (V)"></button>
+    <button class="tool on" data-tool="genarea" data-for="edit" data-i="genarea" data-s="17" title="Рамка генерации (G): что увидит модель"></button>
+    <hr data-for="edit">
+    <button class="tool" data-tool="mask" data-for="edit" data-i="mask" data-s="17" title="Маска (Q): закрасьте, что менять"></button>
+    <button class="tool" data-tool="maskerase" data-for="edit" data-i="maskerase" data-s="17" title="Ластик маски: сотрите лишнее с маски"></button>
     <hr>
-    <button class="tool" data-tool="brush" data-i="brush" data-s="17" title="Кисть (B)"><small>B</small></button>
-    <button class="tool" data-tool="eraser" data-i="eraser" data-s="17" title="Ластик (E)"><small>E</small></button>
-    <button class="tool" data-tool="eyedrop" data-i="eyedrop" data-s="17" title="Пипетка (I)"><small>I</small></button>
-    <hr>
-    <button class="tool" data-tool="mask" data-i="mask" data-s="17" title="Маска области (Q)"><small>Q</small></button>
-    <button class="tool on" data-tool="genarea" data-i="genarea" data-s="17" title="Область генерации (G)"><small>G</small></button>
+    <button class="tool" data-tool="select" data-i="select" data-s="17" title="Выделение рамкой (M). Это пиксели, не область модели. «В маску» переносит его в маску."></button>
+    <button class="tool" data-tool="lasso" data-i="lasso" data-s="17" title="Лассо (L). «В маску» переносит контур в маску."></button>
+    <button class="tool" data-tool="crop" data-i="crop" data-s="17" title="Кадрирование (C)"></button>
     <hr>
     <button class="tool" data-tool="hand" data-i="hand" data-s="17" title="Рука (H, пробел)"></button>
     <button class="tool" data-tool="zoom" data-i="zoom" data-s="17" title="Масштаб (Z)"></button>
     <hr>
-    <input id="swatch" type="color" value="#e7c27a" title="Цвет кисти" style="width:28px;height:22px;border:0;background:transparent;padding:0">
+    <button type="button" class="tool more-toggle" id="tools-more" data-i="chev" data-s="14" title="Ещё: кисть, ластик, пипетка, трансформ" aria-expanded="false"></button>
+    <div id="tools-extra" hidden>
+      <button class="tool" data-tool="brush" data-i="brush" data-s="17" title="Кисть (B)"></button>
+      <button class="tool" data-tool="eraser" data-i="eraser" data-s="17" title="Ластик пикселей (E)"></button>
+      <button class="tool" data-tool="eyedrop" data-i="eyedrop" data-s="17" title="Пипетка (I): берёт основной цвет"></button>
+      <button class="tool" data-tool="transform" data-i="transform" data-s="17" title="Трансформ (T)"></button>
+    </div>
+    <div class="swatches" id="swatches" hidden>
+      <button type="button" class="chip primary" id="swatch-primary" title="Основной цвет"></button>
+      <button type="button" class="chip secondary" id="swatch-bg" title="Фоновый цвет"></button>
+      <input id="swatch" type="color" value="#e7c27a" aria-label="Основной цвет" tabindex="-1">
+      <input id="swatch-2" type="color" value="#1b1e24" aria-label="Фоновый цвет" tabindex="-1">
+      <button type="button" class="tool swap" id="swatch-swap" title="Поменять основной и фоновый (X)">⇄</button>
+      <button type="button" class="tool reset" id="swatch-reset" title="Сбросить цвета (D)">↺</button>
+    </div>
     <button class="tool help" id="btn-help" type="button" title="Клавиши (?)">?</button>
   </div>
 
@@ -183,7 +194,6 @@
         </span>
         <span class="r">
           <button class="b s" id="btn-open-image" data-i="open" data-s="12" title="Открыть изображение"><span class="btn-label">Открыть изображение</span></button>
-          <button class="b s" id="btn-canvas-size" data-i="crop" data-s="12" title="Размер холста"><span class="btn-label">Размер холста</span></button>
           <button class="b s" id="btn-canvas-fit" data-i="expand" data-s="12" title="Подогнать холст под изображение"></button>
         </span>
       </div>
@@ -328,10 +338,10 @@ try {
   }
 } catch (e) {}
 </script>
-<script src="zeroimagestudio_size.js?v=round6c"></script>
-<script src="zeroimagestudio_util.js?v=round6c"></script>
-<script src="zeroimagestudio_models.js?v=round6c"></script>
-<script src="zeroimagestudio_ux.js?v=round6c"></script>
-<script src="zeroimagestudio_app.js?v=round6c"></script>
+<script src="zeroimagestudio_size.js?v=tools"></script>
+<script src="zeroimagestudio_util.js?v=tools"></script>
+<script src="zeroimagestudio_models.js?v=tools"></script>
+<script src="zeroimagestudio_ux.js?v=tools"></script>
+<script src="zeroimagestudio_app.js?v=tools"></script>
 </body>
 </html>
