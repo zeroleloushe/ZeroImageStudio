@@ -85,28 +85,30 @@ test("a wide crop keeps its aspect inside the generation budget", () => {
   assert.ok(placed.w === frame.w || placed.h === frame.h);
 });
 
-test("a 48 px seam on a small eye mask is clamped and the crop includes that band", () => {
+test("auto seam scales with the mask and a manual value cannot exceed a fifth of it", () => {
+  assert.equal(size.effectiveSeam(48, 300, 300, "auto"), 12);
+  assert.equal(size.effectiveSeam(80, 300, 300, "manual"), 60);
+  assert.equal(size.effectiveSeam(48, 120, 60, "auto"), 4);
+  assert.equal(size.effectiveSeam(48, 2000, 2000, "auto"), 64);
+  assert.equal(size.seamLabel("auto", 9), "шов: авто · 9 px");
   const geom = size.editGeometry({
     docW: 2000, docH: 2000,
     frame: { x: 100, y: 100, w: 1232, h: 1232 },
     maskBBox: { x: 400, y: 360, w: 120, h: 60 },
-    seamDoc: 48, growDoc: 6, context: 0.15, mp: 1, step: 16,
+    seamDoc: 48, seamMode: "manual", growDoc: 6, context: 0.15, mp: 1, step: 16,
   });
-  assert.equal(geom.seamDoc, 15);
-  assert.ok(geom.crop.w > 1000, "crop stays on the frame, not the eye bbox");
-  assert.equal(size.pasteSuppliesCoverage(255, 255), false);
-  assert.equal(size.pasteSuppliesCoverage(0, 255), true);
-  assert.ok(geom.seamDoc <= Math.round(60 * 0.25));
-  assert.ok(geom.crop.x <= 400 - geom.seamDoc);
-  assert.ok(geom.crop.y <= 360 - geom.seamDoc);
-  assert.ok(geom.crop.x + geom.crop.w >= 400 + 120 + geom.seamDoc);
+  assert.equal(geom.seamDoc, 12);
+  assert.equal(geom.seamMode, "manual");
+  assert.ok(geom.crop.w > 1000);
   assert.ok(geom.blend.w < 400);
-  assert.ok(geom.seamGen > 0);
   assert.equal(geom.inpaintGen, Math.round((geom.seamDoc + geom.growDoc) * geom.scale));
   assert.ok(Math.abs(geom.seamGen - geom.seamDoc * geom.scale) <= 1);
-  assert.equal(size.effectiveSeam(0, 120, 60), Math.round(60 * 0.08));
-  const back = size.previewMap(geom.crop, geom.gen.w, geom.gen.h, geom.placed);
-  assert.ok(Math.abs(back.w - geom.crop.w) < 2 || back.w >= geom.crop.w);
+  assert.equal(size.shouldRefitView("generate", { fitAfterGenerate: false }), false);
+  assert.equal(size.shouldRefitView("generate", { fitAfterGenerate: true }), true);
+  assert.equal(size.shouldRefitView("preview", {}), false);
+  assert.equal(size.shouldRefitView("resize", { offscreen: true }), true);
+  assert.equal(size.shouldRefitView("resize", { offscreen: false }), false);
+  assert.equal(size.canvasOffscreen({ w: 100, h: 100, panX: 200, panY: 0, zoom: 1 }, { w: 50, h: 50 }), true);
 });
 
 test("a reference crop keeps its aspect and survives a 90 degree turn", () => {

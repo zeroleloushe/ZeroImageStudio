@@ -54,6 +54,23 @@ class PasteTests(unittest.TestCase):
         matched = color_match(src, dst, mask)
         self.assertGreater(float(matched[..., 0].mean()), 0.5)
 
+    def test_paste_core_stays_opaque_while_a_premultiplied_blur_dims_it(self):
+        # The ghost was a layer mask blurred on a transparent canvas: white mixed
+        # with empty pixels, so the eye's coverage collapsed and destination-in
+        # darkened crisp pixels. Paste alpha is the mask itself, applied once.
+        result = Image.new("RGB", (80, 48), (255, 0, 0))
+        original = Image.new("RGB", (80, 48), (0, 0, 255))
+        mask = Image.new("L", (80, 48), 0)
+        mask.paste(255, (20, 10, 60, 38))
+        out = np.asarray(paste(result, original, mask, mode="feather", feather=8, color=False))
+        self.assertGreater(int(out[24, 40, 3]), 250)
+        self.assertEqual(int(out[0, 0, 3]), 0)
+        peak = np.zeros((21, 21), dtype=np.float32)
+        peak[10, 10] = 1
+        # Three-pixel support mixed with zeros, the way a CSS blur premultiplies.
+        dim = box_blur(peak, 6)
+        self.assertLess(float(dim[10, 10]), 0.2)
+
     def test_poisson_alpha_stays_inside_the_seam(self):
         result = Image.new("RGB", (64, 64), (255, 0, 0))
         original = Image.new("RGB", (64, 64), (0, 0, 255))

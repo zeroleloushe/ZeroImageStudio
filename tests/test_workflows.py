@@ -227,13 +227,38 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(built, "edit:krea2_edit")
         patch = next(n for n in prompt.values() if n["class_type"] == "ZeroImageStudioKrea2EditModelPatch")
         enc = next(n for n in prompt.values() if n["class_type"] == "ZeroImageStudioKrea2EditGroundedEncode")
-        self.assertNotIn("source_image_b", patch["inputs"])
-        self.assertNotIn("image_b", enc["inputs"])
+        self.assertIn("source_image_b", patch["inputs"])
+        self.assertIn("image_b", enc["inputs"])
+        self.assertNotIn("source_image_c", patch["inputs"])
         self.assertEqual(enc["inputs"]["grounding_px"], 768)
         self.assertEqual(patch["inputs"]["ref_position"], "aligned (trained)")
         self.assertTrue(any("2 Мп" in w for w in warnings))
         self.assertTrue(any("Raw" in w for w in warnings))
-        self.assertTrue(any("только холст" in w for w in warnings))
+        self.assertFalse(any("только холст" in w for w in warnings))
+
+    def test_krea_general_keeps_two_references_and_a_role_hint(self):
+        spec = _diff_spec(
+            pipeline="edit",
+            edit_method="krea2_edit",
+            image="zeroimagestudio/crop.png",
+            references=["zeroimagestudio/a.png", "zeroimagestudio/b.png", "zeroimagestudio/c.png"],
+            reference_roles=["face", "texture", "object"],
+            prompt="поменяй глаза",
+            width=512,
+            height=512,
+            loras=[{"name": "krea2_general_edit_v2.safetensors", "enabled": True, "strength_model": 1, "strength_clip": 1}],
+            krea={"task": "general", "impl": "internal", "grounding_px": 768},
+        )
+        prompt, warnings, _built = build_workflow(spec)
+        patch = next(n for n in prompt.values() if n["class_type"] == "ZeroImageStudioKrea2EditModelPatch")
+        enc = next(n for n in prompt.values() if n["class_type"] == "ZeroImageStudioKrea2EditGroundedEncode")
+        self.assertIn("source_image_b", patch["inputs"])
+        self.assertIn("source_image_c", patch["inputs"])
+        self.assertIn("image_c", enc["inputs"])
+        self.assertIn("use the face from image 2", enc["inputs"]["prompt"])
+        self.assertIn("use the texture from image 3", enc["inputs"]["prompt"])
+        self.assertNotIn("image 4", enc["inputs"]["prompt"])
+        self.assertTrue(any("два референса" in w for w in warnings))
 
     def test_krea_chains_task_lora_then_extras(self):
         spec = _diff_spec(

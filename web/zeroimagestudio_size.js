@@ -134,12 +134,42 @@
     return clampRefCrop({ x: imgH - (box.y + box.h), y: box.x, w: box.h, h: box.w }, imgH, imgW);
   }
 
-  function effectiveSeam(requested, maskW, maskH) {
+  function effectiveSeam(requested, maskW, maskH, mode) {
     const side = Math.max(1, Math.min(Number(maskW) || 1, Number(maskH) || 1));
-    const cap = Math.max(0, Math.round(side * 0.25));
-    const req = Number(requested);
-    if (!req) return Math.min(cap, Math.max(0, Math.round(side * 0.08)));
-    return Math.min(Math.max(0, Math.round(req)), cap);
+    const cap = Math.max(0, Math.round(side * 0.2));
+    if (mode !== "manual") {
+      let px = Math.round(side * 0.04);
+      if (px < 4) px = 4;
+      if (px > 64) px = 64;
+      if (px > cap) px = cap;
+      return px;
+    }
+    return Math.min(Math.max(0, Math.round(Number(requested) || 0)), cap);
+  }
+
+  function seamLabel(mode, px) {
+    const n = Math.max(0, Math.round(Number(px) || 0));
+    return mode === "manual" ? ("шов: вручную · " + n + " px") : ("шов: авто · " + n + " px");
+  }
+
+  function canvasOffscreen(view, doc) {
+    const zoom = Number(view && view.zoom) || 1;
+    const x = Number(view && view.panX) || 0;
+    const y = Number(view && view.panY) || 0;
+    const w = Math.max(0, Number(doc && doc.w) || 0) * zoom;
+    const h = Math.max(0, Number(doc && doc.h) || 0) * zoom;
+    const vw = Number(view && view.w) || 0;
+    const vh = Number(view && view.h) || 0;
+    if (vw < 2 || vh < 2) return false;
+    return x + w <= 0 || y + h <= 0 || x >= vw || y >= vh;
+  }
+
+  function shouldRefitView(reason, opts) {
+    const why = String(reason || "");
+    if (why === "load" || why === "new" || why === "open") return true;
+    if (why === "resize") return !!(opts && opts.offscreen);
+    if (why === "generate") return !!(opts && opts.fitAfterGenerate);
+    return false;
   }
 
   function clampRect(rect, docW, docH) {
@@ -159,9 +189,10 @@
     const docH = Math.max(1, Number(opts && opts.docH) || 1);
     const frame = (opts && opts.frame) || { x: 0, y: 0, w: docW, h: docH };
     const mask = opts && opts.maskBBox;
+    const seamMode = opts && opts.seamMode === "manual" ? "manual" : "auto";
     const seam = mask
-      ? effectiveSeam(opts.seamDoc, mask.w, mask.h)
-      : effectiveSeam(opts.seamDoc, frame.w, frame.h);
+      ? effectiveSeam(opts.seamDoc, mask.w, mask.h, seamMode)
+      : effectiveSeam(opts.seamDoc, frame.w, frame.h, seamMode);
     const grow = Math.max(0, Math.round(Number(opts && opts.growDoc) || 0));
     const context = Math.max(0, Number(opts && opts.context) || 0);
     const band = seam + grow;
@@ -184,6 +215,7 @@
     const blend = clampRect({ x: core.x - band, y: core.y - band, w: core.w + band * 2, h: core.h + band * 2 }, docW, docH);
     return {
       seamDoc: seam,
+      seamMode: seamMode,
       seamRequested: Math.max(0, Math.round(Number(opts && opts.seamDoc) || 0)),
       growDoc: grow,
       seamGen: Math.max(0, Math.round(seam * scale)),
@@ -348,6 +380,9 @@
     frameGesture: frameGesture,
     contextRect: contextRect,
     effectiveSeam: effectiveSeam,
+    seamLabel: seamLabel,
+    canvasOffscreen: canvasOffscreen,
+    shouldRefitView: shouldRefitView,
     refEditDefaults: refEditDefaults,
     refAspectRatio: refAspectRatio,
     clampRefCrop: clampRefCrop,

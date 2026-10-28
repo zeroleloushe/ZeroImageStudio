@@ -9,13 +9,19 @@ from __future__ import annotations
 import math
 
 
-def effective_seam(requested: float, mask_w: float, mask_h: float) -> int:
+def effective_seam(requested: float, mask_w: float, mask_h: float, mode: str = "auto") -> int:
     side = max(1, min(int(mask_w or 1), int(mask_h or 1)))
-    cap = max(0, int(round(side * 0.25)))
-    req = float(requested or 0)
-    if req <= 0:
-        return min(cap, max(0, int(round(side * 0.08))))
-    return min(max(0, int(round(req))), cap)
+    cap = max(0, int(round(side * 0.2)))
+    if mode != "manual":
+        px = int(round(side * 0.04))
+        if px < 4:
+            px = 4
+        if px > 64:
+            px = 64
+        if px > cap:
+            px = cap
+        return px
+    return min(max(0, int(round(requested or 0))), cap)
 
 
 def clamp_rect(rect: dict, doc_w: int, doc_h: int) -> dict:
@@ -46,8 +52,10 @@ def edit_geometry(
     context: float,
     mp: float = 1,
     step: int = 16,
+    mode: str = "auto",
 ) -> dict:
-    seam = effective_seam(seam_doc, *( (mask_bbox["w"], mask_bbox["h"]) if mask_bbox else (frame["w"], frame["h"]) ))
+    sides = (mask_bbox["w"], mask_bbox["h"]) if mask_bbox else (frame["w"], frame["h"])
+    seam = effective_seam(seam_doc, sides[0], sides[1], mode)
     grow = max(0, int(round(grow_doc or 0)))
     core = mask_bbox or frame
     band = seam + grow

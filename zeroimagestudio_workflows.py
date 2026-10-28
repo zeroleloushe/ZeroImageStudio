@@ -116,6 +116,29 @@ def assemble_prompt(user: str, presets: list | None, loras: list | None) -> str:
     return ", ".join(p for p in parts if p)
 
 
+_ROLE_WORD = {
+    "style": "style",
+    "face": "face",
+    "texture": "texture",
+    "object": "object",
+    "стиль": "style",
+    "лицо": "face",
+    "текстура": "texture",
+    "объект": "object",
+}
+
+
+def reference_hints(roles, start: int = 2) -> str:
+    """English hints the edit model actually reads. Image 1 is the crop."""
+    parts = []
+    for i, role in enumerate(roles or []):
+        word = _ROLE_WORD.get(str(role or "").strip().lower())
+        if not word:
+            continue
+        parts.append(f"use the {word} from image {start + i}")
+    return ". ".join(parts)
+
+
 class _Graph:
     def __init__(self) -> None:
         self.nodes: dict[str, dict] = {}
@@ -404,6 +427,10 @@ def _build_qwen(g, spec, warnings, model, clip, vae, prompt, negative, include_i
         inputs[f"images.image_{index}"] = g.ref(img, 0)
         index += 1
     ref_list = spec.get("references") or [] if include_references else []
+    role_hint = reference_hints(spec.get("reference_roles") or []) if include_references else ""
+    if role_hint:
+        prompt = (str(prompt or "").rstrip() + "\n" + role_hint).strip()
+        inputs["prompt"] = prompt
     for i, ref in enumerate(ref_list):
         if not ref or index > 16:
             break
@@ -471,14 +498,19 @@ def build_krea_edit(spec: dict, warnings: list[str]) -> dict:
         )
     src = _load_image(g, spec["image"], "Source")
     refs = [r for r in (spec.get("references") or []) if r]
-    if task == "general":
-        if refs:
-            warnings.append("Режим «Правка» отправляет только холст. Дополнительный референс не использован.")
-        refs = []
-    elif len(refs) > 1:
-        warnings.append("Krea 2 Edit в этой версии принимает исходник и один дополнительный референс (image_b). Лишние референсы не отправлены.")
-        refs = refs[:1]
-    ref_node = _load_image(g, refs[0], "Reference") if refs else None
+    limit = 1 if task == "identity" else 2
+    if len(refs) > limit:
+        warnings.append(
+            "Персонаж по референсу берёт один референс. Лишние не отправлены."
+            if limit == 1
+            else "Правка Krea берёт холст и два референса. Лишние не отправлены."
+        )
+    refs = refs[:limit]
+    ref_b = _load_image(g, refs[0], "Reference") if len(refs) > 0 else None
+    ref_c = _load_image(g, refs[1], "Reference 2") if len(refs) > 1 else None
+    role_hint = reference_hints((spec.get("reference_roles") or [])[: len(refs)])
+    if role_hint:
+        prompt = (str(prompt or "").rstrip() + "\n" + role_hint).strip()
 
     latent = g.add(
         "EmptySD3LatentImage",
@@ -497,8 +529,10 @@ def build_krea_edit(spec: dict, warnings: list[str]) -> dict:
             "image": g.ref(src, 0),
             "grounding_px": grounding,
         }
-        if ref_node:
-            inputs["image_b"] = g.ref(ref_node, 0)
+        if ref_b:
+            inputs["image_b"] = g.ref(ref_b, 0)
+        if ref_c:
+            inputs["image_c"] = g.ref(ref_c, 0)
         return g.add(enc_cls, inputs, title)
 
     pos = _enc(prompt, "Grounded positive")
@@ -523,8 +557,10 @@ def build_krea_edit(spec: dict, warnings: list[str]) -> dict:
         "ref_position": krea.get("ref_position") or "aligned (trained)",
         "ref_position_a": krea.get("ref_position_a") or "aligned (trained)",
     }
-    if ref_node:
-        patch_inputs["source_image_b"] = g.ref(ref_node, 0)
+    if ref_b:
+        patch_inputs["source_image_b"] = g.ref(ref_b, 0)
+    if ref_c:
+        patch_inputs["source_image_c"] = g.ref(ref_c, 0)
     patched = g.add(patch_cls, patch_inputs, "Krea2EditModelPatch")
 
     denoise = _as_float(spec.get("denoise"), 1.0)

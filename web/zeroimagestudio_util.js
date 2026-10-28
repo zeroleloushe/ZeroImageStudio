@@ -285,6 +285,22 @@
     return i;
   }
 
+  function shortcutToken(event) {
+    if (!event) return "";
+    const code = String(event.code || "");
+    if (code.length === 4 && code.slice(0, 3) === "Key") {
+      const letter = code.charAt(3);
+      if (letter >= "A" && letter <= "Z") return letter.toLowerCase();
+    }
+    if (/^Digit[0-9]$/.test(code)) return code.charAt(5);
+    if (code === "BracketLeft") return "[";
+    if (code === "BracketRight") return "]";
+    const key = String(event.key || "");
+    if (!key) return "";
+    if (key.length === 1 && /[a-zA-Zа-яА-ЯёЁ]/.test(key)) return "";
+    return key;
+  }
+
   function layerArrangeCommand(event) {
     if (!event || event.altKey || !(event.ctrlKey || event.metaKey)) return "";
     if (event.code === "BracketRight") return event.shiftKey ? "top" : "up";
@@ -332,6 +348,7 @@
     maskShortcutClears,
     layerMoveIndex,
     layerArrangeCommand,
+    shortcutToken,
     historyBytes,
     recordBytes,
   };

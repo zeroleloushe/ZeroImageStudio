@@ -16,7 +16,10 @@
       return { label: "Не используется", used: false, reason: "Персонаж по референсу берёт только первый референс." };
     }
     if (method === "krea2_edit") {
-      return { label: "Не используется", used: false, reason: "Правка Krea не отправляет дополнительные референсы." };
+      const roles = { style: "Стиль", face: "Лицо", texture: "Текстура", object: "Объект" };
+      const role = (ctx.roles && ctx.roles[index]) || "object";
+      if (index < 2) return { label: roles[role] || "Объект", used: true, reason: "Кадр — image 1. Этот референс — image " + (index + 2) + "." };
+      return { label: "Не используется", used: false, reason: "Правка Krea берёт холст и два референса." };
     }
     if (method === "qwen_image_21" || method === "qwen" || method === "qwen_image") {
       return { label: "Сцена", used: true, reason: "Кадр уходит в модель. В промте его можно назвать <image" + (index + 1) + ">." };
@@ -33,7 +36,13 @@
       return { line: "Сцена — холст, человек — первый референс · " + n, detail: "Лишние референсы не отправляются." };
     }
     if (ctx.method === "krea2_edit") {
-      return { line: "Референсы не идут в модель · " + n, detail: "Правка Krea берёт только холст." };
+      const line = "Референсы · " + n + "/2";
+      const limited = n >= 2;
+      return {
+        line: line,
+        hint: limited ? "Лимит 2. Следующие кадры не уйдут в модель." : "refs ≤2",
+        detail: limited ? "Лимит 2. Следующие кадры не уйдут в модель." : "Холст — основной кадр. До двух референсов: image 2 и image 3.",
+      };
     }
     if (ctx.method === "qwen_image_21" || ctx.method === "qwen" || ctx.method === "qwen_image") {
       return { line: "Идут в модель · " + n, detail: "До 16 кадров, в промте <image1> и дальше." };
@@ -116,6 +125,7 @@
     edit: "Режим правки изображения",
     "2 режима": "Два подрежима: правка и персонаж по референсу",
     "refs ≤1": "В модель уходит не больше одного референса",
+    "refs ≤2": "Правка Krea: холст и до двух референсов",
     "refs ≤16": "В модель можно отдать до 16 референсов",
     t2i: "Генерация по тексту, без исходного кадра",
     fp8: "Веса в формате fp8",

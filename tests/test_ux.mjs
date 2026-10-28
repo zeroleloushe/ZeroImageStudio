@@ -7,7 +7,12 @@ const UX = require("../web/zeroimagestudio_ux.js");
 
 test("create references stay LLM-only and Krea character uses the first card", () => {
   assert.equal(UX.refBadge({ pipeline: "create" }, 0).label, "Только для LLM");
-  assert.equal(UX.refBadge({ pipeline: "edit", method: "krea2_edit", task: "general" }, 0).used, false);
+  assert.equal(UX.refBadge({ pipeline: "edit", method: "krea2_edit", task: "general", roles: ["face"] }, 0).used, true);
+  assert.equal(UX.refBadge({ pipeline: "edit", method: "krea2_edit", task: "general", roles: ["face"] }, 0).label, "Лицо");
+  assert.equal(UX.refBadge({ pipeline: "edit", method: "krea2_edit", task: "general" }, 2).used, false);
+  assert.equal(UX.refStatus({ pipeline: "edit", method: "krea2_edit", task: "general", count: 0 }).hint, "refs ≤2");
+  assert.equal(UX.refStatus({ pipeline: "edit", method: "krea2_edit", task: "general", count: 2 }).line, "Референсы · 2/2");
+  assert.match(UX.refStatus({ pipeline: "edit", method: "krea2_edit", task: "general", count: 2 }).detail, /Лимит 2/);
   const person = UX.refBadge({ pipeline: "edit", method: "krea2_edit", task: "identity" }, 0);
   const extra = UX.refBadge({ pipeline: "edit", method: "krea2_edit", task: "identity" }, 1);
   assert.equal(person.label, "Человек");

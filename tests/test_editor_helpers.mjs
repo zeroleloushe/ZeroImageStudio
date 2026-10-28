@@ -42,6 +42,15 @@ test("a lora listing puts folders first and strips the weight extension", () => 
   assert.equal(html.includes("Выберите файл"), false);
 });
 
+test("a Russian layout key still names the physical letter", () => {
+  assert.equal(U.shortcutToken({ key: "я", code: "KeyZ" }), "z");
+  assert.equal(U.shortcutToken({ key: "ы", code: "KeyS" }), "s");
+  assert.equal(U.shortcutToken({ key: "х", code: "BracketLeft" }), "[");
+  assert.equal(U.shortcutToken({ key: "1", code: "Digit1" }), "1");
+  assert.equal(U.shortcutToken({ key: "Escape", code: "Escape" }), "Escape");
+  assert.equal(U.shortcutToken({ key: "я" }), "");
+});
+
 test("layer order uses the stack index and the physical bracket keys", () => {
   assert.equal(U.layerMoveIndex(1, 4, "up"), 2);
   assert.equal(U.layerMoveIndex(1, 4, "down"), 0);

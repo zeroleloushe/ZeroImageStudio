@@ -32,7 +32,7 @@
     "pipeline": "edit",
     "pipelines": ["edit"],
     "edit_method": "krea2_edit",
-    "tags": { "edit": ["edit", "2 режима", "refs ≤1"] },
+    "tags": { "edit": ["edit", "2 режима", "refs ≤2"] },
     "note": "Krea 2 и встроенные ноды ZeroImageStudioKrea2Edit*. Строка LoRA режима заранее заполнена (Правка — krea2_general_edit_v2, Персонаж — krea2_identity_edit_v2), её файл и силу можно сменить. Дальше в стек добавляются любые LoRA.",
     "defaults": {
       "loader": "diffusion",

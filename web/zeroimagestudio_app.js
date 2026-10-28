@@ -31,7 +31,8 @@
     create: blankPipe("create"),
     edit: blankPipe("edit"),
     references: [],
-    area: { outW: 1024, outH: 1024, aspect: "free", context: 0.15, feather: 48, paste: "poisson", colorMatch: true, userPlaced: false, outputLinked: true, mp: 1, mpFilter: 1, pasteOpen: false, editScope: "full", region: null, exactOpen: false, createAspect: "1:1", resPanel: "" },
+    area: { outW: 1024, outH: 1024, aspect: "free", context: 0.15, feather: 8, featherMode: "auto", paste: "poisson", colorMatch: true, userPlaced: false, outputLinked: true, mp: 1, mpFilter: 1, pasteOpen: false, editScope: "full", region: null, exactOpen: false, createAspect: "1:1", resPanel: "" },
+    fitAfterGenerate: false,
     tool: "genarea",
     color: "#e7c27a",
     color2: "#1b1e24",
@@ -261,14 +262,21 @@
       this.resizeMask();
       this.bind();
       this.resizeView();
+      this._viewReady = false;
       new ResizeObserver(() => {
         const r = this.stage.getBoundingClientRect();
-        const changed = Math.abs(r.width - this._viewW) > 1 || Math.abs(r.height - this._viewH) > 1;
         this.resizeView();
-        if (changed && r.width > 20 && r.height > 20) {
+        const sized = r.width > 20 && r.height > 20;
+        if (!this._viewReady && sized) {
+          this._viewReady = true;
           this._viewW = r.width;
           this._viewH = r.height;
           this.fit();
+          return;
+        }
+        if (sized) {
+          this._viewW = r.width;
+          this._viewH = r.height;
         }
       }).observe(stage);
     }
@@ -307,6 +315,14 @@
       this.panX = (r.width - this.doc.w * this.zoom) / 2;
       this.panY = (r.height - this.doc.h * this.zoom) / 2;
       this.requestDraw();
+    }
+
+    fitIfOffscreen() {
+      const r = this.stage.getBoundingClientRect();
+      const off = window.ZeroImageStudioSize.canvasOffscreen({
+        w: r.width, h: r.height, panX: this.panX, panY: this.panY, zoom: this.zoom,
+      }, this.doc);
+      if (window.ZeroImageStudioSize.shouldRefitView("resize", { offscreen: off })) this.fit();
     }
 
     zoom100() {
@@ -1054,41 +1070,30 @@
       }, { passive: false });
       window.addEventListener("keydown", (e) => {
         if (document.querySelector(".modal-back")) return;
-        if (e.code === "Space") { this.space = true; if (!/^(input|textarea|select)$/i.test((e.target.tagName || ""))) e.preventDefault(); }
+        if (typingTarget(e.target)) return;
+        if (e.code === "Space") { this.space = true; e.preventDefault(); return; }
+        const token = U.shortcutToken(e);
         if ((e.ctrlKey || e.metaKey) && !e.altKey) {
           const arrange = U.layerArrangeCommand(e);
-          if (arrange) {
-            if (typingTarget(e.target)) return;
-            e.preventDefault();
-            moveActiveLayer(arrange);
-            return;
-          }
-          const key = e.key.toLowerCase();
-          if (key === "z") { e.preventDefault(); e.shiftKey ? this.redo() : this.undo(); return; }
-          if (key === "y") { e.preventDefault(); this.redo(); return; }
-          if (e.key === "0") { e.preventDefault(); this.fit(); return; }
-          if (e.key === "1") { e.preventDefault(); this.zoom100(); return; }
-          if (key === "s") { e.preventDefault(); saveProject().then(() => toast("Проект сохранён.")).catch((err) => toast(err.message || String(err))); return; }
-          if (key === "n") { e.preventDefault(); newProject(); return; }
-          if (U.maskShortcutClears(e.key, true, state.maskFocus) === "clear") {
-            const typing = /^(input|textarea|select)$/i.test(e.target.tagName || "");
-            if (typing) return;
-            e.preventDefault();
-            this.clearWorkMask();
-            return;
-          }
+          if (arrange) { e.preventDefault(); moveActiveLayer(arrange); return; }
+          if (token === "z") { e.preventDefault(); e.shiftKey ? this.redo() : this.undo(); return; }
+          if (token === "y") { e.preventDefault(); this.redo(); return; }
+          if (token === "0") { e.preventDefault(); this.fit(); return; }
+          if (token === "1") { e.preventDefault(); this.zoom100(); return; }
+          if (token === "s") { e.preventDefault(); saveProject().then(() => toast("Проект сохранён.")).catch((err) => toast(err.message || String(err))); return; }
+          if (token === "n") { e.preventDefault(); newProject(); return; }
+          if (token === "d") { e.preventDefault(); this.clearWorkMask(); return; }
+          if (e.shiftKey && e.code === "KeyM") { e.preventDefault(); selectionToMask(); return; }
+          return;
         }
-        const tag = (e.target.tagName || "").toLowerCase();
-        if (tag === "input" || tag === "textarea" || tag === "select") return;
         const map = { KeyV: "move", KeyM: "select", KeyL: "lasso", KeyT: "transform", KeyC: "crop", KeyB: "brush", KeyE: "eraser", KeyI: "eyedrop", KeyQ: "mask", KeyG: "genarea", KeyH: "hand", KeyZ: "zoom" };
-        if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.code === "KeyM") { e.preventDefault(); selectionToMask(); return; }
         if (e.shiftKey && e.code === "KeyQ") { setTool("maskerase"); return; }
-        if ((e.key === "x" || e.key === "X" || e.key === "ч" || e.key === "Ч") && pixelToolActive()) { swapColors(); return; }
-        if ((e.key === "d" || e.key === "D" || e.key === "в" || e.key === "В") && pixelToolActive()) { resetColors(); return; }
+        if (token === "x" && pixelToolActive()) { swapColors(); return; }
+        if (token === "d" && pixelToolActive()) { resetColors(); return; }
         if (e.key === "?" || (e.shiftKey && e.code === "Slash")) { e.preventDefault(); toggleHelp(true); return; }
-        if (e.ctrlKey || e.metaKey || e.altKey) return;
-        if (e.key === "Delete" || e.key === "Backspace") {
-          if (U.maskShortcutClears(e.key, false, state.maskFocus) === "clear") { e.preventDefault(); this.clearWorkMask(); return; }
+        if (e.altKey) return;
+        if (e.key === "Delete" || e.key === "Backspace" || e.code === "Delete" || e.code === "Backspace") {
+          if (U.maskShortcutClears(e.key, false, state.maskFocus) === "clear" || (state.maskFocus === "work" && (e.code === "Delete" || e.code === "Backspace"))) { e.preventDefault(); this.clearWorkMask(); return; }
           if (state.maskFocus && state.maskFocus.id) {
             const masked = this.layers.find((l) => l.id === state.maskFocus.id && l.mask);
             if (masked) { e.preventDefault(); this.deleteLayerMask(masked); return; }
@@ -1096,9 +1101,9 @@
           this.deleteActive();
           return;
         }
-        if (e.key === "[") { state.brush.size = Math.max(1, state.brush.size - 4); const b = $("brush-size"); if (b) b.value = state.brush.size; renderToolOptions(); this.syncBrushCursor(); }
-        if (e.key === "]") { state.brush.size = Math.min(300, state.brush.size + 4); const b = $("brush-size"); if (b) b.value = state.brush.size; renderToolOptions(); this.syncBrushCursor(); }
-        if (map[e.code]) { setTool(map[e.code]); }
+        if (token === "[") { state.brush.size = Math.max(1, state.brush.size - 4); const b = $("brush-size"); if (b) b.value = state.brush.size; renderToolOptions(); this.syncBrushCursor(); return; }
+        if (token === "]") { state.brush.size = Math.min(300, state.brush.size + 4); const b = $("brush-size"); if (b) b.value = state.brush.size; renderToolOptions(); this.syncBrushCursor(); return; }
+        if (map[e.code]) setTool(map[e.code]);
       });
       window.addEventListener("keyup", (e) => { if (e.code === "Space") this.space = false; });
       window.addEventListener("blur", () => { this.space = false; });
@@ -1471,7 +1476,7 @@
       this.gen = { x: Math.round(w * 0.18), y: Math.round(h * 0.08), w: Math.round(w * 0.64), h: Math.round(h * 0.5) };
       this.selection = null;
       this.pushUndo(snap);
-      this.fit();
+      this.fitIfOffscreen();
       renderLayers();
       toast("Холст обрезан.");
     }
@@ -1803,7 +1808,7 @@
 
   function renderRefs() {
     const host = $("ref-list");
-    const ctx = { pipeline: state.pipeline, method: cfg().method, task: kreaTaskId() };
+    const ctx = { pipeline: state.pipeline, method: cfg().method, task: kreaTaskId(), roles: state.references.map((item) => item.role || "object") };
     const cards = state.references.map((r, index) => {
       const badge = UX ? UX.refBadge(ctx, index) : { label: "", used: true, reason: "" };
       const roleLabel = { style: "Стиль", face: "Лицо", texture: "Текстура", object: "Объект" }[r.role] || badge.label;
@@ -1822,7 +1827,7 @@
     }
     const status = UX ? UX.refStatus({ ...ctx, count: state.references.length }) : { line: "", detail: "" };
     if ($("ref-cap")) $("ref-cap").textContent = status.line;
-    if ($("ref-hint")) { $("ref-hint").textContent = status.line; $("ref-hint").title = status.detail; }
+    if ($("ref-hint")) { $("ref-hint").textContent = status.hint || status.line; $("ref-hint").title = status.detail; }
     if (window.zeroImageStudioHydrateIcons) window.zeroImageStudioHydrateIcons(host);
     sealCollapsed($("refs-node"));
   }
@@ -2340,7 +2345,7 @@
     state.area.outputLinked = true;
     state.area.editScope = "full";
     syncDefaultArea();
-    editor.fit();
+    editor.fitIfOffscreen();
     state.dirty = true;
     paintSaveState();
     editor.requestDraw();
@@ -2505,20 +2510,46 @@
               <option value="feather" ${a.paste === "feather" ? "selected" : ""}>Растушёвка</option>
               <option value="hard" ${a.paste === "hard" ? "selected" : ""}>Жёстко</option>
             </select>
-            <span class="lbl">Шов</span>
-            <div class="insp-inline"><input id="gfeather" class="f" value="${a.feather}" inputmode="numeric" aria-label="Шов, px холста"><span class="mu">px холста</span></div>
-            <p class="mu" id="gfeather-note" style="grid-column:1 / -1;margin:0">${geom ? ("Эффективно " + geom.seamDoc + " px холста · " + geom.seamGen + " px в маске") : ""}</p>
             <span class="lbl">Контекст</span>
             <div class="insp-inline"><input id="gcontext" class="f" value="${Math.round(a.context * 100)}" inputmode="numeric" aria-label="Контекст, проценты" style="width:72px;flex:0 0 72px"><span class="mu">%</span></div>
             <span class="lbl">Цвет</span>
             <label class="insp-span insp-check"><input id="gcolor" type="checkbox" ${a.colorMatch ? "checked" : ""}> подгон</label>
           </div>
         </details>` : `<div class="mu">${state.pipeline === "create" ? "Размер холста и генерации совпадают." : "Генерация на весь холст, без рамки."}</div>`;
+    const seamMode = a.featherMode === "manual" ? "manual" : "auto";
+    const seamText = geom ? window.ZeroImageStudioSize.seamLabel(seamMode, geom.seamDoc) : "";
+    const seamBlock = `<div class="seam-row">
+        <div class="mp-row" role="group" aria-label="Шов">
+          <button type="button" class="b s ${seamMode === "auto" ? "on" : ""}" data-seam="auto">Авто</button>
+          <button type="button" class="b s ${seamMode === "manual" ? "on" : ""}" data-seam="manual">px</button>
+          ${seamMode === "manual" ? `<input id="gfeather" class="f" value="${a.feather}" inputmode="numeric" aria-label="Шов вручную, px холста" style="width:64px">` : ""}
+        </div>
+        <div class="mu" id="gfeather-note">${seamText}</div>
+      </div>`;
     $("inspector").innerHTML = `<div class="insp">${scope}
         <div class="insp-result">${frame.w}×${frame.h} · ${exact} МП</div>
+        ${seamBlock}
         ${regionBody}
         ${kreaVisionHtml()}
       </div>`;
+    $("inspector").querySelectorAll("[data-seam]").forEach((btn) => {
+      btn.onclick = () => {
+        const next = btn.dataset.seam === "manual" ? "manual" : "auto";
+        if (next === "manual" && state.area.featherMode !== "manual") {
+          const current = currentEditGeom();
+          state.area.feather = current ? current.seamDoc : 8;
+        }
+        state.area.featherMode = next;
+        renderInspector();
+        if (editor) editor.requestDraw();
+      };
+    });
+    const feather = $("gfeather");
+    if (feather) feather.onchange = () => {
+      state.area.feather = Math.max(0, parseInt(feather.value, 10) || 0);
+      renderInspector();
+      if (editor) editor.requestDraw();
+    };
     $("inspector").querySelectorAll("[data-edit-scope]").forEach((btn) => {
       btn.onclick = () => applyEditScope(btn.dataset.editScope);
     });
@@ -2550,14 +2581,7 @@
     if (paste) {
       paste.addEventListener("toggle", () => { state.area.pasteOpen = paste.open; });
       $("gpaste").onchange = () => { state.area.paste = $("gpaste").value; };
-      $("gfeather").onchange = () => {
-        state.area.feather = Math.max(0, parseInt($("gfeather").value, 10) || 0);
-        const note = $("gfeather-note");
-        const next = currentEditGeom();
-        if (note && next) note.textContent = "Эффективно " + next.seamDoc + " px холста · " + next.seamGen + " px в маске";
-        if (editor) editor.requestDraw();
-      };
-      $("gcontext").onchange = () => { state.area.context = Math.max(0, (parseFloat($("gcontext").value) || 0) / 100); };
+      $("gcontext").onchange = () => { state.area.context = Math.max(0, (parseFloat($("gcontext").value) || 0) / 100); if (editor) editor.requestDraw(); };
       $("gcolor").onchange = () => { state.area.colorMatch = $("gcolor").checked; };
     }
   }
@@ -3613,6 +3637,7 @@
       frame: frame,
       maskBBox: maskBBox,
       seamDoc: state.area.feather,
+      seamMode: state.area.featherMode === "manual" ? "manual" : "auto",
       growDoc: U.finiteNumber(cfg().inpaint_grow, 6),
       context: state.area.context || 0,
       mp: state.area.mp,
@@ -3909,6 +3934,7 @@
 
   async function generate() {
     if (state.running) { await stopOurPrompt(); return; }
+    let landed = false;
     const blocked = generateBlockReason();
     if (blocked) {
       const needsModel = emptyWeightReasons().length || missingKreaLora();
@@ -3975,10 +4001,18 @@
             spec.image = await uploadCanvas(regionFit.canvas, jobName("crop"));
           }
         }
+        const qwenEdit = state.pipeline === "edit" && /qwen/.test(String(cfg().method || ""));
+        const refLimit = kreaOn ? (task === "identity" ? 1 : 2) : (qwenEdit ? 15 : 0);
         const refs = [];
-        if (state.pipeline === "edit" && !(kreaOn && task === "general")) {
-          const list = kreaOn && task === "identity" ? state.references.slice(0, 1) : state.references;
+        if (refLimit && state.references.length) {
+          const list = state.references.slice(0, refLimit);
           for (let i = 0; i < list.length; i++) refs.push(await uploadCanvas(list[i].canvas, jobName("ref", i)));
+          spec.reference_roles = list.map((item) => item.role || "object");
+          if (state.references.length > refLimit) {
+            toast(refLimit === 2 ? "Правка Krea берёт два референса. Лишние не отправлены." : (refLimit === 1 ? "Персонаж по референсу берёт один кадр. Лишние не отправлены." : "В модель уйдут первые " + refLimit + " референсов."));
+          }
+        } else if (state.pipeline === "edit" && state.references.length) {
+          toast("Эта модель не берёт референсы. Для лица и текстуры выберите Qwen Image Edit.");
         }
         spec.references = refs;
         if (kreaOn && task === "general") {
@@ -4018,12 +4052,14 @@
         editor.pushUndo(snap);
         renderLayers();
         toast("Все варианты легли отдельными слоями.");
+        landed = true;
         return;
       }
       const snap = editor.fullSnapshot();
       const done = await commitVariant(urls[pick], spec, built, crop, regionFit, {});
       editor.pushUndo(snap);
       renderLayers();
+      landed = true;
       toast(done.replace ? "Готово, холст заменён. Сид " + spec.seed + ". Прошлый кадр в отмене и в галерее." : "Готово, новый слой. Сид " + spec.seed + ".");
     } catch (err) {
       const msg = err.message || String(err);
@@ -4038,7 +4074,8 @@
       $("gen-label").textContent = "Сгенерировать";
       $("gen-progress").style.display = "none";
       updateGenerateButton();
-      editor.requestDraw();
+      if (landed && state.fitAfterGenerate && window.ZeroImageStudioSize.shouldRefitView("generate", { fitAfterGenerate: true })) editor.fit();
+      else editor.requestDraw();
       renderGallery();
     }
   }
@@ -4199,12 +4236,12 @@
         resolve(value);
       };
       const onKey = (e) => {
-        const tag = ((e.target && e.target.tagName) || "").toLowerCase();
-        if (tag === "input" || tag === "textarea" || tag === "select") return;
-        if (e.key !== "ArrowLeft" && e.key !== "ArrowRight" && !/^[1-9]$/.test(e.key)) return;
+        if (typingTarget(e.target)) return;
+        const token = U.shortcutToken(e);
+        if (token !== "ArrowLeft" && token !== "ArrowRight" && !/^[1-9]$/.test(token)) return;
         e.preventDefault();
         e.stopPropagation();
-        index = U.nextVariantIndex(index, urls.length, e.key);
+        index = U.nextVariantIndex(index, urls.length, token);
         paint();
       };
       window.addEventListener("keydown", onKey, true);
@@ -4679,7 +4716,7 @@
       toast(`Холст ${size.w} × ${size.h}.`);
     }
     editor.thumb(editor.activeLayer());
-    editor.fit();
+    editor.fitIfOffscreen();
     state.dirty = true;
     paintSaveState();
     editor.requestDraw();
@@ -4724,7 +4761,7 @@
       state.area.outputLinked = true;
       syncDefaultArea();
     }
-    editor.fit();
+    editor.fitIfOffscreen();
     state.dirty = true;
     paintSaveState();
     editor.requestDraw();
@@ -5751,6 +5788,8 @@
         </div>
       </div>
       <div data-setpane="ui" hidden>
+        <label class="insp-check"><input id="set-fit-gen" type="checkbox" ${state.fitAfterGenerate ? "checked" : ""}> Вписывать холст после генерации</label>
+        <div class="mu">Выключено: масштаб и положение холста не меняются, когда генерация начинается, идёт или заканчивается.</div>
         <div class="row" style="flex-wrap:wrap">
           <button type="button" class="b" id="set-focus">Открыть в графе ComfyUI</button>
           <button type="button" class="b" id="set-layout">Сбросить раскладку</button>
@@ -5772,6 +5811,8 @@
         if (gap) gap.innerHTML = kreaGapHtml();
       });
       box.querySelector("[data-ok]").onclick = async () => {
+        state.fitAfterGenerate = !!($("set-fit-gen") && $("set-fit-gen").checked);
+        try { localStorage.setItem("zeroimagestudio.fitAfterGenerate", state.fitAfterGenerate ? "1" : "0"); } catch { /* private mode */ }
         state.settings = await api("/zeroimagestudio/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
           civitai_token: $("set-civ").value, llm_base: $("set-base").value, llm_model: $("set-model").value, llm_key: $("set-key").value,
         }) });
@@ -5847,7 +5888,7 @@
           editor.gen.h = Math.min(editor.gen.h, picked.h);
           state.area.outputLinked = true;
           if (!state.area.userPlaced) syncDefaultArea();
-          editor.fit();
+          editor.fitIfOffscreen();
           renderInspector();
           renderPipe();
           paintStatus();
@@ -6441,9 +6482,9 @@
       return;
     }
     if (e.altKey && !e.ctrlKey && !e.metaKey && !typingTarget(e.target) && !e.repeat) {
-      const key = e.key.toLowerCase();
-      const map = { f: "file", ф: "file", e: "edit", p: "edit", п: "edit", v: "view", в: "view", n: "settings", н: "settings", h: "help", с: "help" };
-      if (map[key]) {
+      const token = U.shortcutToken(e);
+      const map = { f: "file", e: "edit", p: "edit", v: "view", n: "settings", h: "help" };
+      if (map[token]) {
         e.preventDefault();
         altUsed = true;
         openMenu(map[key], true);
@@ -7048,7 +7089,9 @@
       if (fav) { await togglePresetFav(kindOf(fav), fav.dataset.presetFav); return; }
     });
     window.addEventListener("keydown", (e) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); generate(); }
+      if ((e.ctrlKey || e.metaKey) && (e.code === "Enter" || e.code === "NumpadEnter")) {
+        if (!typingTarget(e.target)) { e.preventDefault(); generate(); }
+      }
         if (e.key === "Escape") {
         if (menuName) { closeMenus(); return; }
         if (!$("pp-pop").hidden) { closePromptPop(); return; }
@@ -7481,6 +7524,7 @@
   async function boot() {
     loadModelSlots();
     try { state.placeMode = localStorage.getItem("zeroimagestudio.placeMode") || ""; } catch { /* private mode */ }
+    try { state.fitAfterGenerate = localStorage.getItem("zeroimagestudio.fitAfterGenerate") === "1"; } catch { state.fitAfterGenerate = false; }
     try { setMoreOpen(localStorage.getItem("zeroimagestudio.moreTools") === "1"); } catch { /* private mode */ }
     applyLayout(readLayout());
     bindPanelChrome();
