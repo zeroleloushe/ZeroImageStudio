@@ -1401,6 +1401,11 @@
   }
 
   function renderAll() {
+    if (state.pipeline === "create" && (state.tool === "mask" || state.tool === "genarea")) {
+      state.tool = "move";
+      document.querySelectorAll(".tool").forEach((b) => b.classList.toggle("on", b.dataset.tool === "move"));
+      if (editor) editor.canvas.style.cursor = "default";
+    }
     renderHints();
     renderFiles();
     renderRefs();
