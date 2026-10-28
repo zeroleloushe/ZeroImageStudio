@@ -39,6 +39,7 @@
           <button type="button" role="menuitem" data-act="redo">Повторить<kbd>Ctrl+Shift+Z</kbd></button>
           <hr>
           <button type="button" role="menuitem" data-act="canvas-size">Размер холста…</button>
+          <button type="button" role="menuitem" data-act="fit-canvas">Холст по слою</button>
         </div>
       </div>
       <div class="menu" data-menu="view">
@@ -180,6 +181,7 @@
         <span class="r">
           <button class="b s" id="btn-open-image" data-i="open" data-s="12" title="Открыть изображение"><span class="btn-label">Открыть изображение</span></button>
           <button class="b s" id="btn-canvas-size" data-i="crop" data-s="12" title="Размер холста"><span class="btn-label">Размер холста</span></button>
+          <button class="b s" id="btn-canvas-fit" data-i="expand" data-s="12" title="Подогнать холст под изображение"></button>
         </span>
       </div>
       <div class="opts" id="tool-options"></div>
@@ -314,8 +316,8 @@ try {
   }
 } catch (e) {}
 </script>
-<script src="zeroimagestudio_size.js?v=region"></script>
-<script src="zeroimagestudio_util.js?v=region"></script>
-<script src="zeroimagestudio_app.js?v=region"></script>
+<script src="zeroimagestudio_size.js?v=fitcanvas"></script>
+<script src="zeroimagestudio_util.js?v=fitcanvas"></script>
+<script src="zeroimagestudio_app.js?v=fitcanvas"></script>
 </body>
 </html>

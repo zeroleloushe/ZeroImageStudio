@@ -3471,6 +3471,7 @@
       <button type="button" data-act="dup">Дублировать</button>
       <button type="button" data-act="merge">Объединить с нижним</button>
       <button type="button" data-act="mask">Маска из слоя</button>
+      <button type="button" data-act="fit-canvas">Холст по слою</button>
       ${maskActs}
       <button type="button" data-act="del">Удалить</button>`;
     placeLayerMenu(menu, x, y);
@@ -3481,6 +3482,7 @@
       if (act.dataset.act === "dup") duplicateActive();
       if (act.dataset.act === "merge") mergeDown();
       if (act.dataset.act === "mask") maskFromLayer();
+      if (act.dataset.act === "fit-canvas") fitCanvasToContent("layer");
       if (act.dataset.act === "delmask") editor.deleteLayerMask();
       if (act.dataset.act === "applymask") editor.applyLayerMask();
       if (act.dataset.act === "del") editor.deleteActive();
@@ -3676,26 +3678,92 @@
     renderAll();
   }
 
-  function placeImportedCanvas(canvas, name, asNew) {
+  function layerHasPixels(layer) {
+    if (!layer || !layer.canvas || !layer.ctx) return false;
+    const w = layer.canvas.width;
+    const h = layer.canvas.height;
+    if (w < 1 || h < 1) return false;
+    let data;
+    try { data = layer.ctx.getImageData(0, 0, w, h).data; }
+    catch { return true; }
+    const stride = Math.max(4, Math.floor((w * h) / 5000) * 4);
+    for (let i = 3; i < data.length; i += stride) if (data[i] > 8) return true;
+    return false;
+  }
+
+  function canvasIsEmpty() {
+    return !editor || !editor.layers.some(layerHasPixels);
+  }
+
+  function contentBounds(layers) {
+    let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
+    for (const layer of layers) {
+      const w = Math.max(1, Math.round(layer.canvas.width * (layer.scaleX || 1)));
+      const h = Math.max(1, Math.round(layer.canvas.height * (layer.scaleY || 1)));
+      x1 = Math.min(x1, layer.x);
+      y1 = Math.min(y1, layer.y);
+      x2 = Math.max(x2, layer.x + w);
+      y2 = Math.max(y2, layer.y + h);
+    }
+    if (!Number.isFinite(x1)) return null;
+    return { x: x1, y: y1, w: Math.max(1, x2 - x1), h: Math.max(1, y2 - y1) };
+  }
+
+  function adoptCanvasSize(w, h) {
+    const step = modelStep();
+    const size = window.ZeroImageStudioSize.cropSizeToStep(w, h, step);
+    editor.doc = { w: size.w, h: size.h };
+    editor.resizeMask();
+    editor.touchMask();
+    if (state.area.editScope !== "region") {
+      state.area.userPlaced = false;
+      state.area.outputLinked = true;
+      syncDefaultArea();
+    } else {
+      editor.gen = window.ZeroImageStudioSize.snapRect(editor.gen, step, editor.doc);
+      state.area.region = { x: editor.gen.x, y: editor.gen.y, w: editor.gen.w, h: editor.gen.h };
+    }
+    return size;
+  }
+
+  function placeImportedCanvas(canvas, name, mode) {
     editor.pushUndo(editor.fullSnapshot());
-    const layer = editor.makeLayer(String(name || "Фото").replace(/\.[^.]+$/, ""), canvas);
-    if (asNew) {
-      editor.doc = { w: canvas.width, h: canvas.height };
+    const title = String(name || "Фото").replace(/\.[^.]+$/, "");
+    if (mode === "fit") {
+      const box = window.ZeroImageStudioSize.containInside(canvas.width, canvas.height, editor.doc.w, editor.doc.h);
+      const fitted = document.createElement("canvas");
+      fitted.width = box.w;
+      fitted.height = box.h;
+      fitted.getContext("2d").drawImage(canvas, 0, 0, box.w, box.h);
+      const layer = editor.makeLayer(title, fitted);
+      layer.x = box.x;
+      layer.y = box.y;
+      editor.addLayer(layer);
+      toast("Изображение вписано в холст.");
+    } else if (mode === "grow") {
+      const size = adoptCanvasSize(canvas.width, canvas.height);
+      const layer = editor.makeLayer(title, canvas);
+      layer.x = 0;
+      layer.y = 0;
+      editor.addLayer(layer);
+      toast(`Холст ${size.w} × ${size.h}.`);
+    } else {
+      const size = adoptCanvasSize(canvas.width, canvas.height);
+      const layer = editor.makeLayer(title, canvas);
       editor.resizeMask();
-      editor.maskCtx.clearRect(0, 0, canvas.width, canvas.height);
+      editor.maskCtx.clearRect(0, 0, editor.doc.w, editor.doc.h);
       editor.touchMask();
       editor.layers = [layer];
       editor.active = 0;
       state.maskFocus = null;
       state.workMaskHidden = false;
       state.area.userPlaced = false;
+      state.area.outputLinked = true;
+      state.area.editScope = "full";
       syncDefaultArea();
-    } else {
-      layer.x = 0;
-      layer.y = 0;
-      editor.addLayer(layer);
+      toast(`Холст ${size.w} × ${size.h}.`);
     }
-    editor.thumb(layer);
+    editor.thumb(editor.activeLayer());
     editor.fit();
     state.dirty = true;
     editor.requestDraw();
@@ -3704,7 +3772,50 @@
     renderPipe();
     paintStatus();
     updateGenerateButton();
-    toast(asNew ? `Холст ${canvas.width} × ${canvas.height}.` : "Слой добавлен, холст не менялся.");
+  }
+
+  function fitCanvasToContent(which) {
+    const selected = editor.activeLayer();
+    const layers = which === "layer" && selected ? [selected] : editor.layers.filter((layer) => layer.visible !== false);
+    if (!layers.length) { toast("Нет слоя, под который подогнать холст."); return; }
+    const box = contentBounds(layers);
+    if (!box) { toast("Нет слоя, под который подогнать холст."); return; }
+    const step = modelStep();
+    const size = window.ZeroImageStudioSize.cropSizeToStep(box.w, box.h, step);
+    editor.pushUndo(editor.fullSnapshot());
+    const dx = Math.round(box.x);
+    const dy = Math.round(box.y);
+    for (const layer of editor.layers) {
+      layer.x -= dx;
+      layer.y -= dy;
+    }
+    const prevMask = editor.maskCanvas;
+    const mc = document.createElement("canvas");
+    mc.width = size.w;
+    mc.height = size.h;
+    mc.getContext("2d").drawImage(prevMask, -dx, -dy);
+    editor.doc = { w: size.w, h: size.h };
+    editor.maskCanvas = mc;
+    editor.maskCtx = mc.getContext("2d");
+    editor.touchMask();
+    if (state.area.editScope === "region") {
+      editor.gen = window.ZeroImageStudioSize.snapRect({
+        x: editor.gen.x - dx, y: editor.gen.y - dy, w: editor.gen.w, h: editor.gen.h,
+      }, step, editor.doc);
+      state.area.region = { x: editor.gen.x, y: editor.gen.y, w: editor.gen.w, h: editor.gen.h };
+    } else {
+      state.area.userPlaced = false;
+      state.area.outputLinked = true;
+      syncDefaultArea();
+    }
+    editor.fit();
+    state.dirty = true;
+    editor.requestDraw();
+    renderLayers();
+    renderInspector();
+    renderPipe();
+    paintStatus();
+    toast(`Холст ${size.w} × ${size.h}.`);
   }
 
   function readImportMp() {
@@ -3741,7 +3852,11 @@
         h *= scale;
       }
     }
-    return { w: snapDown16(Math.min(w, cropW)), h: snapDown16(Math.min(h, cropH)) };
+    w = Math.min(w, cropW);
+    h = Math.min(h, cropH);
+    const step = modelStep();
+    const cropped = window.ZeroImageStudioSize.cropSizeToStep(w, h, step);
+    return { w: cropped.w, h: cropped.h, scaled: w < cropW - 0.5 || h < cropH - 0.5 };
   }
 
   function upsertAsset(asset) {
@@ -3837,7 +3952,7 @@
       if (h > imgH) { h = imgH; w = h * ratio; }
       return clampCrop({ x: (imgW - w) / 2, y: (imgH - h) / 2, w, h });
     };
-    const asNewDefault = editor.layers.length === 0 && editor.doc.w === 1024 && editor.doc.h === 1024;
+    const blankCanvas = canvasIsEmpty();
     return new Promise((resolve) => {
       const back = document.createElement("div");
       back.className = "modal-back";
@@ -3850,10 +3965,11 @@
         <div class="mu">Максимум, мегапиксели. Только уменьшение, кратно 16.</div>
         <div class="import-mps" id="import-mps">${mpPresets.map(([id, label]) => `<button type="button" class="b s" data-mp="${id}">${label}</button>`).join("")}<input id="import-custom" class="f" inputmode="decimal" style="width:72px" hidden></div>
         <div class="mu" id="import-live"></div>
-        <div class="row">
-          <label class="row"><input type="radio" name="import-place" value="new"> Как новый холст</label>
-          <label class="row"><input type="radio" name="import-place" value="layer"> Слоем на текущий холст</label>
+        <div class="row" id="import-place" ${blankCanvas ? "hidden" : ""}>
+          <label class="row"><input type="radio" name="import-place" value="grow"> Холст под изображение</label>
+          <label class="row"><input type="radio" name="import-place" value="fit"> Вписать в холст</label>
         </div>
+        <div class="mu" id="import-blank" ${blankCanvas ? "" : "hidden"}>Пустой холст примет размер изображения.</div>
         <div class="row" style="justify-content:flex-end">
           <button type="button" class="b" data-cancel="1">Отмена</button>
           <button type="button" class="b ac" data-ok="1">Импорт</button>
@@ -3891,7 +4007,7 @@
         if (mp.mode === "custom" && document.activeElement !== custom) custom.value = String(mp.value);
         const out = importOutputSize(crop.w, crop.h, mp);
         const mpText = ((out.w * out.h) / 1e6).toFixed(2);
-        back.querySelector("#import-live").textContent = `Источник ${imgW}×${imgH} → ${out.w}×${out.h} · ${mpText} МП`;
+        back.querySelector("#import-live").textContent = `Источник ${imgW}×${imgH} → ${out.w}×${out.h} · ${mpText} МП · без растяжения`;
       };
       const point = (ev) => {
         const r = canvas.getBoundingClientRect();
@@ -3962,10 +4078,10 @@
       canvas.addEventListener("pointerup", () => { drag = null; });
       const finish = (ok) => {
         const picked = back.querySelector('input[name="import-place"]:checked');
-        const asNew = !picked || picked.value === "new";
+        const mode = blankCanvas ? "new" : (picked && picked.value === "grow" ? "grow" : "fit");
         window.removeEventListener("keydown", onKey, true);
         back.remove();
-        resolve(ok ? asNew : null);
+        resolve(ok ? mode : null);
       };
       const doImport = () => {
         const custom = back.querySelector("#import-custom");
@@ -4015,19 +4131,33 @@
         paint();
       });
       const radios = back.querySelectorAll('input[name="import-place"]');
-      radios.forEach((radio) => { radio.checked = asNewDefault ? radio.value === "new" : radio.value === "layer"; });
+      radios.forEach((radio) => { radio.checked = radio.value === "fit"; });
       document.body.appendChild(back);
       paint();
       back.querySelector("[data-ok]").focus();
-    }).then(async (asNew) => {
-      if (asNew == null) return;
+    }).then(async (mode) => {
+      if (mode == null) return;
       writeImportMp(mp);
       const out = importOutputSize(crop.w, crop.h, mp);
       const canvas = document.createElement("canvas");
       canvas.width = Math.max(1, out.w);
       canvas.height = Math.max(1, out.h);
-      canvas.getContext("2d").drawImage(img, crop.x, crop.y, crop.w, crop.h, 0, 0, canvas.width, canvas.height);
-      placeImportedCanvas(canvas, name, asNew);
+      const g = canvas.getContext("2d");
+      if (out.scaled) {
+        const scale = Math.min(out.w / crop.w, out.h / crop.h, 1);
+        const fullW = Math.max(out.w, Math.round(crop.w * scale));
+        const fullH = Math.max(out.h, Math.round(crop.h * scale));
+        const tmp = document.createElement("canvas");
+        tmp.width = fullW;
+        tmp.height = fullH;
+        tmp.getContext("2d").drawImage(img, crop.x, crop.y, crop.w, crop.h, 0, 0, fullW, fullH);
+        g.drawImage(tmp, Math.floor((fullW - out.w) / 2), Math.floor((fullH - out.h) / 2), out.w, out.h, 0, 0, out.w, out.h);
+      } else {
+        const ox = crop.x + (crop.w - out.w) / 2;
+        const oy = crop.y + (crop.h - out.h) / 2;
+        g.drawImage(img, ox, oy, out.w, out.h, 0, 0, out.w, out.h);
+      }
+      placeImportedCanvas(canvas, name, mode);
       if (sourceFile) {
         const settings = {
           x: Math.round(crop.x), y: Math.round(crop.y), w: Math.round(crop.w), h: Math.round(crop.h),
@@ -4963,6 +5093,7 @@
     else if (act === "undo") editor.undo();
     else if (act === "redo") editor.redo();
     else if (act === "canvas-size") openCanvasSize();
+    else if (act === "fit-canvas") fitCanvasToContent("all");
     else if (act === "fit") editor.fit();
     else if (act === "zoom100") editor.zoom100();
     else if (act === "reset-layout") resetLayout();
@@ -5127,6 +5258,7 @@
     $("btn-redo").onclick = () => editor.redo();
     $("btn-system").onclick = () => openSystem();
     $("btn-canvas-size").onclick = () => openCanvasSize();
+    $("btn-canvas-fit").onclick = () => fitCanvasToContent("all");
     $("btn-open-image").onclick = () => $("file-layer").click();
     $("btn-help").onclick = () => toggleHelp();
     const stageMid = () => {

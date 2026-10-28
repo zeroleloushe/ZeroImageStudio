@@ -59,6 +59,27 @@
     return { w: snapSize(height * ratio, s), h: snapSize(height, s) };
   }
 
+  function cropSizeToStep(w, h, step) {
+    const s = Math.max(1, step || 16);
+    const sw = Math.max(0, Math.floor((Number(w) || 0) / s) * s);
+    const sh = Math.max(0, Math.floor((Number(h) || 0) / s) * s);
+    return {
+      w: sw >= s ? sw : Math.max(1, Math.round(Number(w) || 1)),
+      h: sh >= s ? sh : Math.max(1, Math.round(Number(h) || 1)),
+    };
+  }
+
+  function containInside(srcW, srcH, boxW, boxH) {
+    const sw = Math.max(1, Number(srcW) || 1);
+    const sh = Math.max(1, Number(srcH) || 1);
+    const bw = Math.max(1, Number(boxW) || 1);
+    const bh = Math.max(1, Number(boxH) || 1);
+    const scale = Math.min(bw / sw, bh / sh, 1);
+    const w = Math.max(1, Math.round(sw * scale));
+    const h = Math.max(1, Math.round(sh * scale));
+    return { x: Math.round((bw - w) / 2), y: Math.round((bh - h) / 2), w: w, h: h };
+  }
+
   function snapRect(rect, step, doc) {
     const s = Math.max(1, step || 16);
     const maxW = Math.max(s, (doc && doc.w) || 0);
@@ -93,5 +114,7 @@
     areaLabelText: areaLabelText,
     sizeForMegapixels: sizeForMegapixels,
     snapRect: snapRect,
+    cropSizeToStep: cropSizeToStep,
+    containInside: containInside,
   };
 });

@@ -32,6 +32,21 @@ test("megapixels follow the frame aspect and the model step", () => {
   assert.ok(Math.abs(frame.w * frame.h - 1e6) / 1e6 < 0.08);
 });
 
+test("canvas snap crops a few pixels and does not grow the image", () => {
+  const cropped = size.cropSizeToStep(1000, 1500, 16);
+  assert.equal(cropped.w, 992);
+  assert.equal(cropped.h, 1488);
+  assert.ok(cropped.w <= 1000 && cropped.h <= 1500);
+  const fit = size.containInside(800, 1600, 1024, 1024);
+  assert.equal(fit.w, 512);
+  assert.equal(fit.h, 1024);
+  assert.equal(fit.x, 256);
+  assert.equal(fit.y, 0);
+  const small = size.containInside(400, 200, 1024, 1024);
+  assert.equal(small.w, 400);
+  assert.equal(small.h, 200);
+});
+
 test("a dragged frame snaps position and size to the model step", () => {
   const snapped = size.snapRect({ x: 10, y: 12, w: 100, h: 90 }, 16, { w: 1024, h: 1024 });
   assert.equal(snapped.x % 16, 0);
