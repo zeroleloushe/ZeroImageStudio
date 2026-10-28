@@ -235,6 +235,27 @@ class WorkflowTests(unittest.TestCase):
         self.assertTrue(any("Raw" in w for w in warnings))
         self.assertTrue(any("только холст" in w for w in warnings))
 
+    def test_krea_chains_task_lora_then_extras(self):
+        spec = _diff_spec(
+            pipeline="edit",
+            edit_method="krea2_edit",
+            image="zeroimagestudio/crop.png",
+            loras=[
+                {"name": "custom_general.safetensors", "enabled": True, "strength_model": 0.9, "strength_clip": 0.8},
+                {"name": "film.safetensors", "enabled": True, "strength_model": 0.4, "strength_clip": 0.3},
+                {"name": "skipped.safetensors", "enabled": False, "strength_model": 1, "strength_clip": 1},
+            ],
+            krea={"task": "general", "fit_mode": "fit", "grounding_px": 768, "impl": "internal"},
+        )
+        prompt, warnings, built = build_workflow(spec)
+        self.assertEqual(built, "edit:krea2_edit")
+        loaders = [(nid, n) for nid, n in prompt.items() if n["class_type"] == "LoraLoader"]
+        self.assertEqual([n["inputs"]["lora_name"] for _nid, n in loaders], ["custom_general.safetensors", "film.safetensors"])
+        self.assertEqual(loaders[0][1]["inputs"]["strength_model"], 0.9)
+        self.assertEqual(loaders[1][1]["inputs"]["model"], [loaders[0][0], 0])
+        self.assertEqual(loaders[1][1]["inputs"]["clip"], [loaders[0][0], 1])
+        self.assertFalse(any("ждёт LoRA" in w for w in warnings))
+
     def test_krea_identity_keeps_subject_reference(self):
         spec = _diff_spec(
             pipeline="edit",

@@ -117,6 +117,24 @@
     return !!hasMask || tool === "mask" || focus === "work";
   }
 
+  // A saved task-LoRA choice wins. The suggested file is only the first visit.
+  function resolveTaskLora(saved, suggestedName) {
+    const suggested = String(suggestedName || "");
+    if (saved && String(saved.name || "").trim()) {
+      const strength = Number(saved.strength_model);
+      const clip = Number(saved.strength_clip);
+      const modelStrength = Number.isFinite(strength) ? strength : 1;
+      return {
+        name: String(saved.name),
+        strength_model: modelStrength,
+        strength_clip: Number.isFinite(clip) ? clip : modelStrength,
+        enabled: saved.enabled !== false,
+        remembered: true,
+      };
+    }
+    return { name: suggested, strength_model: 1, strength_clip: 1, enabled: true, remembered: false };
+  }
+
   function maskShortcutClears(key, ctrl, focus) {
     const k = String(key || "");
     if (ctrl && k.toLowerCase() === "d") return "clear";
@@ -142,6 +160,7 @@
     requestsRemoval,
     inverseHistory,
     brushTargetsMask,
+    resolveTaskLora,
     workMaskRowVisible,
     maskShortcutClears,
     historyBytes,

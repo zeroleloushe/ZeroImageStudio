@@ -337,7 +337,10 @@ input.range::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; heigh
 .krea-tips { display: flex; flex-direction: column; gap: 2px; font-size: 10.5px; line-height: 1.35; }
 .krea-tips .hot { color: #e7c27a; }
 .krea-task button { font-size: 11px; line-height: 26px; height: 26px; min-height: 26px; padding: 0 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.lora-row.system .lock-tag { font-size: 9px; color: var(--mu); flex: none; }
+.lora-row .task-badge {
+  flex: none; font-size: 9px; font-weight: 700; line-height: 16px; padding: 0 4px; border-radius: 3px;
+  color: #ffd2b0; background: rgba(255, 122, 26, .18); border: 1px solid rgba(255, 122, 26, .45);
+}
 .menubar { display: flex; align-items: center; gap: 1px; flex: none; min-width: 0; }
 .menu { position: relative; }
 .menu-btn {

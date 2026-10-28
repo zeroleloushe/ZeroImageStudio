@@ -49,6 +49,23 @@ test("a selected mask is what the brush and the eraser paint", () => {
   assert.equal(inverse.layerMaskId, "L1");
 });
 
+test("a saved task LoRA is not replaced by the suggested file", () => {
+  const kept = U.resolveTaskLora(
+    { name: "krea/general_edit_custom.safetensors", strength_model: 0.7, strength_clip: 0.4, enabled: false },
+    "krea2_general_edit_v2.safetensors",
+  );
+  assert.equal(kept.name, "krea/general_edit_custom.safetensors");
+  assert.equal(kept.strength_model, 0.7);
+  assert.equal(kept.strength_clip, 0.4);
+  assert.equal(kept.enabled, false);
+  assert.equal(kept.remembered, true);
+  const fresh = U.resolveTaskLora(null, "krea2_identity_edit_v2.safetensors");
+  assert.equal(fresh.name, "krea2_identity_edit_v2.safetensors");
+  assert.equal(fresh.strength_model, 1);
+  assert.equal(fresh.remembered, false);
+  assert.equal(U.resolveTaskLora({ name: "  " }, "suggested.safetensors").name, "suggested.safetensors");
+});
+
 test("undo inverse is recorded for pixels, patches and moves", () => {
   const pixels = U.inverseHistory(
     { type: "pixels", id: "a", data: { byteLength: 4 } },

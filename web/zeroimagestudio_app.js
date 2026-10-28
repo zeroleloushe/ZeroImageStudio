@@ -58,6 +58,7 @@
     collapsed: false,
     maskFocus: null,
     workMaskHidden: false,
+    kreaTaskSlots: {},
   };
   state.edit.method = "krea2_edit";
   state.edit.clip_type = "krea2";
@@ -1445,6 +1446,18 @@
     else renderLoraStack();
   }
 
+  function taskRowHtml(l) {
+    const badge = kreaTaskId() === "identity" ? "Персонаж" : "Правка";
+    const base = U.fileBase(l.name);
+    return `<div class="lora-row ${l.enabled ? "" : "off"}">
+      <button type="button" class="cb ${l.enabled ? "on" : ""}" data-lora-enable="${escapeHtml(l.name)}" title="Включить или выключить"></button>
+      <span class="task-badge" title="LoRA подрежима">${badge}</span>
+      <button type="button" class="nm" data-lora-swap="1" title="Выбрать другой файл">${escapeHtml(base)}</button>
+      <input class="range" data-str="model" data-lora-name="${escapeHtml(l.name)}" type="range" min="0" max="2" step="0.05" value="${Number(l.strength_model)}" title="Сила">
+      <input class="f" data-str-num="model" data-lora-name="${escapeHtml(l.name)}" value="${Number(l.strength_model).toFixed(2)}" title="Сила">
+    </div>`;
+  }
+
   function renderLoraStack() {
     const list = activeLoras();
     const enabled = list.filter((l) => l.enabled);
@@ -1456,15 +1469,7 @@
         `<button type="button" class="tw ${t.enabled === false ? "" : "on"}" data-trig="${i}" data-lora-name="${escapeHtml(l.name)}">${t.enabled === false ? "" : "✓ "}${escapeHtml(t.text)}</button>`
       ).join(" ");
       const open = state.loraSelected === l.name;
-      if (l.system) {
-        return `<div class="lora-row system">
-          <span class="cb on" title="Системная LoRA режима"></span>
-          <span class="nm" title="${escapeHtml(l.name)}">${escapeHtml(base)}</span>
-          <span class="lock-tag">системная</span>
-          <input class="range" type="range" min="0" max="2" step="0.05" value="1" disabled title="Сила 1.0">
-          <input class="f" value="1.00" disabled title="Сила 1.0">
-        </div>`;
-      }
+      if (l.role === "task") return taskRowHtml(l);
       return `<div class="lora-row ${l.enabled ? "" : "off"}">
         <button type="button" class="cb ${l.enabled ? "on" : ""}" data-lora-enable="${escapeHtml(l.name)}" title="Включить или выключить"></button>
         <button type="button" class="nm" data-lora-info="${escapeHtml(l.name)}" title="${escapeHtml(l.name)}">${escapeHtml(base)}</button>
@@ -1506,9 +1511,10 @@
     return (l && l.civitai && l.civitai.preview) || "";
   }
 
-  function openLoraPicker() {
+  function openLoraPicker(opts) {
+    const swapTask = !!(opts && opts.swapTask);
     state.loraBrowse = state.loraBrowse || "";
-    openModal(`<h3>Добавить LoRA</h3><div id="lora-picker"></div>`, (box, close) => {
+    openModal(`<h3>${swapTask ? "Файл LoRA режима" : "Добавить LoRA"}</h3><div id="lora-picker"></div>`, (box, close) => {
       box.classList.add("wide");
       const ok = box.querySelector("[data-ok]");
       ok.textContent = "Готово";
@@ -1555,7 +1561,14 @@
           const pick = ev.target.closest("[data-pick]");
           if (crumb) { state.loraBrowse = crumb.dataset.crumb || ""; state.loraPickQuery = ""; paint(); }
           if (enter) { state.loraBrowse = enter.dataset.enter; state.loraPickQuery = ""; paint(); }
-          if (pick) { ensureLora(pick.dataset.pick); renderLoras(); renderPipe(); paint(); }
+          if (pick) {
+            if (swapTask) {
+              const row = taskLoraRow();
+              if (row) row.name = pick.dataset.pick;
+              rememberTaskLora();
+            } else ensureLora(pick.dataset.pick);
+            renderLoras(); renderPipe(); updateGenerateButton(); paint();
+          }
         };
       };
       paint();
@@ -1595,7 +1608,9 @@
     }).join("");
     const sel = activeLoras().find((l) => l.name === state.loraSelected) || null;
     const detail = sel ? loraDetail(sel) : `<div class="empty">Выберите LoRA в списке. Список читается из папки loras ComfyUI.</div>`;
+    const task = isKreaEdit() ? taskLoraRow() : null;
     $("lora-panel").innerHTML = `
+      ${task ? `<div class="lora-stack">${taskRowHtml(task)}</div>` : ""}
       <div class="row"><input id="lora-search" class="f" style="flex:1;font-family:inherit" placeholder="Поиск: имя, тег, триггер…" value="${escapeHtml(state.loraQuery)}"></div>
       <div class="lora-split">
         <div class="tree">${tree}</div>
@@ -2046,6 +2061,7 @@
   }
 
   function setKreaTask(taskId) {
+    rememberTaskLora();
     applyKreaTaskDefaults(taskId);
     syncKreaStack();
     renderFiles();
@@ -2056,25 +2072,72 @@
     updateGenerateButton();
   }
 
+  const TASK_LORA_KEY = "zeroimagestudio.kreaTaskLora";
+
+  function taskSlotKey(hintId, task) {
+    const id = canonicalHintId(hintId || state.hintId);
+    return id + ":" + (task === "identity" ? "identity" : "general");
+  }
+
+  function loadTaskSlots() {
+    if (state._taskSlotsLoaded) return;
+    state._taskSlotsLoaded = true;
+    try {
+      const raw = JSON.parse(localStorage.getItem(TASK_LORA_KEY) || "{}");
+      if (raw && typeof raw === "object") state.kreaTaskSlots = raw;
+    } catch { state.kreaTaskSlots = {}; }
+  }
+
+  function saveTaskSlots() {
+    try { localStorage.setItem(TASK_LORA_KEY, JSON.stringify(state.kreaTaskSlots || {})); } catch { /* private mode */ }
+  }
+
+  function taskLoraRow() {
+    return (state.edit.loras || []).find((l) => l && l.role === "task") || null;
+  }
+
+  function rememberTaskLora() {
+    if (!isKreaEdit()) return;
+    const row = taskLoraRow();
+    if (!row || !String(row.name || "").trim()) return;
+    loadTaskSlots();
+    state.kreaTaskSlots[taskSlotKey(state.hintId, kreaTaskId())] = {
+      name: row.name,
+      strength_model: Number(row.strength_model),
+      strength_clip: Number(row.strength_clip),
+      enabled: row.enabled !== false,
+    };
+    saveTaskSlots();
+  }
+
   function syncKreaStack() {
     const edit = state.edit;
     if (!edit.krea) edit.krea = blankPipe("edit").krea;
-    const owned = new Set(Object.values(KREA_TASKS).map((t) => t.file.toLowerCase()));
-    edit.loras = (edit.loras || []).filter((l) => l && !l.system && !owned.has(basenameOf(l.name)));
-    if (state.pipeline !== "edit" || edit.method !== "krea2_edit") return;
+    loadTaskSlots();
+    const prior = (edit.loras || []).find((l) => l && (l.role === "task" || l.system));
+    const extras = (edit.loras || []).filter((l) => l && l.role !== "task" && !l.system);
+    if (!isKreaEdit()) {
+      edit.loras = extras;
+      return;
+    }
     const id = edit.krea.task === "identity" ? "identity" : "general";
     edit.krea.task = id;
-    const task = KREA_TASKS[id];
-    const installed = findInstalledLora(task.file);
-    edit.loras.unshift({
-      name: installed || task.file,
-      strength_model: 1,
-      strength_clip: 1,
-      enabled: true,
-      trigger_mode: "off",
-      triggers: [],
-      system: true,
-    });
+    const suggested = findInstalledLora(KREA_TASKS[id].file) || KREA_TASKS[id].file;
+    const choice = U.resolveTaskLora(state.kreaTaskSlots[taskSlotKey(state.hintId, id)], suggested);
+    const same = prior && basenameOf(prior.name) === basenameOf(choice.name);
+    const row = {
+      name: choice.name,
+      strength_model: choice.strength_model,
+      strength_clip: choice.strength_clip,
+      enabled: choice.enabled,
+      trigger_mode: same && prior.trigger_mode ? prior.trigger_mode : "off",
+      triggers: same ? (prior.triggers || []) : [],
+      role: "task",
+    };
+    if (same && prior.civitai) row.civitai = prior.civitai;
+    if (same && prior.sha256) row.sha256 = prior.sha256;
+    const taskBase = basenameOf(row.name);
+    edit.loras = [row, ...extras.filter((l) => basenameOf(l.name) !== taskBase)];
   }
 
   function kreaRefHint() {
@@ -2117,9 +2180,11 @@
 
   function missingKreaLora() {
     if (!isKreaEdit()) return null;
-    const spec = KREA_TASKS[kreaTaskId()];
-    if (findInstalledLora(spec.file)) return null;
-    return spec;
+    const row = taskLoraRow();
+    const name = (row && row.name) || KREA_TASKS[kreaTaskId()].file;
+    if (findInstalledLora(name)) return null;
+    const known = Object.values(KREA_TASKS).find((t) => basenameOf(t.file) === basenameOf(name));
+    return { file: name, url: known ? known.url : "" };
   }
 
   function emptyWeightReasons() {
@@ -2143,7 +2208,7 @@
       <div class="miss-line lora">
         <span class="nm" title="${escapeHtml(spec.file)}">${escapeHtml(spec.file)}</span>
         <span class="dir">models/loras/</span>
-        <a class="dl" href="${escapeHtml(spec.url)}" target="_blank" rel="noopener">Скачать</a>
+        ${spec.url ? `<a class="dl" href="${escapeHtml(spec.url)}" target="_blank" rel="noopener">Скачать</a>` : ""}
       </div>
       <button type="button" class="b s" data-rescan="1">Проверить снова</button>
     </div>`;
@@ -2202,7 +2267,8 @@
     }
     reasons.push(...emptyWeightReasons());
     const lora = missingKreaLora();
-    if (lora) reasons.push("Нет LoRA режима: " + lora.file);
+    const taskRow = taskLoraRow();
+    if (lora && (!taskRow || taskRow.enabled !== false)) reasons.push("Нет LoRA режима: " + lora.file);
     return reasons.join(" ");
   }
 
@@ -3398,6 +3464,7 @@
       prompt: state.prompt, negative: state.negative, promptPresets: state.promptPresets,
       sampler: state.sampler, create: state.create, edit: state.edit, area: state.area, color: state.color, brush: state.brush,
       maskFocus: state.maskFocus, workMaskHidden: !!state.workMaskHidden,
+      kreaTaskSlots: state.kreaTaskSlots,
     };
     const fd = new FormData();
     fd.append("meta", JSON.stringify(meta));
@@ -3465,6 +3532,11 @@
       maskFocus: meta.state.maskFocus || null,
       workMaskHidden: !!meta.state.workMaskHidden,
     });
+    if (meta.state.kreaTaskSlots && typeof meta.state.kreaTaskSlots === "object") {
+      state.kreaTaskSlots = meta.state.kreaTaskSlots;
+      state._taskSlotsLoaded = true;
+      saveTaskSlots();
+    } else loadTaskSlots();
     state.hintId = canonicalHintId(state.hintId);
     state.hintByMode[state.pipeline] = state.hintId;
     if (Array.isArray(state.promptPresets)) state.promptPresets = state.promptPresets.map((p, i) => normalizePreset(p, i));
@@ -3979,6 +4051,7 @@
   }
 
   function applyHint(h) {
+    rememberTaskLora();
     const pipes = hintPipelines(h);
     if (!pipes.includes(state.pipeline)) state.pipeline = pipes[0];
     state.hintId = canonicalHintId(h.id);
@@ -5105,10 +5178,12 @@
   async function onLoraClick(e) {
     const add = e.target.closest("#btn-lora-add");
     if (add) { openLoraPicker(); return; }
+    const swap = e.target.closest("[data-lora-swap]");
+    if (swap) { openLoraPicker({ swapTask: true }); return; }
     const rm = e.target.closest("[data-lora-remove]");
     if (rm) {
       const victim = activeLoras().find((l) => l.name === rm.dataset.loraRemove);
-      if (victim && victim.system) return;
+      if (victim && victim.role === "task") return;
       cfg().loras = activeLoras().filter((l) => l.name !== rm.dataset.loraRemove);
       if (state.loraSelected === rm.dataset.loraRemove) state.loraSelected = "";
       renderLoras(); renderPipe(); updateFinal();
@@ -5117,9 +5192,10 @@
     const en = e.target.closest("[data-lora-enable]");
     if (en) {
       const l = activeLoras().find((x) => x.name === en.dataset.loraEnable);
-      if (l && l.system) return;
       if (l) l.enabled = !l.enabled;
+      if (l && l.role === "task") rememberTaskLora();
       renderLoras(); renderPipe(); updateFinal();
+      updateGenerateButton();
       return;
     }
     const info = e.target.closest("[data-lora-info]");
@@ -5130,9 +5206,10 @@
     if (toggle) {
       const name = toggle.dataset.loraToggle;
       const l = activeLoras().find((x) => x.name === name);
-      if (l && l.system) return;
       if (l && l.enabled) l.enabled = false;
       else ensureLora(name).enabled = true;
+      const touched = activeLoras().find((x) => x.name === name);
+      if (touched && touched.role === "task") rememberTaskLora();
       state.loraSelected = name;
       renderLoras(); renderPipe();
       return;
@@ -5170,14 +5247,15 @@
   function onLoraChange(e) {
     const name = e.target.dataset.loraName || state.loraSelected;
     const l = activeLoras().find((x) => x.name === name);
-    if (!l || l.system) return;
+    if (!l) return;
     if (e.target.dataset.trigMode) { l.trigger_mode = e.target.value; updateFinal(); }
+    if (l.role === "task") rememberTaskLora();
   }
 
   function onLoraInput(e) {
     const name = e.target.dataset.loraName || state.loraSelected;
     const l = activeLoras().find((x) => x.name === name);
-    if (!l || l.system) return;
+    if (!l) return;
     if (e.target.dataset.str) {
       const v = parseFloat(e.target.value);
       if (e.target.dataset.str === "model") {
@@ -5191,6 +5269,7 @@
       const v = parseFloat(e.target.value) || 0;
       if (e.target.dataset.strNum === "model") l.strength_model = v; else l.strength_clip = v;
     }
+    if (l.role === "task") rememberTaskLora();
   }
 
   const LAYOUT_KEY = "zeroimagestudio.layout";
