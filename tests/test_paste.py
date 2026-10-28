@@ -3,7 +3,7 @@ import unittest
 import numpy as np
 from PIL import Image
 
-from zeroimagestudio_paste import box_blur, color_match, paste, poisson_blend
+from zeroimagestudio_paste import box_blur, clamp_feather, color_match, erode_binary, paste, poisson_blend, _mask_float
 
 
 class PasteTests(unittest.TestCase):
@@ -99,6 +99,57 @@ class PasteTests(unittest.TestCase):
         out = color_match(src.copy(), dst, mask)
         spread = float(out[..., 0].max() - out[..., 0].min())
         self.assertLessEqual(spread, raw * 2.0 + 1e-4)
+
+    def test_interior_does_not_darken(self):
+        h = w = 80
+        dst = np.full((h, w, 3), 180, dtype=np.uint8)
+        identical = dst.copy()
+        brighter = dst.copy()
+        brighter[20:60, 20:60] = 255
+        for mode in ("feather", "hard", "poisson"):
+            mean, out, hard, _seam = self._paste_case(mode, identical, identical, (20, 20, 60, 60), 8)
+            self.assertLess(mean, 1.0, mode)
+            self.assertEqual(int(out[0, 0, 3]), 0, mode)
+            if mode != "feather":
+                self.assertEqual(int(out[..., 3][~hard].max()), 0, mode)
+            mean_b, out_b, hard_b, _seam_b = self._paste_case(mode, brighter, dst, (20, 20, 60, 60), 8, color=False)
+            self.assertLess(mean_b, 1.0, mode)
+            self.assertEqual(int(out_b[0, 0, 3]), 0, mode)
+            if mode != "feather":
+                self.assertEqual(int(out_b[..., 3][~hard_b].max()), 0, mode)
+
+    def _paste_case(self, mode, src, dst, box, feather, color=True):
+        mask = Image.new("L", (src.shape[1], src.shape[0]), 0)
+        mask.paste(255, box)
+        out = np.asarray(paste(Image.fromarray(src), Image.fromarray(dst), mask, mode=mode, feather=feather, color=color))
+        m = _mask_float(mask, (src.shape[1], src.shape[0]))
+        seam = clamp_feather(feather, m)
+        interior = erode_binary(m > 0.5, max(seam, 1))
+        delta = np.abs(out[..., :3][interior].astype(np.int16) - src[interior].astype(np.int16))
+        return float(delta.mean()), out, m > 0.5, seam
+
+    def test_flat_white_patch_stays_flat(self):
+        dst = np.full((64, 64, 3), 180, dtype=np.uint8)
+        src = dst.copy()
+        src[16:48, 16:48] = 255
+        mask = Image.new("L", (64, 64), 0)
+        mask.paste(255, (16, 16, 48, 48))
+        for mode in ("feather", "poisson", "hard"):
+            out = np.asarray(paste(Image.fromarray(src), Image.fromarray(dst), mask, mode=mode, feather=8, color=False))
+            self.assertEqual(int(out[32, 32, 0]), 255, mode)
+            self.assertEqual(int(out[32, 32, 1]), 255, mode)
+            self.assertEqual(int(out[32, 32, 2]), 255, mode)
+            self.assertEqual(int(out[0, 0, 3]), 0, mode)
+
+    def test_feather_is_clamped_on_a_small_mask(self):
+        mask = Image.new("L", (48, 48), 255)
+        result = Image.new("RGB", (48, 48), (255, 255, 255))
+        original = Image.new("RGB", (48, 48), (180, 180, 180))
+        m = _mask_float(mask, (48, 48))
+        self.assertLessEqual(clamp_feather(48, m), 10)
+        out = np.asarray(paste(result, original, mask, mode="feather", feather=48, color=False))
+        self.assertGreater(int(out[24, 24, 3]), 250)
+        self.assertEqual(int(out[24, 24, 0]), 255)
 
     def test_poisson_skips_color_match(self):
         result = Image.new("RGB", (24, 24), (255, 0, 0))

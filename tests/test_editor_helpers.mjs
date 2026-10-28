@@ -42,6 +42,17 @@ test("a lora listing puts folders first and strips the weight extension", () => 
   assert.equal(html.includes("Выберите файл"), false);
 });
 
+test("coverage blur keeps a solid center and a constant field", () => {
+  const flat = new Float32Array(25).fill(0.4);
+  const same = U.boxBlurCoverage(flat, 5, 5, 1);
+  for (const v of same) assert.ok(Math.abs(v - 0.4) < 1e-4);
+  const w = 40, h = 40;
+  const disk = new Float32Array(w * h);
+  for (let y = 8; y < 32; y++) for (let x = 8; x < 32; x++) disk[y * w + x] = 1;
+  const blurred = U.boxBlurCoverage(disk, w, h, 2);
+  assert.ok(blurred[20 * w + 20] > 0.98);
+});
+
 test("a Russian layout key still names the physical letter", () => {
   assert.equal(U.shortcutToken({ key: "я", code: "KeyZ" }), "z");
   assert.equal(U.shortcutToken({ key: "ы", code: "KeyS" }), "s");

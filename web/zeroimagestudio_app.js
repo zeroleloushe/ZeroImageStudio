@@ -31,7 +31,7 @@
     create: blankPipe("create"),
     edit: blankPipe("edit"),
     references: [],
-    area: { outW: 1024, outH: 1024, aspect: "free", context: 0.15, feather: 8, featherMode: "auto", paste: "poisson", colorMatch: true, userPlaced: false, outputLinked: true, mp: 1, mpFilter: 1, pasteOpen: false, editScope: "full", region: null, exactOpen: false, createAspect: "1:1", resPanel: "" },
+    area: { outW: 1024, outH: 1024, aspect: "free", context: 0.15, feather: 8, featherMode: "auto", paste: "feather", colorMatch: true, userPlaced: false, outputLinked: true, mp: 1, mpFilter: 1, pasteOpen: false, editScope: "full", region: null, exactOpen: false, createAspect: "1:1", resPanel: "" },
     fitAfterGenerate: false,
     tool: "genarea",
     color: "#e7c27a",
@@ -994,25 +994,31 @@
       if (!layer || !maskSource) return;
       const w = layer.canvas.width;
       const h = layer.canvas.height;
-      const blurred = document.createElement("canvas");
-      blurred.width = w;
-      blurred.height = h;
-      const bg = blurred.getContext("2d");
-      const px = Math.max(0, Number(featherPx) || 0);
-      bg.fillStyle = "#000";
-      bg.fillRect(0, 0, w, h);
-      if (px > 0) bg.filter = `blur(${px}px)`;
-      bg.drawImage(maskSource, 0, 0, w, h);
-      bg.filter = "none";
-      const img = bg.getImageData(0, 0, w, h);
-      const d = img.data;
-      for (let i = 0; i < d.length; i += 4) {
-        const lum = Math.max(d[i], d[i + 1], d[i + 2]);
-        d[i] = d[i + 1] = d[i + 2] = 255;
-        d[i + 3] = lum;
+      const sample = document.createElement("canvas");
+      sample.width = w;
+      sample.height = h;
+      const sg = sample.getContext("2d");
+      sg.drawImage(maskSource, 0, 0, w, h);
+      const data = sg.getImageData(0, 0, w, h).data;
+      const cov = new Float32Array(w * h);
+      for (let p = 0, i = 0; p < cov.length; p++, i += 4) {
+        cov[p] = (Math.max(data[i], data[i + 1], data[i + 2]) / 255) * (data[i + 3] / 255);
       }
-      bg.putImageData(img, 0, 0);
-      layer.mask = { canvas: blurred, ctx: bg, visible: true };
+      const px = Math.max(0, Math.round(Number(featherPx) || 0));
+      const blurred = px > 0 ? U.boxBlurCoverage(cov, w, h, Math.max(1, Math.round(px / 3))) : cov;
+      const out = document.createElement("canvas");
+      out.width = w;
+      out.height = h;
+      const ctx = out.getContext("2d");
+      const img = ctx.createImageData(w, h);
+      const d = img.data;
+      for (let p = 0, i = 0; p < blurred.length; p++, i += 4) {
+        const a = Math.max(0, Math.min(255, Math.round(blurred[p] * 255)));
+        d[i] = d[i + 1] = d[i + 2] = 255;
+        d[i + 3] = a;
+      }
+      ctx.putImageData(img, 0, 0);
+      layer.mask = { canvas: out, ctx: ctx, visible: true };
       this.maskThumb(layer);
     }
 
@@ -4114,21 +4120,22 @@
     out.width = w; out.height = h;
     const ctx = out.getContext("2d");
     ctx.drawImage(img, 0, 0, w, h);
+    const seam = crop.feather != null ? crop.feather : 0;
     const m = document.createElement("canvas");
     m.width = w; m.height = h;
     const mg = m.getContext("2d");
-    mg.fillStyle = "#000";
-    mg.fillRect(0, 0, w, h);
-    const seam = crop.feather != null ? crop.feather : 0;
-    if (seam > 0) mg.filter = `blur(${Math.max(1, Math.round(seam / 3))}px)`;
     mg.drawImage(crop.mask, 0, 0, w, h);
-    mg.filter = "none";
     const maskPx = mg.getImageData(0, 0, w, h);
     const md = maskPx.data;
-    for (let i = 0; i < md.length; i += 4) {
-      const lum = Math.max(md[i], md[i + 1], md[i + 2]);
+    const cov = new Float32Array(w * h);
+    for (let p = 0, i = 0; p < cov.length; p++, i += 4) {
+      cov[p] = (Math.max(md[i], md[i + 1], md[i + 2]) / 255) * (md[i + 3] / 255);
+    }
+    const blurred = seam > 0 ? U.boxBlurCoverage(cov, w, h, Math.max(1, Math.round(seam / 3))) : cov;
+    for (let p = 0, i = 0; p < blurred.length; p++, i += 4) {
+      const a = Math.max(0, Math.min(255, Math.round(blurred[p] * 255)));
       md[i] = md[i + 1] = md[i + 2] = 255;
-      md[i + 3] = lum;
+      md[i + 3] = a;
     }
     mg.putImageData(maskPx, 0, 0);
     ctx.globalCompositeOperation = "destination-in";

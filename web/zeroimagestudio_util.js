@@ -285,6 +285,47 @@
     return i;
   }
 
+  function boxBlurCoverage(values, w, h, radius) {
+    const r = Math.max(0, Math.round(Number(radius) || 0));
+    const src0 = values instanceof Float32Array ? values : Float32Array.from(values);
+    if (r <= 0 || w < 1 || h < 1) return src0;
+    const k = r * 2 + 1;
+    const horiz = (a) => {
+      const out = new Float32Array(w * h);
+      for (let y = 0; y < h; y++) {
+        const row = y * w;
+        let acc = 0;
+        for (let x = -r; x <= r; x++) acc += a[row + Math.min(w - 1, Math.max(0, x))];
+        out[row] = acc / k;
+        for (let x = 1; x < w; x++) {
+          const leave = Math.min(w - 1, Math.max(0, x - r - 1));
+          const enter = Math.min(w - 1, Math.max(0, x + r));
+          acc += a[row + enter] - a[row + leave];
+          out[row + x] = acc / k;
+        }
+      }
+      return out;
+    };
+    const vert = (a) => {
+      const out = new Float32Array(w * h);
+      for (let x = 0; x < w; x++) {
+        let acc = 0;
+        for (let y = -r; y <= r; y++) acc += a[Math.min(h - 1, Math.max(0, y)) * w + x];
+        out[x] = acc / k;
+        for (let y = 1; y < h; y++) {
+          const leave = Math.min(h - 1, Math.max(0, y - r - 1));
+          const enter = Math.min(h - 1, Math.max(0, y + r));
+          acc += a[enter * w + x] - a[leave * w + x];
+          out[y * w + x] = acc / k;
+        }
+      }
+      return out;
+    };
+    let a = src0;
+    for (let pass = 0; pass < 3; pass++) a = vert(horiz(a));
+    return a;
+  }
+
   function shortcutToken(event) {
     if (!event) return "";
     const code = String(event.code || "");
@@ -349,6 +390,7 @@
     layerMoveIndex,
     layerArrangeCommand,
     shortcutToken,
+    boxBlurCoverage,
     historyBytes,
     recordBytes,
   };
