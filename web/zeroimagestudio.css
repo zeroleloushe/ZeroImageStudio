@@ -89,7 +89,7 @@ select.dd { appearance: none; min-width: 0; max-width: 100%; }
 }
 .nh {
   height: 32px; border-radius: 8px 8px 0 0; display: flex; align-items: center; gap: 7px; padding: 0 10px;
-  background: linear-gradient(90deg, color-mix(in srgb, var(--c) 28%, #1b1e24), #1b1e24 70%);
+  background: #1c2026;
   border-bottom: 1px solid var(--ln); font-weight: 700; font-size: 12px; color: #eef1f6; flex: none;
   flex-wrap: nowrap; min-width: 0; overflow: hidden; white-space: nowrap; cursor: grab;
 }
@@ -359,7 +359,8 @@ input.range::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; heigh
 .krea-tips { display: flex; flex-direction: column; gap: 2px; font-size: 10.5px; line-height: 1.35; }
 .krea-tips .hot { color: #e7c27a; }
 .krea-task button { font-size: 11px; line-height: 1.25; height: auto; min-height: 26px; padding: 4px 6px; white-space: normal; }
-.krea-task button[data-krea-family="identity"] { grid-column: 1 / -1; }
+.krea-task { grid-template-columns: 1fr; }
+.krea-task button[data-krea-task="identity"] { white-space: normal; }
 .lora-row .task-badge {
   flex: none; font-size: 9px; font-weight: 700; line-height: 16px; padding: 0 4px; border-radius: 3px;
   color: #ffd2b0; background: rgba(255, 122, 26, .18); border: 1px solid rgba(255, 122, 26, .45);
@@ -682,9 +683,9 @@ body[data-pipe="create"] [data-for="edit"] { display: none; }
   display: flex; align-items: center; gap: 6px; width: 100%; text-align: left;
   height: 28px; padding: 0 8px; border-radius: 5px; color: var(--tx); background: transparent;
 }
-.preset-side button.nav.on { background: var(--ac); color: #111; font-weight: 700; }
+.preset-side button.nav.on { background: #2c313b; color: #eef1f6; font-weight: 700; }
 .preset-side button.nav .c { margin-left: auto; font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 10px; color: var(--mu); }
-.preset-side button.nav.on .c { color: #111; }
+.preset-side button.nav.on .c { color: #eef1f6; }
 .preset-cats { display: flex; flex-direction: column; gap: 2px; overflow: auto; min-height: 0; flex: 1; }
 .preset-cat { display: flex; align-items: center; gap: 2px; }
 .preset-cat .nav { flex: 1; min-width: 0; }

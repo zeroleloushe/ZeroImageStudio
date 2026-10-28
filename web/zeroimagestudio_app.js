@@ -1639,7 +1639,7 @@
       <label style="${c.loader === "diffusion" ? "" : "display:none"}">Тип CLIP ${sel("clip_type", cat.clip_types, c.clip_type)}</label>
       <label style="${c.loader === "diffusion" ? "" : "display:none"}">VAE ${sel("vae", cat.vaes, c.vae)}</label>
       <label>Тип весов ${sel("weight_dtype", cat.weight_dtypes, c.weight_dtype)}</label>
-      ${sug.unet ? `<div class="mu">Можно любой совместимый файл. Часто ставят ${escapeHtml([sug.unet, sug.clip, sug.vae].filter(Boolean).join(" · "))}.</div>` : ""}
+      ${sug.unet ? `<div class="mu" title="${escapeHtml("Часто ставят " + [sug.unet, sug.clip, sug.vae].filter(Boolean).join(" · "))}">Можно другой совместимый файл</div>` : ""}
     `;
     const methodRow = state.pipeline === "edit"
       ? `<label>Способ <select class="dd" data-file="method" style="width:100%">${["inpaint", "krea2_edit", "qwen_image_21", "qwen_image"].map((m) => `<option ${c.method === m ? "selected" : ""} value="${m}">${methodLabel(m)}</option>`).join("")}</select></label>`
@@ -1731,7 +1731,7 @@
     }).join("");
     $("lora-panel").innerHTML = `<div class="lora-stack">
       <button type="button" class="b" id="btn-lora-add">+ Добавить LoRA</button>
-      ${rows || `<div class="empty">В стеке пусто. Добавьте LoRA из папки models/loras — весь каталог здесь не показывается.</div>`}
+      ${rows || `<div class="empty" title="Весь каталог models/loras здесь не показывается. Добавьте нужный файл.">В стеке пусто.</div>`}
     </div>`;
     if (window.zeroImageStudioHydrateIcons) window.zeroImageStudioHydrateIcons($("lora-panel"));
     sealCollapsed($("lora-node"));
@@ -1922,7 +1922,7 @@
         <select id="seed-mode" class="dd" title="Режим сида"><option value="random" ${s.seedMode === "random" ? "selected" : ""}>случайный</option><option value="fixed" ${s.seedMode === "fixed" ? "selected" : ""}>фиксированный</option><option value="increment" ${s.seedMode === "increment" ? "selected" : ""}>+1</option></select></div>
       <span>Шаги</span><div class="row"><input id="steps-range" class="range" type="range" min="1" max="80" value="${U.finiteNumber(s.steps, 20)}"><input id="steps" class="f" style="width:48px" value="${U.finiteNumber(s.steps, 20)}"></div>
       <span>CFG</span><div class="row"><input id="cfg-range" class="range" type="range" min="0" max="12" step="0.1" value="${U.finiteNumber(s.cfg, 7)}"><input id="cfg" class="f" style="width:48px" value="${U.finiteNumber(s.cfg, 7)}"></div>
-      <span>Шум</span><div class="row" id="denoise-row"><input id="denoise-range" class="range" type="range" min="0" max="1" step="0.01" value="${U.finiteNumber(s.denoise, 1)}"><input id="denoise" class="f" style="width:48px" value="${U.finiteNumber(s.denoise, 1)}"></div>
+      <span id="denoise-label">Шум</span><div class="row" id="denoise-row"><input id="denoise-range" class="range" type="range" min="0" max="1" step="0.01" value="${U.finiteNumber(s.denoise, 1)}"><input id="denoise" class="f" style="width:48px" value="${U.finiteNumber(s.denoise, 1)}"></div>
       <div class="mu" id="denoise-note" style="grid-column:1 / -1"></div>
       <span>Сэмплер</span><select id="sampler" class="dd">${opt(cat.samplers, s.sampler)}</select>
       <span>Планировщик</span><select id="scheduler" class="dd">${opt(cat.schedulers, s.scheduler)}</select>
@@ -1944,12 +1944,17 @@
     const range = $("denoise-range");
     const num = $("denoise");
     const note = $("denoise-note");
-    if (range && num) {
+    const label = $("denoise-label");
+    const hideNoise = state.pipeline === "create";
+    if (label) label.hidden = hideNoise;
+    if (range && range.parentElement) range.parentElement.hidden = hideNoise;
+    if (note) note.hidden = hideNoise;
+    if (range && num && !hideNoise) {
       range.disabled = effect.locked;
       num.disabled = effect.locked;
       if (effect.locked) { range.value = "1"; num.value = "1"; }
     }
-    if (note) note.textContent = effect.note;
+    if (note && !hideNoise) note.textContent = effect.note;
     const neg = $("negative");
     const show = UX.showNegative(state.sampler.cfg);
     if (neg) neg.hidden = !show;
@@ -2330,7 +2335,7 @@
     const regionBody = region ? `
         <div class="insp-h">Мегапиксели</div>
         <div class="mp-row">${mpButtons}${mpCustom ? `<input id="g-mp-custom" class="f" inputmode="decimal" aria-label="Своё значение в мегапикселях" value="${Number(a.mp) || 1}" style="width:64px">` : ""}</div>
-        <div class="mu">Пропорцию берёт рамка на холсте. Углы и край рамки двигаются любым инструментом.</div>
+        <div class="mu" title="Пропорцию берёт рамка на холсте. Углы и край рамки двигаются любым инструментом.">Пропорция с рамки</div>
         <details class="insp-adv" id="insp-exact" ${a.exactOpen ? "open" : ""}>
           <summary>Точно</summary>
           <div class="insp-grid">
@@ -2662,22 +2667,28 @@
       renderModelWarn();
       return;
     }
-    const which = state.pipeline !== "edit" ? "create" : (kreaTaskId() === "identity" ? "identity" : "edit");
+    const editKrea = state.pipeline === "edit";
+    if (host) host.hidden = !editKrea;
+    if (tips) tips.hidden = !editKrea;
+    if (!editKrea) {
+      renderModelWarn();
+      return;
+    }
+    const task = kreaTaskId();
     if (host) {
       host.innerHTML = `
-        <button type="button" data-krea-family="create" class="${which === "create" ? "on" : ""}" aria-pressed="${which === "create"}">Создать</button>
-        <button type="button" data-krea-family="edit" class="${which === "edit" ? "on" : ""}" aria-pressed="${which === "edit"}">Править</button>
-        <button type="button" data-krea-family="identity" class="${which === "identity" ? "on" : ""}" aria-pressed="${which === "identity"}">Персонаж по референсу</button>`;
+        <button type="button" data-krea-task="general" class="${task === "general" ? "on" : ""}" aria-pressed="${task === "general"}">Правка</button>
+        <button type="button" data-krea-task="identity" class="${task === "identity" ? "on" : ""}" aria-pressed="${task === "identity"}">Персонаж по референсу</button>`;
     }
-    if (tips && state.pipeline === "create") tips.innerHTML = "";
-    else if (tips) {
+    if (tips) {
       const frame = editor ? generationSize() : { w: 0, h: 0 };
       const mp = (frame.w * frame.h) / 1e6;
       const over = mp > 2;
       const removal = U.requestsRemoval(state.prompt || "");
-      tips.innerHTML = `
-        <div class="${over ? "hot" : "mu"}">До 2 Мп для Krea Edit.${over ? ` Сейчас ${mp.toFixed(2)} — выше исходник может протекать, а объект двоиться.` : ""}</div>
-        <div class="${removal ? "hot" : "mu"}">Для удаления объекта — модель Raw, CFG около 3, около 20 шагов.</div>`;
+      const limit = over ? `Сейчас ${mp.toFixed(2)} Мп` : "До 2 Мп";
+      const limitTitle = "Выше 2 Мп исходник может протекать, а объект двоиться.";
+      const drop = removal ? `<div class="mu" title="Для удаления объекта лучше модель Raw, CFG около 3 и около 20 шагов.">Удаление: Raw, CFG ~3</div>` : "";
+      tips.innerHTML = `<div class="${over ? "hot" : "mu"}" title="${escapeHtml(limitTitle)}">${limit}</div>${drop}`;
     }
     renderModelWarn();
   }
