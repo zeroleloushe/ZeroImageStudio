@@ -44,6 +44,7 @@
     loraQuery: "",
     loraSelected: "",
     loraBrowse: "",
+    loraPreviews: {},
     loraPickQuery: "",
     presets: [],
     gallery: [],
@@ -213,6 +214,17 @@
       this.brushCursor.hidden = true;
       this.brushCursor.innerHTML = '<i class="brush-cursor-dark"></i><i class="brush-cursor-light"></i>';
       this.stage.appendChild(this.brushCursor);
+      this.variantPreview = document.createElement("img");
+      this.variantPreview.id = "variant-preview";
+      this.variantPreview.className = "variant-preview";
+      this.variantPreview.alt = "";
+      this.variantPreview.hidden = true;
+      this.stage.appendChild(this.variantPreview);
+      this.variantStrip = document.createElement("div");
+      this.variantStrip.id = "variant-strip";
+      this.variantStrip.className = "variant-strip";
+      this.variantStrip.hidden = true;
+      this.stage.appendChild(this.variantStrip);
       this._pointer = null;
       this.ga = this.overlay.querySelector(".ga");
       this.doc = { w: 1024, h: 1024 };
@@ -507,6 +519,18 @@
         run.style.top = (this.panY + ry * this.zoom) + "px";
         run.style.width = Math.max(8, rw * this.zoom) + "px";
         run.style.height = Math.max(8, rh * this.zoom) + "px";
+      }
+      const preview = $("variant-preview");
+      if (preview && !preview.hidden) {
+        const region = state.pipeline === "edit" && state.area.editScope === "region";
+        const rx = region ? g.x : 0;
+        const ry = region ? g.y : 0;
+        const rw = region ? g.w : this.doc.w;
+        const rh = region ? g.h : this.doc.h;
+        preview.style.left = (this.panX + rx * this.zoom) + "px";
+        preview.style.top = (this.panY + ry * this.zoom) + "px";
+        preview.style.width = Math.max(8, rw * this.zoom) + "px";
+        preview.style.height = Math.max(8, rh * this.zoom) + "px";
       }
     }
 
@@ -1738,27 +1762,22 @@
     rememberCurrentModel();
   }
 
-  function loraListing(path, query) {
-    const files = state.loras || [];
-    const q = (query || "").trim().toLowerCase();
-    if (q) return { folders: [], files: files.filter((n) => n.toLowerCase().includes(q)).sort() };
-    const prefix = path ? path.replace(/\/+$/, "") + "/" : "";
-    const folders = new Set();
-    const here = [];
-    for (const raw of files) {
-      const name = U.normalizeSlashes(raw);
-      if (prefix && !name.startsWith(prefix)) continue;
-      const rest = prefix ? name.slice(prefix.length) : name;
-      const slash = rest.indexOf("/");
-      if (slash >= 0) folders.add(rest.slice(0, slash));
-      else here.push(raw);
+  function loraRemotePreviews() {
+    const remote = {};
+    for (const lora of activeLoras()) {
+      if (lora && lora.civitai && lora.civitai.preview) remote[U.normalizeSlashes(lora.name)] = lora.civitai.preview;
     }
-    return { folders: [...folders].sort(), files: here.sort() };
+    return remote;
   }
 
-  function knownPreview(name) {
-    const l = activeLoras().find((x) => x.name === name);
-    return (l && l.civitai && l.civitai.preview) || "";
+  function syncPickerMarks() {
+    const names = new Set(activeLoras().map((lora) => lora.name));
+    document.querySelectorAll("#lora-picker [data-pick]").forEach((row) => {
+      const on = names.has(row.dataset.pick);
+      let tag = row.querySelector(".tag");
+      if (on && !tag) row.insertAdjacentHTML("beforeend", `<span class="tag">Добавлена</span>`);
+      if (!on && tag) tag.remove();
+    });
   }
 
   function openLoraPicker(opts) {
@@ -1768,35 +1787,33 @@
       box.classList.add("wide");
       const ok = box.querySelector("[data-ok]");
       ok.textContent = "Готово";
+      ok.classList.remove("ac");
       ok.onclick = () => close();
+      let viewKey = null;
       const paint = () => {
         const host = $("lora-picker");
         if (!host) return;
         const path = state.loraBrowse || "";
         const q = state.loraPickQuery || "";
-        const listed = loraListing(path, q);
-        const parts = path ? path.split("/") : [];
-        let acc = "";
-        const crumbs = [`<button type="button" class="b s" data-crumb="">loras</button>`].concat(parts.map((part) => {
-          acc = acc ? acc + "/" + part : part;
-          return `<button type="button" class="b s" data-crumb="${escapeHtml(acc)}">${escapeHtml(part)}</button>`;
-        })).join("");
-        const added = new Set(activeLoras().map((l) => l.name));
-        const dirs = q ? "" : listed.folders.map((f) => {
-          const next = path ? path + "/" + f : f;
-          return `<button type="button" class="lora-dir" data-enter="${escapeHtml(next)}"><span class="lora-ph"></span><span class="nm">${escapeHtml(f)}</span><span class="mu">папка</span></button>`;
-        }).join("");
-        const rows = listed.files.map((name) => {
-          const preview = knownPreview(name);
-          const thumb = preview ? `<img src="${escapeHtml(preview)}" alt="">` : `<span class="lora-ph"></span>`;
-          const mark = added.has(name) ? `<span class="tag tgr">добавлена</span>` : "";
-          return `<button type="button" class="lora-file" data-pick="${escapeHtml(name)}">${thumb}<span class="nm" title="${escapeHtml(name)}">${escapeHtml(q ? U.normalizeSlashes(name) : U.fileBase(name))}</span>${mark}</button>`;
-        }).join("");
-        host.innerHTML = `
-          <input id="lora-pick-search" class="f" style="width:100%;font-family:inherit" placeholder="Поиск по всем папкам" value="${escapeHtml(q)}">
-          <div class="lora-crumbs">${crumbs}</div>
-          <div class="lora-pick-list">${dirs}${rows || `<div class="empty">В этой папке пусто.</div>`}</div>
-          <div class="mu">Выберите файл, чтобы добавить его в стек.</div>`;
+        const key = path + "\n" + q;
+        const list = host.querySelector(".lora-pick-list");
+        const keep = key === viewKey && list ? list.scrollTop : 0;
+        viewKey = key;
+        const focus = document.activeElement && document.activeElement.id === "lora-pick-search";
+        const caret = focus ? document.activeElement.selectionStart : null;
+        const items = U.prepareLoraListing({
+          files: state.loras || [],
+          path: path,
+          query: q,
+          previews: state.loraPreviews || {},
+          remote: loraRemotePreviews(),
+          added: activeLoras().map((lora) => lora.name),
+          previewUrl: (rel) => "/zeroimagestudio/loras/preview?name=" + encodeURIComponent(rel),
+        });
+        host.innerHTML = U.loraPickerHtml({ path: path, query: q, items: items });
+        const next = host.querySelector(".lora-pick-list");
+        if (next && keep) next.scrollTop = keep;
+        if (window.zeroImageStudioHydrateIcons) window.zeroImageStudioHydrateIcons(host);
         const search = $("lora-pick-search");
         search.oninput = () => {
           state.loraPickQuery = search.value;
@@ -1805,21 +1822,28 @@
           const again = $("lora-pick-search");
           if (again) { again.focus(); again.setSelectionRange(pos, pos); }
         };
-        host.onclick = (ev) => {
-          const crumb = ev.target.closest("[data-crumb]");
-          const enter = ev.target.closest("[data-enter]");
-          const pick = ev.target.closest("[data-pick]");
-          if (crumb) { state.loraBrowse = crumb.dataset.crumb || ""; state.loraPickQuery = ""; paint(); }
-          if (enter) { state.loraBrowse = enter.dataset.enter; state.loraPickQuery = ""; paint(); }
-          if (pick) {
-            if (swapTask) {
-              const row = taskLoraRow();
-              if (row) row.name = pick.dataset.pick;
-              rememberTaskLora();
-            } else ensureLora(pick.dataset.pick);
-            renderLoras(); renderPipe(); updateGenerateButton(); paint();
-          }
-        };
+        if (focus && caret != null) {
+          search.focus();
+          search.setSelectionRange(caret, caret);
+        }
+      };
+      const host = $("lora-picker");
+      host.onclick = (ev) => {
+        const crumb = ev.target.closest("[data-crumb]");
+        const enter = ev.target.closest("[data-enter]");
+        const pick = ev.target.closest("[data-pick]");
+        if (crumb) { state.loraBrowse = crumb.dataset.crumb || ""; state.loraPickQuery = ""; paint(); return; }
+        if (enter) { state.loraBrowse = enter.dataset.enter; state.loraPickQuery = ""; paint(); return; }
+        if (!pick) return;
+        if (swapTask) {
+          const row = taskLoraRow();
+          if (row) row.name = pick.dataset.pick;
+          rememberTaskLora();
+        } else ensureLora(pick.dataset.pick);
+        renderLoras();
+        renderPipe();
+        updateGenerateButton();
+        syncPickerMarks();
       };
       paint();
     });
@@ -1846,18 +1870,20 @@
       const top = path.includes("/") ? path.split("/")[0] : "";
       folders[top] = (folders[top] || 0) + 1;
     });
-    const tree = [`<button type="button" class="fld ${folder === "" ? "on" : ""}" data-folder="">Все<span class="c">${files.length}</span></button>`]
+    const tree = [`<button type="button" class="fld ${folder === "" ? "on" : ""}" data-folder=""><span class="lora-mini" data-i="folder" data-s="14"></span>Все<span class="c">${files.length}</span></button>`]
       .concat(Object.keys(folders).filter(Boolean).sort().map((f) =>
-        `<button type="button" class="fld ${folder === f ? "on" : ""}" data-folder="${escapeHtml(f)}">${escapeHtml(f)}<span class="c">${folders[f]}</span></button>`
+        `<button type="button" class="fld ${folder === f ? "on" : ""}" data-folder="${escapeHtml(f)}"><span class="lora-mini" data-i="folder" data-s="14"></span>${escapeHtml(f)}<span class="c">${folders[f]}</span></button>`
       )).join("");
+    const tableScroll = ($("lora-panel") && $("lora-panel").querySelector(".lora-table") || {}).scrollTop || 0;
+    const treeScroll = ($("lora-panel") && $("lora-panel").querySelector(".tree") || {}).scrollTop || 0;
     const rows = shown.map((name) => {
-      const base = U.fileBase(name);
       const hit = activeLoras().find((l) => l.name === name);
       const on = hit && hit.enabled;
-      return `<tr data-lora="${escapeHtml(name)}" class="${state.loraSelected === name ? "on" : ""}"><td><span class="cb ${on ? "on" : ""}" data-lora-toggle="${escapeHtml(name)}"></span></td><td>${escapeHtml(base)}</td><td class="mono">${on ? Number(hit.strength_model).toFixed(2) : "—"}</td><td class="mono">${on && hit.triggers ? hit.triggers.filter((t) => t.enabled !== false).length : ""}</td></tr>`;
+      const display = U.loraDisplay(name);
+      return `<tr data-lora="${escapeHtml(name)}" class="${state.loraSelected === name ? "on" : ""}"><td><span class="cb ${on ? "on" : ""}" data-lora-toggle="${escapeHtml(name)}"></span></td><td title="${escapeHtml(display.title)}">${escapeHtml(display.label)}</td><td class="mono">${on ? Number(hit.strength_model).toFixed(2) : "—"}</td><td class="mono">${on && hit.triggers ? hit.triggers.filter((t) => t.enabled !== false).length : ""}</td></tr>`;
     }).join("");
     const sel = activeLoras().find((l) => l.name === state.loraSelected) || null;
-    const detail = sel ? loraDetail(sel) : `<div class="empty">Выберите LoRA в списке. Список читается из папки loras ComfyUI.</div>`;
+    const detail = sel ? loraDetail(sel) : `<div class="empty" title="Список читается из папки loras ComfyUI.">Выберите LoRA.</div>`;
     const task = isKreaEdit() ? taskLoraRow() : null;
     $("lora-panel").innerHTML = `
       ${task ? `<div class="lora-stack">${taskRowHtml(task)}</div>` : ""}
@@ -1869,6 +1895,11 @@
         </div>
       </div>
       <div id="lora-detail">${detail}</div>`;
+    const table = $("lora-panel").querySelector(".lora-table");
+    const treeEl = $("lora-panel").querySelector(".tree");
+    if (table) table.scrollTop = tableScroll;
+    if (treeEl) treeEl.scrollTop = treeScroll;
+    if (window.zeroImageStudioHydrateIcons) window.zeroImageStudioHydrateIcons($("lora-panel"));
     const search = $("lora-search");
     if (search) {
       search.addEventListener("input", () => { state.loraQuery = search.value; renderLoras(); });
@@ -2757,6 +2788,7 @@
       ]);
       state.catalog = models;
       state.loras = loras.files || [];
+      state.loraPreviews = loras.previews || {};
       syncKreaStack();
       renderFiles();
       renderKreaChrome();
@@ -3698,67 +3730,20 @@
       const urls = images.map((img) => `/view?filename=${encodeURIComponent(img.filename)}&type=${encodeURIComponent(img.type || "output")}&subfolder=${encodeURIComponent(img.subfolder || "")}`);
       const pick = await chooseVariant(urls);
       if (pick == null) { toast("Варианты отклонены. На холст ничего не добавлено."); return; }
-      const blob = await (await fetch(urls[pick])).blob();
-      const meta = generationMeta(spec, built.final_prompt);
-      await rememberGallery(blob, meta);
-      let pasted = blob;
-      if (crop && regionFit) {
-        const framed = await loadImage(URL.createObjectURL(blob));
-        pasted = await canvasBlob(cropFrameContent(framed, regionFit, crop.canvas.width, crop.canvas.height));
+      if (pick === "all") {
+        const snap = editor.fullSnapshot();
+        for (let i = 0; i < urls.length; i++) await commitVariant(urls[i], spec, built, crop, regionFit, { forceLayer: true, keepMask: true });
+        if (crop && spec.has_mask) editor.consumeWorkMask();
+        editor.pushUndo(snap);
+        renderLayers();
+        toast("Все варианты легли отдельными слоями.");
+        return;
       }
-      if (crop) {
-        try {
-          const fd = new FormData();
-          fd.append("result", pasted, "result.png");
-          fd.append("original", await canvasBlob(crop.canvas), "original.png");
-          fd.append("mask", await canvasBlob(crop.mask), "mask.png");
-          fd.append("mode", state.area.paste);
-          fd.append("feather", String(state.area.feather));
-          fd.append("color_match", state.area.colorMatch ? "1" : "0");
-          const res = await fetch("/zeroimagestudio/paste", { method: "POST", body: fd });
-          if (!res.ok) throw new Error(await res.text());
-          pasted = await res.blob();
-        } catch (err) {
-          toast("Poisson на сервере не вышел, вклейка растушёвкой. " + err.message);
-          pasted = await localFeather(pasted, crop);
-        }
-      }
-      const img = await loadImage(URL.createObjectURL(pasted));
       const snap = editor.fullSnapshot();
-      const replace = replacesCanvas();
-      const usedMask = !!(crop && spec.has_mask);
-      let placed = null;
-      if (replace) {
-        const canvas = crop ? imageCanvas(img) : scaleCanvas(img, editor.doc.w, editor.doc.h);
-        const layer = editor.makeLayer("Холст", canvas);
-        layer.x = 0; layer.y = 0; layer.meta = meta;
-        editor.layers = [layer];
-        editor.active = 0;
-        placed = layer;
-        toast("Готово, холст заменён. Сид " + spec.seed + ". Прошлый кадр в отмене и в галерее.");
-      } else {
-        const n = editor.layers.filter((l) => l.name.startsWith(state.pipeline === "edit" ? "Правка" : "Генерация")).length + 1;
-        const label = state.pipeline === "edit" ? ("Правка " + n) : ("Генерация " + n);
-        if (!crop) {
-          const layerCanvas = scaleCanvas(img, editor.gen.w, editor.gen.h);
-          const layer = editor.makeLayer(label, layerCanvas);
-          layer.x = editor.gen.x; layer.y = editor.gen.y; layer.meta = meta;
-          editor.addLayer(layer);
-          placed = layer;
-        } else {
-          const c = imageCanvas(img);
-          const layer = editor.makeLayer(label, c);
-          layer.x = crop.x; layer.y = crop.y; layer.meta = meta;
-          editor.addLayer(layer);
-          placed = layer;
-        }
-        toast("Готово, новый слой. Сид " + spec.seed + ".");
-      }
-      if (usedMask && placed && !replace) editor.attachLayerMask(placed, crop.mask, state.area.feather);
-      if (usedMask) editor.consumeWorkMask();
-      if (placed) editor.thumb(placed);
+      const done = await commitVariant(urls[pick], spec, built, crop, regionFit, {});
       editor.pushUndo(snap);
       renderLayers();
+      toast(done.replace ? "Готово, холст заменён. Сид " + spec.seed + ". Прошлый кадр в отмене и в галерее." : "Готово, новый слой. Сид " + spec.seed + ".");
     } catch (err) {
       const msg = err.message || String(err);
       const missing = /не выбран/i.test(msg);
@@ -3821,28 +3806,115 @@
     return canvasBlob(out);
   }
 
+  async function commitVariant(url, spec, built, crop, regionFit, opts) {
+    const blob0 = await (await fetch(url)).blob();
+    const meta = generationMeta(spec, built.final_prompt);
+    await rememberGallery(blob0, meta);
+    let pasted = blob0;
+    if (crop && regionFit) {
+      const framed = await loadImage(URL.createObjectURL(blob0));
+      pasted = await canvasBlob(cropFrameContent(framed, regionFit, crop.canvas.width, crop.canvas.height));
+    }
+    if (crop) {
+      try {
+        const fd = new FormData();
+        fd.append("result", pasted, "result.png");
+        fd.append("original", await canvasBlob(crop.canvas), "original.png");
+        fd.append("mask", await canvasBlob(crop.mask), "mask.png");
+        fd.append("mode", state.area.paste);
+        fd.append("feather", String(state.area.feather));
+        fd.append("color_match", state.area.colorMatch ? "1" : "0");
+        const res = await fetch("/zeroimagestudio/paste", { method: "POST", body: fd });
+        if (!res.ok) throw new Error(await res.text());
+        pasted = await res.blob();
+      } catch (err) {
+        toast("Poisson на сервере не вышел, вклейка растушёвкой. " + err.message);
+        pasted = await localFeather(pasted, crop);
+      }
+    }
+    const img = await loadImage(URL.createObjectURL(pasted));
+    const replace = !(opts && opts.forceLayer) && replacesCanvas();
+    const usedMask = !!(crop && spec.has_mask);
+    let placed = null;
+    if (replace) {
+      const canvas = crop ? imageCanvas(img) : scaleCanvas(img, editor.doc.w, editor.doc.h);
+      const layer = editor.makeLayer("Холст", canvas);
+      layer.x = 0; layer.y = 0; layer.meta = meta;
+      editor.layers = [layer];
+      editor.active = 0;
+      placed = layer;
+    } else {
+      const n = editor.layers.filter((l) => l.name.startsWith(state.pipeline === "edit" ? "Правка" : "Генерация")).length + 1;
+      const label = state.pipeline === "edit" ? ("Правка " + n) : ("Генерация " + n);
+      if (!crop) {
+        const layerCanvas = scaleCanvas(img, editor.gen.w, editor.gen.h);
+        const layer = editor.makeLayer(label, layerCanvas);
+        layer.x = editor.gen.x; layer.y = editor.gen.y; layer.meta = meta;
+        editor.addLayer(layer);
+        placed = layer;
+      } else {
+        const c = imageCanvas(img);
+        const layer = editor.makeLayer(label, c);
+        layer.x = crop.x; layer.y = crop.y; layer.meta = meta;
+        editor.addLayer(layer);
+        placed = layer;
+      }
+    }
+    if (usedMask && placed && !replace) editor.attachLayerMask(placed, crop.mask, state.area.feather);
+    if (usedMask && !(opts && opts.keepMask)) editor.consumeWorkMask();
+    if (placed) editor.thumb(placed);
+    return { placed, replace, meta };
+  }
+
   function chooseVariant(urls) {
-    if (urls.length <= 1) return Promise.resolve(0);
+    if (!urls || urls.length <= 1) return Promise.resolve(0);
     const host = $("variant-strip");
+    const preview = $("variant-preview");
     if (!host) return Promise.resolve(0);
-    host.hidden = false;
-    host.innerHTML = `<b>Варианты</b>` + urls.map((u, i) => `<div class="var"><img src="${escapeHtml(u)}" alt=""><button type="button" class="b" data-accept="${i}">Принять на слой</button><button type="button" class="b s" data-reject="${i}">Отклонить</button></div>`).join("");
+    let index = 0;
+    let collapsed = false;
+    const paint = () => {
+      host.hidden = false;
+      host.classList.toggle("collapsed", collapsed);
+      host.innerHTML = `<button type="button" class="fold" data-var-fold title="${collapsed ? "Развернуть варианты" : "Свернуть варианты"}">${collapsed ? "▸" : "▾"}</button>
+        <div class="thumbs">${urls.map((u, i) => `<button type="button" class="thumb ${i === index ? "on" : ""}" data-var="${i}" title="Вариант ${i + 1}"><img src="${escapeHtml(u)}" alt=""></button>`).join("")}</div>
+        <button type="button" class="b" data-var-accept>Принять</button>
+        <button type="button" class="b" data-var-all>Все как слои</button>
+        <button type="button" class="b s" data-var-cancel>Отменить</button>`;
+      if (preview) {
+        preview.hidden = false;
+        preview.src = urls[index];
+      }
+      if (editor) editor.requestDraw();
+    };
+    paint();
     return new Promise((resolve) => {
+      const finish = (value) => {
+        window.removeEventListener("keydown", onKey, true);
+        host.hidden = true;
+        host.innerHTML = "";
+        host.onclick = null;
+        if (preview) { preview.hidden = true; preview.removeAttribute("src"); }
+        if (editor) editor.requestDraw();
+        resolve(value);
+      };
+      const onKey = (e) => {
+        const tag = ((e.target && e.target.tagName) || "").toLowerCase();
+        if (tag === "input" || tag === "textarea" || tag === "select") return;
+        if (e.key !== "ArrowLeft" && e.key !== "ArrowRight" && !/^[1-9]$/.test(e.key)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        index = U.nextVariantIndex(index, urls.length, e.key);
+        paint();
+      };
+      window.addEventListener("keydown", onKey, true);
       host.onclick = (e) => {
-        const accept = e.target.closest("[data-accept]");
-        const reject = e.target.closest("[data-reject]");
-        if (accept) {
-          host.hidden = true;
-          host.innerHTML = "";
-          resolve(Number(accept.dataset.accept));
-        } else if (reject) {
-          const card = reject.closest(".var");
-          if (card) card.remove();
-          if (!host.querySelector(".var")) {
-            host.hidden = true;
-            resolve(null);
-          }
-        }
+        const thumb = e.target.closest("[data-var]");
+        if (e.target.closest("[data-var-fold]")) { collapsed = !collapsed; paint(); return; }
+        if (thumb) { index = Number(thumb.dataset.var); paint(); return; }
+        if (e.target.closest("[data-var-accept]")) finish(index);
+        else if (e.target.closest("[data-var-all]")) finish("all");
+        else if (e.target.closest("[data-var-cancel]")) finish(null);
       };
     });
   }
@@ -6513,7 +6585,11 @@
       node.classList.toggle("panel-hidden", gone);
       sealCollapsed(node);
       const dot = node.querySelector(":scope > .nh .d");
-      if (dot && id !== "canvas") dot.title = on ? "Развернуть" : "Свернуть";
+      if (dot && id !== "canvas") {
+        dot.tabIndex = 0;
+        dot.setAttribute("role", "button");
+        dot.title = on ? "Развернуть" : "Свернуть";
+      }
     });
   }
 
@@ -6649,14 +6725,24 @@
       header.addEventListener("pointercancel", up);
       try { header.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
     });
+    const toggleFromDot = (dot) => {
+      const node = dot && dot.closest("[data-panel]");
+      if (!node || node.dataset.panel === "canvas") return;
+      togglePanel(node.dataset.panel);
+    };
     cols.addEventListener("click", (e) => {
       const dot = e.target.closest(".nh .d");
       if (!dot || !cols.contains(dot)) return;
-      const node = dot.closest("[data-panel]");
-      if (!node || node.dataset.panel === "canvas") return;
       e.preventDefault();
       e.stopPropagation();
-      togglePanel(node.dataset.panel);
+      toggleFromDot(dot);
+    });
+    cols.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter" && e.key !== " ") return;
+      const dot = e.target.closest && e.target.closest(".nh .d");
+      if (!dot || e.target !== dot) return;
+      e.preventDefault();
+      toggleFromDot(dot);
     });
     const place = $("place-toggle");
     if (place) place.onclick = (e) => {
@@ -6713,6 +6799,7 @@
       state.hints = hints.hints || [];
       state.catalog = models;
       state.loras = loras.files || [];
+      state.loraPreviews = loras.previews || {};
       state.presets = presets.items || [];
       state.gallery = gallery.items || [];
       state.galleryTotal = Number(gallery && gallery.total != null ? gallery.total : state.gallery.length) || 0;

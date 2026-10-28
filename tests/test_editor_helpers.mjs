@@ -11,6 +11,44 @@ test("escapeHtml encodes the characters that break markup", () => {
   assert.equal(U.escapeHtml(null), "");
 });
 
+test("a lora listing puts folders first and strips the weight extension", () => {
+  const files = [
+    "Krea 2/New style/a.safetensors",
+    "Krea 2/New style/a.preview.png",
+    "Krea 2/Detailer-KREA2.safetensors",
+    "flat.pt",
+  ];
+  const root = U.prepareLoraListing({ files, path: "", previews: {} });
+  assert.equal(root[0].kind, "folder");
+  assert.equal(root[0].label, "Krea 2");
+  assert.equal(root[0].meta, "папка · 2");
+  assert.equal(root[1].kind, "file");
+  assert.equal(root[1].label, "flat");
+  assert.equal(root[1].ext, "pt");
+  const inside = U.prepareLoraListing({ files, path: "Krea 2", added: ["Krea 2/Detailer-KREA2.safetensors"], previews: { "Krea 2/New style/a.safetensors": "Krea 2/New style/a.preview.png" } });
+  assert.equal(inside[0].kind, "folder");
+  assert.equal(inside[0].label, "New style");
+  assert.equal(inside[1].label, "Detailer-KREA2");
+  assert.equal(inside[1].ext, "safetensors");
+  assert.equal(inside[1].title, "Krea 2/Detailer-KREA2.safetensors");
+  const nested = U.prepareLoraListing({ files, path: "Krea 2/New style" });
+  assert.equal(nested[0].preview.endsWith("a.preview.png"), true);
+  assert.equal(U.parentFolder("Krea 2/New style"), "Krea 2");
+  assert.equal(U.parentFolder(""), "");
+  const html = U.loraPickerHtml({ path: "Krea 2", query: "", items: inside });
+  assert.match(html, /data-i="folder"/);
+  assert.match(html, /Назад/);
+  assert.match(html, /Добавлена/);
+  assert.equal(html.includes("Выберите файл"), false);
+});
+
+test("arrow keys and digits move the variant selection", () => {
+  assert.equal(U.nextVariantIndex(0, 4, "ArrowRight"), 1);
+  assert.equal(U.nextVariantIndex(0, 4, "ArrowLeft"), 3);
+  assert.equal(U.nextVariantIndex(2, 4, "3"), 2);
+  assert.equal(U.nextVariantIndex(1, 3, "9"), 1);
+});
+
 test("basename and file base accept Windows separators", () => {
   assert.equal(U.basenameOf("krea\\Krea2_Identity_Edit_v2.safetensors"), "krea2_identity_edit_v2.safetensors");
   assert.equal(U.basenameOf("krea/krea2_identity_edit_v2.safetensors"), "krea2_identity_edit_v2.safetensors");

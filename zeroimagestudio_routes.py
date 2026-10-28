@@ -138,9 +138,83 @@ async def models(_request):
     return _json(_model_lists())
 
 
+_PREVIEW_SUFFIXES = (".preview.png", ".png", ".jpg", ".jpeg", ".webp")
+
+
+def match_lora_previews(names, is_file):
+    """Map a weight path to a sidecar image path when is_file says it exists."""
+    found = {}
+    for name in names or []:
+        norm = str(name).replace("\\", "/")
+        base = norm.rsplit("/", 1)[-1]
+        if base.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
+            continue
+        slash = norm.rfind("/")
+        directory = norm[: slash + 1] if slash >= 0 else ""
+        file_name = norm[slash + 1 :] if slash >= 0 else norm
+        stem, _ext = os.path.splitext(file_name)
+        for suffix in _PREVIEW_SUFFIXES:
+            rel = directory + stem + suffix
+            if is_file(rel):
+                found[norm] = rel
+                break
+    return found
+
+
+def _lora_preview_map(names):
+    try:
+        import folder_paths
+    except Exception:
+        return {}
+
+    def exists(rel):
+        rel = str(rel).replace("\\", "/").lstrip("/")
+        if not rel or ".." in rel.split("/"):
+            return False
+        for root in folder_paths.get_folder_paths("loras") or []:
+            candidate = os.path.normpath(os.path.join(root, *rel.split("/")))
+            root_norm = os.path.normpath(root)
+            if candidate != root_norm and not candidate.startswith(root_norm + os.sep):
+                continue
+            if os.path.isfile(candidate):
+                return True
+        return False
+
+    return match_lora_previews(names, exists)
+
+
+def _safe_lora_file(name):
+    rel = str(name or "").replace("\\", "/").lstrip("/")
+    if not rel or ".." in rel.split("/"):
+        return ""
+    lower = rel.lower()
+    if not lower.endswith((".png", ".jpg", ".jpeg", ".webp")):
+        return ""
+    try:
+        import folder_paths
+    except Exception:
+        return ""
+    for root in folder_paths.get_folder_paths("loras") or []:
+        candidate = os.path.normpath(os.path.join(root, *rel.split("/")))
+        root_norm = os.path.normpath(root)
+        if candidate != root_norm and not candidate.startswith(root_norm + os.sep):
+            continue
+        if os.path.isfile(candidate):
+            return candidate
+    return ""
+
+
 async def lora_tree(_request):
     data = _model_lists()
-    return _json({"files": data["loras"], "tree": _lora_tree(data["loras"])})
+    names = data["loras"]
+    return _json({"files": names, "tree": _lora_tree(names), "previews": _lora_preview_map(names)})
+
+
+async def lora_preview(request):
+    path = _safe_lora_file(request.query.get("name") or "")
+    if not path:
+        raise web.HTTPNotFound(text="Превью не найдено")
+    return web.FileResponse(path)
 
 
 async def lora_hash(request):
@@ -628,6 +702,7 @@ def register(krea_import_error=None):
     add("GET", "/zeroimagestudio/hints", hints)
     add("GET", "/zeroimagestudio/models", models)
     add("GET", "/zeroimagestudio/loras", lora_tree)
+    add("GET", "/zeroimagestudio/loras/preview", lora_preview)
     add("POST", "/zeroimagestudio/loras/hash", lora_hash)
     add("POST", "/zeroimagestudio/loras/civitai", lora_civitai)
     add("GET", "/zeroimagestudio/settings", get_settings)

@@ -118,6 +118,19 @@ class ReviewStorageTests(unittest.TestCase):
         self.assertEqual(tree["children"]["krea"]["files"], [r"krea\krea2_identity_edit_v2.safetensors"])
         self.assertEqual(tree["files"], ["flat.safetensors"])
 
+    def test_sidecar_preview_prefers_preview_png(self):
+        from zeroimagestudio_routes import match_lora_previews
+
+        names = ["Krea 2/Detailer.safetensors", "flat.pt"]
+        have = {
+            "Krea 2/Detailer.preview.png",
+            "Krea 2/Detailer.png",
+            "flat.jpg",
+        }
+        found = match_lora_previews(names, lambda rel: rel in have)
+        self.assertEqual(found["Krea 2/Detailer.safetensors"], "Krea 2/Detailer.preview.png")
+        self.assertEqual(found["flat.pt"], "flat.jpg")
+
 
 class OutputNodeTests(unittest.TestCase):
     def test_missing_commit_raises_instead_of_a_black_frame(self):

@@ -27,6 +27,134 @@
     return slash >= 0 ? norm.slice(slash + 1) : norm;
   }
 
+  function loraDisplay(name) {
+    const base = fileBase(name);
+    const ext = (base.match(/\.([^.]+)$/) || [])[1] || "";
+    const label = base.replace(/\.(safetensors|sft|pt|ckpt|bin)$/i, "");
+    return { label: label || base, ext: ext.toLowerCase(), title: normalizeSlashes(name) };
+  }
+
+  function loraPreviewCandidates(name) {
+    const norm = normalizeSlashes(name);
+    const slash = norm.lastIndexOf("/");
+    const dir = slash >= 0 ? norm.slice(0, slash + 1) : "";
+    const file = slash >= 0 ? norm.slice(slash + 1) : norm;
+    const dot = file.lastIndexOf(".");
+    const stem = dot > 0 ? file.slice(0, dot) : file;
+    return [".preview.png", ".png", ".jpg", ".jpeg", ".webp"].map((ext) => dir + stem + ext);
+  }
+
+  function matchSidecar(name, names) {
+    const have = new Set((names || []).map((item) => normalizeSlashes(item).toLowerCase()));
+    for (const candidate of loraPreviewCandidates(name)) {
+      if (have.has(candidate.toLowerCase())) return candidate;
+    }
+    return "";
+  }
+
+  function parentFolder(path) {
+    const norm = normalizeSlashes(path).replace(/\/+$/, "");
+    const slash = norm.lastIndexOf("/");
+    return slash >= 0 ? norm.slice(0, slash) : "";
+  }
+
+  function isSidecarImage(name) {
+    return /\.(png|jpe?g|webp)$/i.test(normalizeSlashes(name));
+  }
+
+  function prepareLoraListing(opts) {
+    const files = opts && opts.files || [];
+    const weights = files.filter((name) => !isSidecarImage(name));
+    const path = normalizeSlashes((opts && opts.path) || "").replace(/^\/+|\/+$/g, "");
+    const query = String((opts && opts.query) || "").trim().toLowerCase();
+    const previews = (opts && opts.previews) || {};
+    const remote = (opts && opts.remote) || {};
+    const added = new Set(opts && opts.added || []);
+    const previewUrl = (opts && opts.previewUrl) || ((rel) => rel);
+    const fileItem = (raw) => {
+      const norm = normalizeSlashes(raw);
+      const side = previews[norm] || previews[raw] || matchSidecar(norm, files);
+      const preview = side ? previewUrl(side) : (remote[norm] || remote[raw] || "");
+      const display = loraDisplay(raw);
+      return {
+        kind: "file",
+        name: raw,
+        label: display.label,
+        ext: display.ext,
+        title: display.title,
+        preview: preview,
+        added: added.has(raw) || added.has(norm),
+      };
+    };
+    if (query) {
+      return weights.filter((name) => normalizeSlashes(name).toLowerCase().includes(query)).sort().map(fileItem);
+    }
+    const prefix = path ? path + "/" : "";
+    const folders = new Set();
+    const here = [];
+    for (const raw of weights) {
+      const name = normalizeSlashes(raw);
+      if (prefix && name !== prefix.slice(0, -1) && !name.startsWith(prefix)) continue;
+      const rest = prefix ? name.slice(prefix.length) : name;
+      const slash = rest.indexOf("/");
+      if (slash >= 0) folders.add(rest.slice(0, slash));
+      else if (rest) here.push(raw);
+    }
+    const folderItems = [...folders].sort((a, b) => a.localeCompare(b)).map((folder) => {
+      const next = prefix + folder;
+      const count = weights.filter((name) => normalizeSlashes(name).startsWith(next + "/")).length;
+      return { kind: "folder", label: folder, enter: next, meta: count ? "папка · " + count : "папка", count: count };
+    });
+    return folderItems.concat(here.sort((a, b) => normalizeSlashes(a).localeCompare(normalizeSlashes(b))).map(fileItem));
+  }
+
+  function loraPickerItemsHtml(items, escapeHtmlFn) {
+    const esc = escapeHtmlFn || escapeHtml;
+    return (items || []).map((item) => {
+      if (item.kind === "folder") {
+        return `<button type="button" class="lora-dir" data-enter="${esc(item.enter)}"><span class="lora-ph" data-i="folder" data-s="18"></span><span class="nm">${esc(item.label)}</span><span class="mu">${esc(item.meta)}</span></button>`;
+      }
+      const thumb = item.preview
+        ? `<img src="${esc(item.preview)}" alt="">`
+        : `<span class="lora-ph" data-i="lora" data-s="18"></span>`;
+      const ext = item.ext ? `<span class="ext">${esc(item.ext)}</span>` : "";
+      const mark = item.added ? `<span class="tag">Добавлена</span>` : "";
+      return `<button type="button" class="lora-file" data-pick="${esc(item.name)}">${thumb}<span class="nm" title="${esc(item.title)}">${esc(item.label)}</span>${ext}${mark}</button>`;
+    }).join("");
+  }
+
+  function nextVariantIndex(index, count, key) {
+    const n = Math.max(0, Number(count) || 0);
+    if (!n) return 0;
+    const i = ((Number(index) || 0) % n + n) % n;
+    if (key === "ArrowRight") return (i + 1) % n;
+    if (key === "ArrowLeft") return (i - 1 + n) % n;
+    if (/^[1-9]$/.test(String(key || ""))) {
+      const pick = Number(key) - 1;
+      return pick < n ? pick : i;
+    }
+    return i;
+  }
+
+  function loraPickerHtml(view) {
+    const path = normalizeSlashes((view && view.path) || "");
+    const items = (view && view.items) || [];
+    const folders = items.filter((item) => item.kind === "folder").length;
+    const files = items.length - folders;
+    const parts = path ? path.split("/").filter(Boolean) : [];
+    let acc = "";
+    const crumbs = [`<button type="button" class="b s" data-crumb="">loras</button>`].concat(parts.map((part) => {
+      acc = acc ? acc + "/" + part : part;
+      return `<button type="button" class="b s" data-crumb="${escapeHtml(acc)}">${escapeHtml(part)}</button>`;
+    })).join("");
+    const back = path ? `<button type="button" class="b s" data-crumb="${escapeHtml(parentFolder(path))}">Назад</button>` : "";
+    const query = (view && view.query) || "";
+    return `<input id="lora-pick-search" class="f" style="width:100%;font-family:inherit" placeholder="Поиск по всем папкам" value="${escapeHtml(query)}">
+      <div class="lora-crumbs">${back}${crumbs}</div>
+      <div class="lora-pick-list">${loraPickerItemsHtml(items) || `<div class="empty">В этой папке пусто.</div>`}</div>
+      <div class="mu" id="lora-pick-status">папки ${folders} · файлы ${files}</div>`;
+  }
+
   function formatApiError(body, statusText) {
     if (body == null || body === "") return statusText || "Ошибка запроса";
     if (typeof body === "string") return body.slice(0, 500);
@@ -165,6 +293,14 @@
     normalizeSlashes,
     basenameOf,
     fileBase,
+    loraDisplay,
+    loraPreviewCandidates,
+    matchSidecar,
+    parentFolder,
+    prepareLoraListing,
+    loraPickerItemsHtml,
+    loraPickerHtml,
+    nextVariantIndex,
     formatApiError,
     safeId,
     finiteNumber,
