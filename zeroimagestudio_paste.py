@@ -168,7 +168,12 @@ def mask_min_side(mask: np.ndarray) -> int:
 
 def clamp_feather(feather: int, mask: np.ndarray) -> int:
     """Same cap as effective_seam: at most about a fifth of the mask's min side."""
-    from zeroimagestudio_geom import effective_seam
+    # ComfyUI loads this folder as a package, so sibling modules are relative.
+    # Unit tests import the file from the repo root, where there is no package.
+    try:
+        from .zeroimagestudio_geom import effective_seam
+    except ImportError:
+        from zeroimagestudio_geom import effective_seam
 
     side = mask_min_side(mask)
     return effective_seam(feather, side, side, mode="manual")
