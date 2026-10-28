@@ -5,6 +5,7 @@
 
   const $ = (id) => document.getElementById(id);
   const U = window.ZeroImageStudioUtil;
+  const UX = window.ZeroImageStudioUx;
   const HISTORY_BYTES = 32 * 1024 * 1024;
   const BLENDS = [
     ["normal", "Нормальный"], ["multiply", "Умножение"], ["screen", "Экран"],
@@ -60,6 +61,9 @@
     workMaskHidden: false,
     kreaTaskSlots: {},
     modelSlots: {},
+    placeMode: "",
+    compareOn: false,
+    compareSplit: 0.5,
   };
   state.edit.method = "krea2_edit";
   state.edit.clip_type = "krea2";
@@ -370,6 +374,11 @@
       for (const layer of this.layers) {
         if (!layer.visible) continue;
         ctx.save();
+        if (state.compareOn && layer === this.layers[this.active] && this.active > 0) {
+          ctx.beginPath();
+          ctx.rect(0, 0, this.doc.w * (state.compareSplit == null ? 0.5 : state.compareSplit), this.doc.h);
+          ctx.clip();
+        }
         ctx.globalAlpha = layer.opacity;
         ctx.globalCompositeOperation = first || layer.blend === "normal" ? "source-over" : layer.blend;
         first = false;
@@ -1455,8 +1464,9 @@
     const list = hintsForMode(state.pipeline);
     host.innerHTML = list.map((h) => {
       const on = h.id === state.hintId;
-      const tags = hintTags(h, state.pipeline).map((t, i) => `<span class="tag ${on && i === 0 ? "to" : ""}">${escapeHtml(t)}</span>`).join("");
-      return `<button type="button" class="mrow ${on ? "on" : ""}" data-hint="${escapeHtml(h.id)}" title="${escapeHtml(h.name)}"><span class="rd"></span><b>${escapeHtml(h.name)}</b><span class="tg">${tags}</span></button>`;
+      const tags = hintTags(h, state.pipeline).map((t) => `<span class="tag" title="${escapeHtml((UX && UX.TAG_TIPS[t]) || t)}">${escapeHtml(t)}</span>`).join("");
+      const name = (h.id === "krea2" || h.id === "krea2_identity_edit") ? "Krea 2" : h.name;
+      return `<button type="button" class="mrow ${on ? "on" : ""}" data-hint="${escapeHtml(h.id)}" title="${escapeHtml(name)}"><span class="rd"></span><b>${escapeHtml(name)}</b><span class="tg">${tags}</span></button>`;
     }).join("") || '<div class="empty">Нет моделей для этого режима.</div>';
   }
 
@@ -1464,16 +1474,17 @@
     const el = $("model-summary");
     if (!el) return;
     const hint = state.hints.find((h) => h.id === state.hintId);
-    const c = cfg();
-    if (!hint) {
+    const filesOk = emptyWeightReasons().length === 0 && !missingKreaLora();
+    const family = isKreaFamily();
+    if (!hint && !family) {
       el.textContent = "Модель не выбрана";
       el.title = el.textContent;
       return;
     }
-    const third = c.loader === "checkpoint"
-      ? ((c.checkpoint || "чекпоинт").replace(/\.[^.]+$/, ""))
-      : (c.clip_type || "");
-    const text = [hint.name, c.loader || "diffusion", third].filter(Boolean).join(" · ");
+    const sub = !family ? "" : state.pipeline === "create" ? "Создать" : (kreaTaskId() === "identity" ? "Персонаж" : "Правка");
+    const text = family
+      ? ("Krea 2 · " + sub + " · " + (filesOk ? "✓ файлы найдены" : "не хватает файлов"))
+      : [hint.name, filesOk ? "✓ файлы найдены" : "не хватает файлов"].join(" · ");
     el.textContent = text;
     el.title = text;
   }
@@ -1492,30 +1503,25 @@
     const sel = (id, list, value) => `<select class="dd" data-file="${id}" style="width:100%">${fileOptions(list, value)}</select>`;
     $("file-block").innerHTML = `
       <label>Загрузчик ${sel("loader", ["diffusion", "checkpoint"], c.loader)}</label>
-      <label style="${c.loader === "checkpoint" ? "" : "display:none"}">Checkpoint ${sel("checkpoint", cat.checkpoints, c.checkpoint)}</label>
+      <label style="${c.loader === "checkpoint" ? "" : "display:none"}">Чекпоинт ${sel("checkpoint", cat.checkpoints, c.checkpoint)}</label>
       <label style="${c.loader === "diffusion" ? "" : "display:none"}">UNET ${sel("unet", cat.unets, c.unet)}</label>
       <label style="${c.loader === "diffusion" ? "" : "display:none"}">CLIP ${sel("clip", cat.clips, c.clip)}</label>
       <label style="${c.loader === "diffusion" ? "" : "display:none"}">Тип CLIP ${sel("clip_type", cat.clip_types, c.clip_type)}</label>
       <label style="${c.loader === "diffusion" ? "" : "display:none"}">VAE ${sel("vae", cat.vaes, c.vae)}</label>
-      <label>dtype ${sel("weight_dtype", cat.weight_dtypes, c.weight_dtype)}</label>
+      <label>Тип весов ${sel("weight_dtype", cat.weight_dtypes, c.weight_dtype)}</label>
       ${sug.unet ? `<div class="mu">Можно любой совместимый файл. Часто ставят ${escapeHtml([sug.unet, sug.clip, sug.vae].filter(Boolean).join(" · "))}.</div>` : ""}
     `;
     const methodRow = state.pipeline === "edit"
       ? `<label>Способ <select class="dd" data-file="method" style="width:100%">${["inpaint", "krea2_edit", "qwen_image_21", "qwen_image"].map((m) => `<option ${c.method === m ? "selected" : ""} value="${m}">${methodLabel(m)}</option>`).join("")}</select></label>`
-      : `<label>Энкодер <select class="dd" data-file="encoder" style="width:100%">${[["clip", "CLIPTextEncode"], ["qwen_image_21", "TextEncodeQwenImage21"]].map(([v, n]) => `<option ${c.encoder === v ? "selected" : ""} value="${v}">${n}</option>`).join("")}</select></label>`;
-    const krea = c.krea || {};
-    const kreaRow = state.pipeline === "edit" && c.method === "krea2_edit" ? `
-      <label>Fit <select class="dd" data-krea="fit_mode" style="width:100%"><option ${krea.fit_mode === "fit" ? "selected" : ""}>fit</option><option ${krea.fit_mode === "crop (legacy)" ? "selected" : ""}>crop (legacy)</option></select></label>
-      <label>Позиция референса <select class="dd" data-krea="ref_position" style="width:100%" disabled title="Позицию задаёт режим Правка или Персонаж">${["aligned (trained)", "beside (right of target)", "bag of features"].map((v) => `<option ${krea.ref_position === v ? "selected" : ""}>${v}</option>`).join("")}</select></label>
-      <label>Grounding, px <input class="f" data-krea="grounding_px" value="${U.finiteNumber(krea.grounding_px, 768)}" title="Ниже — сильнее инструкция, выше — сильнее сходство"></label>
-      <label>Ноды <select class="dd" data-krea="impl" style="width:100%"><option value="internal" ${krea.impl !== "external" ? "selected" : ""}>встроенные</option><option value="external" ${krea.impl === "external" ? "selected" : ""}>пакет comfyui-krea2edit</option></select></label>` : "";
+      : `<label>Энкодер <select class="dd" data-file="encoder" style="width:100%">${[["clip", "Текстовый энкодер CLIP"], ["qwen_image_21", "Энкодер Qwen"]].map(([v, n]) => `<option ${c.encoder === v ? "selected" : ""} value="${v}">${n}</option>`).join("")}</select></label>`;
+    const kreaRow = "";
     const qwenUsesEncoder = (state.pipeline === "edit" && (c.method === "qwen_image_21" || c.method === "qwen")) || (c.encoder === "qwen_image_21" && usesSource());
     const qwenRow = qwenUsesEncoder
       ? `<label>Qwen resolution <input class="f" data-file="qwen_resolution" value="${U.finiteNumber(c.qwen_resolution, 0)}"></label>` : "";
     $("graph-options").innerHTML = `
       ${methodRow}
-      <label>Латент <select class="dd" data-file="latent_mode" style="width:100%"><option value="standard" ${c.latent_mode !== "sd3" ? "selected" : ""}>EmptyLatentImage (4 кан.)</option><option value="sd3" ${c.latent_mode === "sd3" ? "selected" : ""}>EmptySD3LatentImage (16 кан.)</option></select></label>
-      <label>Inpaint <select class="dd" data-file="inpaint_mode" style="width:100%"><option value="vae_encode" ${c.inpaint_mode !== "inpaint_conditioning" ? "selected" : ""}>VAEEncodeForInpaint</option><option value="inpaint_conditioning" ${c.inpaint_mode === "inpaint_conditioning" ? "selected" : ""}>InpaintModelConditioning</option></select></label>
+      <label>Латент <select class="dd" data-file="latent_mode" style="width:100%"><option value="standard" ${c.latent_mode !== "sd3" ? "selected" : ""}>Обычный, 4 канала</option><option value="sd3" ${c.latent_mode === "sd3" ? "selected" : ""}>SD3, 16 каналов</option></select></label>
+      <label>Вклейка <select class="dd" data-file="inpaint_mode" style="width:100%"><option value="vae_encode" ${c.inpaint_mode !== "inpaint_conditioning" ? "selected" : ""}>Кодирование VAE</option><option value="inpaint_conditioning" ${c.inpaint_mode === "inpaint_conditioning" ? "selected" : ""}>Условие вклейки</option></select></label>
       ${kreaRow}${qwenRow}
     `;
   }
@@ -1526,25 +1532,25 @@
 
   function renderRefs() {
     const host = $("ref-list");
-    const cards = state.references.map((r) =>
-      `<div class="ref ${r.selected ? "on" : ""}" data-ref="${escapeHtml(r.id)}" title="Клик — выбрать для LLM"><img src="${r.url}"><s>${escapeHtml(r.name)}</s><button class="x" data-ref-del="${escapeHtml(r.id)}">×</button></div>`
-    ).join("");
+    const ctx = { pipeline: state.pipeline, method: cfg().method, task: kreaTaskId() };
+    const cards = state.references.map((r, index) => {
+      const badge = UX ? UX.refBadge(ctx, index) : { label: "", used: true, reason: "" };
+      return `<div class="ref ${r.selected ? "on" : ""} ${badge.used ? "" : "unused"}" data-ref="${escapeHtml(r.id)}" title="${escapeHtml(badge.reason)}"><img src="${r.url}" alt=""><span class="ref-badge">${escapeHtml(badge.label)}</span><s>${escapeHtml(r.name)}</s><button class="x" data-ref-del="${escapeHtml(r.id)}">×</button></div>`;
+    }).join("");
     host.innerHTML = cards +
       `<button class="ref add" id="ref-upload" type="button"><div><span data-i="upload" data-s="15"></span><br>Загрузить</div></button>` +
       `<button class="ref add" id="ref-from-layer" type="button"><div><span data-i="layers" data-s="15"></span><br>Из слоя</div></button>`;
-    const n = state.references.length;
-    if (state.pipeline === "edit") {
-      const method = cfg().method;
-      $("ref-cap").textContent = `для модели · ${n}`;
-      $("ref-hint").textContent = method === "krea2_edit"
-        ? kreaRefHint()
-        : (method === "qwen_image_21" || method === "qwen")
-          ? "Для модели: до 16 референсов, в промте <image1>…. Те же кадры может взять LLM. Клик по карточке выбирает кадр для LLM."
-          : "Кроп холста идёт в модель как область правки. Референсы здесь — для LLM. Клик по карточке выбирает кадр.";
-    } else {
-      $("ref-cap").textContent = `для LLM-промта · ${n}`;
-      $("ref-hint").textContent = "В режиме Создание референсы не идут в модель. «Описать изображение» и «Улучшить» берут выбранные кадры (если ничего не выбрано — все).";
+    const slots = $("ref-slots");
+    if (slots) {
+      const identity = state.pipeline === "edit" && cfg().method === "krea2_edit" && kreaTaskId() === "identity";
+      slots.innerHTML = identity ? `<div class="ref-slots">
+        <div class="ref-slot" title="Сцена — текущий холст"><b>Сцена</b><span>${sceneOnCanvas() ? "холст" : "пусто"}</span></div>
+        <div class="ref-slot ${state.references[0] ? "" : "empty"}" title="Человек — первый референс"><b>Человек</b><span>${state.references[0] ? escapeHtml(state.references[0].name) : "не задан"}</span></div>
+      </div>` : "";
     }
+    const status = UX ? UX.refStatus({ ...ctx, count: state.references.length }) : { line: "", detail: "" };
+    if ($("ref-cap")) $("ref-cap").textContent = status.line;
+    if ($("ref-hint")) { $("ref-hint").textContent = status.line; $("ref-hint").title = status.detail; }
     if (window.zeroImageStudioHydrateIcons) window.zeroImageStudioHydrateIcons(host);
     sealCollapsed($("refs-node"));
   }
@@ -1782,11 +1788,12 @@
     const cat = state.catalog || { samplers: ["euler"], schedulers: ["simple", "normal", "beta"] };
     const opt = (list, cur) => (list || []).map((n) => `<option ${n === cur ? "selected" : ""}>${escapeHtml(n)}</option>`).join("");
     $("sampler-box").innerHTML = `
-      <span>Seed</span><div class="row seed-row"><input id="seed" class="f" value="${U.finiteNumber(s.seed, 0)}" title="Последний сид. В режиме «случайный» каждый запуск берёт новый."><button class="b s" id="btn-seed" data-i="dice" data-s="12" type="button" title="Случайный сид"></button>
+      <span>Сид</span><div class="row seed-row"><input id="seed" class="f" value="${U.finiteNumber(s.seed, 0)}" title="Последний сид. В режиме «случайный» каждый запуск берёт новый."><button class="b s" id="btn-seed" data-i="dice" data-s="12" type="button" title="Случайный сид"></button>
         <select id="seed-mode" class="dd" title="Режим сида"><option value="random" ${s.seedMode === "random" ? "selected" : ""}>случайный</option><option value="fixed" ${s.seedMode === "fixed" ? "selected" : ""}>фиксированный</option><option value="increment" ${s.seedMode === "increment" ? "selected" : ""}>+1</option></select></div>
       <span>Шаги</span><div class="row"><input id="steps-range" class="range" type="range" min="1" max="80" value="${U.finiteNumber(s.steps, 20)}"><input id="steps" class="f" style="width:48px" value="${U.finiteNumber(s.steps, 20)}"></div>
       <span>CFG</span><div class="row"><input id="cfg-range" class="range" type="range" min="0" max="12" step="0.1" value="${U.finiteNumber(s.cfg, 7)}"><input id="cfg" class="f" style="width:48px" value="${U.finiteNumber(s.cfg, 7)}"></div>
-      <span>Denoise</span><div class="row"><input id="denoise-range" class="range" type="range" min="0" max="1" step="0.01" value="${U.finiteNumber(s.denoise, 1)}"><input id="denoise" class="f" style="width:48px" value="${U.finiteNumber(s.denoise, 1)}"></div>
+      <span>Шум</span><div class="row" id="denoise-row"><input id="denoise-range" class="range" type="range" min="0" max="1" step="0.01" value="${U.finiteNumber(s.denoise, 1)}"><input id="denoise" class="f" style="width:48px" value="${U.finiteNumber(s.denoise, 1)}"></div>
+      <div class="mu" id="denoise-note" style="grid-column:1 / -1"></div>
       <span>Сэмплер</span><select id="sampler" class="dd">${opt(cat.samplers, s.sampler)}</select>
       <span>Планировщик</span><select id="scheduler" class="dd">${opt(cat.schedulers, s.scheduler)}</select>
       <span>Батч</span><input id="batch" class="f" value="${U.finiteNumber(s.batch, 1)}">
@@ -1794,13 +1801,46 @@
     $("gen-batch").textContent = `×${s.batch}`;
     if (window.zeroImageStudioHydrateIcons) window.zeroImageStudioHydrateIcons($("sampler-box"));
     bindSampler();
+    syncSamplerNotes();
+  }
+
+  function syncSamplerNotes() {
+    if (!UX) return;
+    const effect = UX.effectiveDenoise({
+      method: cfg().method,
+      hasMask: !!(editor && editor.maskArea() > 8),
+      denoise: state.sampler.denoise,
+    });
+    const range = $("denoise-range");
+    const num = $("denoise");
+    const note = $("denoise-note");
+    if (range && num) {
+      range.disabled = effect.locked;
+      num.disabled = effect.locked;
+      if (effect.locked) { range.value = "1"; num.value = "1"; }
+    }
+    if (note) note.textContent = effect.note;
+    const neg = $("negative");
+    const show = UX.showNegative(state.sampler.cfg);
+    if (neg) neg.hidden = !show;
+    let negNote = $("neg-note");
+    if (!negNote && neg && neg.parentElement) {
+      negNote = document.createElement("div");
+      negNote.id = "neg-note";
+      negNote.className = "mu";
+      neg.parentElement.insertBefore(negNote, neg);
+    }
+    if (negNote) {
+      negNote.hidden = show;
+      negNote.textContent = show ? "" : "Негатив скрыт: CFG не больше 1.";
+    }
   }
 
   function bindSampler() {
     const link = (range, num, key, parse) => {
       const a = $(range), b = $(num);
       if (!a || !b) return;
-      const apply = (v) => { state.sampler[key] = parse(v); a.value = state.sampler[key]; b.value = state.sampler[key]; renderPipe(); rememberCurrentModel(); };
+      const apply = (v) => { state.sampler[key] = parse(v); a.value = state.sampler[key]; b.value = state.sampler[key]; renderPipe(); rememberCurrentModel(); syncSamplerNotes(); };
       a.oninput = () => apply(a.value);
       b.onchange = () => apply(b.value);
     };
@@ -1916,7 +1956,15 @@
     return g.x <= 1 && g.y <= 1 && g.w >= editor.doc.w - 2 && g.h >= editor.doc.h - 2;
   }
   function replacesCanvas() {
-    return state.pipeline === "create" && coversWholeCanvas();
+    const whole = state.pipeline === "create" && coversWholeCanvas();
+    if (!UX) return whole;
+    return UX.resultPlacement(state.pipeline, whole, state.placeMode) === "replace";
+  }
+  function renderPlaceToggle() {
+    const host = $("place-toggle");
+    if (!host) return;
+    const mode = replacesCanvas() ? "replace" : "layer";
+    host.querySelectorAll("[data-place]").forEach((btn) => btn.classList.toggle("on", btn.dataset.place === mode));
   }
   function syncOutputFromCanvas() {
     if (!editor) return;
@@ -2181,6 +2229,7 @@
     $("inspector").innerHTML = `<div class="insp">${scope}
         <div class="insp-result">${frame.w}×${frame.h} · ${exact} МП</div>
         ${regionBody}
+        ${kreaVisionHtml()}
       </div>`;
     $("inspector").querySelectorAll("[data-edit-scope]").forEach((btn) => {
       btn.onclick = () => applyEditScope(btn.dataset.editScope);
@@ -2232,7 +2281,7 @@
         <label>Размер <input id="brush-size" class="range" type="range" min="1" max="300" value="${b.size}" title="Размер кисти ([ и ])"></label>
         <label>Жёсткость <input id="brush-hard" class="range" type="range" min="0" max="100" value="${Math.round(b.hardness * 100)}" title="Жёсткость"></label>
         <label>Непрозр. <input id="brush-op" class="range" type="range" min="1" max="100" value="${Math.round(b.opacity * 100)}" title="Непрозрачность"></label>
-        <span class="mu" id="opt-status"></span>`;
+        <span class="mu" id="opt-status"></span>${tool === "mask" && isKreaEdit() ? `<span class="mu">Маска ограничивает только вклейку. Модель её не видит.</span>` : ""}`;
       $("brush-size").oninput = () => { state.brush.size = parseInt($("brush-size").value, 10) || 1; paintStatus(); if (editor) editor.syncBrushCursor(); };
       $("brush-hard").oninput = () => { state.brush.hardness = (parseInt($("brush-hard").value, 10) || 0) / 100; paintStatus(); };
       $("brush-op").oninput = () => { state.brush.opacity = Math.min(1, (parseInt($("brush-op").value, 10) || 1) / 100); paintStatus(); };
@@ -2263,8 +2312,7 @@
       const area = editor.maskArea();
       el.textContent = area > 8 ? `маска ${area} px²` : "маска не нарисована";
     } else if (state.tool === "genarea") {
-      generationSize();
-      el.textContent = window.ZeroImageStudioSize.areaStatusText(editor.doc, state.area);
+      el.textContent = "Рамка на холсте";
     }
   }
 
@@ -2325,13 +2373,13 @@
   function setKreaTask(taskId) {
     rememberTaskLora();
     applyKreaTaskDefaults(taskId);
+    const saved = (state.kreaTaskSlots || {})[taskSlotKey(state.hintId, taskId === "identity" ? "identity" : "general")];
+    if (saved && state.edit.krea) {
+      if (saved.grounding_px != null) state.edit.krea.grounding_px = saved.grounding_px;
+      if (saved.fit_mode) state.edit.krea.fit_mode = saved.fit_mode;
+    }
     syncKreaStack();
-    renderFiles();
-    renderKreaChrome();
-    renderRefs();
-    renderLoras();
-    renderPipe();
-    updateGenerateButton();
+    renderAll();
   }
 
   const TASK_LORA_KEY = "zeroimagestudio.kreaTaskLora";
@@ -2360,15 +2408,21 @@
 
   function rememberTaskLora() {
     if (!isKreaEdit()) return;
-    const row = taskLoraRow();
-    if (!row || !String(row.name || "").trim()) return;
     loadTaskSlots();
-    state.kreaTaskSlots[taskSlotKey(state.hintId, kreaTaskId())] = {
-      name: row.name,
-      strength_model: Number(row.strength_model),
-      strength_clip: Number(row.strength_clip),
-      enabled: row.enabled !== false,
-    };
+    const key = taskSlotKey(state.hintId, kreaTaskId());
+    const prev = state.kreaTaskSlots[key] || {};
+    const k = cfg().krea || {};
+    const row = taskLoraRow();
+    const next = { ...prev };
+    if (k.grounding_px != null) next.grounding_px = k.grounding_px;
+    if (k.fit_mode) next.fit_mode = k.fit_mode;
+    if (row && String(row.name || "").trim()) {
+      next.name = row.name;
+      next.strength_model = Number(row.strength_model);
+      next.strength_clip = Number(row.strength_clip);
+      next.enabled = row.enabled !== false;
+    }
+    state.kreaTaskSlots[key] = next;
     saveTaskSlots();
   }
 
@@ -2402,6 +2456,33 @@
     edit.loras = [row, ...extras.filter((l) => basenameOf(l.name) !== taskBase)];
   }
 
+  function kreaVisionHtml() {
+    if (!isKreaEdit() || !UX || !editor) return "";
+    const k = cfg().krea || {};
+    const src = editIsRegion() ? editor.gen : editor.doc;
+    const frame = generationSize();
+    const view = UX.kreaVision({
+      srcW: src.w, srcH: src.h, grounding: k.grounding_px,
+      position: k.ref_position, outW: frame.w, outH: frame.h,
+    });
+    const fit = k.fit_mode === "crop (legacy)" ? "crop (legacy)" : "fit";
+    return `<div class="krea-see">
+      <div class="insp-h">Что видит модель</div>
+      <div class="see-row"><i style="width:${Math.max(18, Math.round(28 * view.cropW / Math.max(view.cropW, view.cropH)))}px;height:${Math.max(18, Math.round(28 * view.cropH / Math.max(view.cropW, view.cropH)))}px"></i><span>кроп ${view.cropW}×${view.cropH} при опоре ${view.grounding}</span></div>
+      <div class="mu">Референс: ${escapeHtml(view.place)}. Итог ${view.finalW}×${view.finalH}.</div>
+      <details class="insp-adv">
+        <summary>Дополнительно</summary>
+        <label class="see-field">Опора, px <input class="f" data-krea="grounding_px" value="${U.finiteNumber(k.grounding_px, 768)}" title="Ниже — сильнее инструкция, выше — сильнее сходство"></label>
+        <label class="see-field">Вписывание <select class="dd" data-krea="fit_mode"><option ${fit === "fit" ? "selected" : ""}>fit</option><option ${fit === "crop (legacy)" ? "selected" : ""}>crop (legacy)</option></select></label>
+        <label class="see-field">Позиция <select class="dd" data-krea="ref_position" disabled title="Позицию задаёт Правка или Персонаж по референсу">
+          <option ${k.ref_position === "aligned (trained)" ? "selected" : ""}>aligned (trained)</option>
+          <option ${k.ref_position === "beside (right of target)" ? "selected" : ""}>beside (right of target)</option>
+          <option ${k.ref_position === "bag of features" ? "selected" : ""}>bag of features</option>
+        </select></label>
+      </details>
+    </div>`;
+  }
+
   function kreaRefHint() {
     applyKreaPlacement(kreaTaskId());
     if (kreaTaskId() === "identity") {
@@ -2412,23 +2493,47 @@
     return "Холст — исходник правки. Дополнительный референс не отправляется.";
   }
 
+  function isKreaFamily() {
+    const id = canonicalHintId(state.hintId);
+    return id === "krea2" || id === "krea2_identity_edit";
+  }
+
+  function setKreaFamily(which) {
+    rememberCurrentModel();
+    rememberTaskLora();
+    if (which === "create") {
+      state.pipeline = "create";
+      const hint = (state.hints || []).find((h) => canonicalHintId(h.id) === "krea2");
+      if (hint) applyHint(hint, { skipSave: true });
+      else { state.hintId = "krea2"; state.hintByMode.create = "krea2"; renderAll(); }
+      return;
+    }
+    state.pipeline = "edit";
+    const hint = (state.hints || []).find((h) => canonicalHintId(h.id) === "krea2_identity_edit");
+    if (hint) applyHint(hint, { skipSave: true });
+    else { state.hintId = "krea2_identity_edit"; state.hintByMode.edit = "krea2_identity_edit"; }
+    setKreaTask(which === "identity" ? "identity" : "general");
+  }
+
   function renderKreaChrome() {
     const host = $("krea-task");
     const tips = $("krea-tips");
-    const on = isKreaEdit();
+    const on = isKreaFamily();
     if (host) host.hidden = !on;
     if (tips) tips.hidden = !on;
     if (!on) {
       renderModelWarn();
       return;
     }
-    const task = kreaTaskId();
+    const which = state.pipeline !== "edit" ? "create" : (kreaTaskId() === "identity" ? "identity" : "edit");
     if (host) {
       host.innerHTML = `
-        <button type="button" data-krea-task="general" class="${task === "general" ? "on" : ""}" aria-pressed="${task === "general"}" title="Правка — General Edit V2">Правка</button>
-        <button type="button" data-krea-task="identity" class="${task === "identity" ? "on" : ""}" aria-pressed="${task === "identity"}" title="Персонаж по референсу — Identity Edit V2">Персонаж</button>`;
+        <button type="button" data-krea-family="create" class="${which === "create" ? "on" : ""}" aria-pressed="${which === "create"}">Создать</button>
+        <button type="button" data-krea-family="edit" class="${which === "edit" ? "on" : ""}" aria-pressed="${which === "edit"}">Править</button>
+        <button type="button" data-krea-family="identity" class="${which === "identity" ? "on" : ""}" aria-pressed="${which === "identity"}">Персонаж по референсу</button>`;
     }
-    if (tips) {
+    if (tips && state.pipeline === "create") tips.innerHTML = "";
+    else if (tips) {
       const frame = editor ? generationSize() : { w: 0, h: 0 };
       const mp = (frame.w * frame.h) / 1e6;
       const over = mp > 2;
@@ -2466,10 +2571,9 @@
     if (!host) return;
     const spec = missingKreaLora();
     if (!spec) { host.innerHTML = ""; return; }
-    host.innerHTML = `<div class="miss-card">
+    host.innerHTML = `<div class="miss-card neutral">
       <div class="miss-line lora">
-        <span class="nm" title="${escapeHtml(spec.file)}">${escapeHtml(spec.file)}</span>
-        <span class="dir">models/loras/</span>
+        <span class="nm" title="${escapeHtml(spec.file)}">Нет файла LoRA: ${escapeHtml(U.fileBase(spec.file))}</span>
         ${spec.url ? `<a class="dl" href="${escapeHtml(spec.url)}" target="_blank" rel="noopener">Скачать</a>` : ""}
       </div>
       <button type="button" class="b s" data-rescan="1">Проверить снова</button>
@@ -2488,8 +2592,8 @@
         return `<div class="dl-row">
           <span class="nm" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</span>
           <span class="dir">${escapeHtml(file.folder)}</span>
-          <span class="st ${on ? "ok" : "no"}">${on ? "установлен" : "не установлен"}</span>
-          <a href="${escapeHtml(file.url)}" target="_blank" rel="noopener">Скачать</a>
+          <span class="st ${on ? "ok" : "no"}">${on ? "✓ установлен" : "не установлен"}</span>
+          <a class="dl-neutral" href="${escapeHtml(file.url)}" target="_blank" rel="noopener">Скачать</a>
         </div>`;
       }).join("");
       const note = group.note ? `<div class="mu">${escapeHtml(group.note)}</div>` : "";
@@ -2516,22 +2620,29 @@
     }
   }
 
-  function generateBlockReason() {
-    if (state.running) return "";
-    const reasons = [];
-    if (!(state.prompt || "").trim()) reasons.push("Промт пустой.");
-    if (state.pipeline === "edit") {
-      const scene = sceneOnCanvas();
-      if (isKreaEdit() && kreaTaskId() === "identity") {
-        if (!scene && !state.references.length) reasons.push("Для «Персонаж по референсу» нужен референс человека или сцена на холсте.");
-        else if (scene && !state.references.length) reasons.push("Для «Персонаж по референсу» добавьте фото человека в Референсы.");
-      } else if (!scene) reasons.push("В правке нет изображения. Откройте фото.");
-    }
-    reasons.push(...emptyWeightReasons());
+  function generateBlockItems() {
+    if (state.running || !UX) return [];
+    const c = cfg();
     const lora = missingKreaLora();
     const taskRow = taskLoraRow();
-    if (lora && (!taskRow || taskRow.enabled !== false)) reasons.push("Нет LoRA режима: " + lora.file);
-    return reasons.join(" ");
+    return UX.blockItems({
+      pipeline: state.pipeline,
+      method: c.method,
+      task: kreaTaskId(),
+      prompt: state.prompt,
+      scene: sceneOnCanvas(),
+      refs: state.references.length,
+      loader: c.loader,
+      unet: c.unet,
+      clip: c.clip,
+      vae: c.vae,
+      checkpoint: c.checkpoint,
+      missingLora: !!(lora && (!taskRow || taskRow.enabled !== false)),
+    });
+  }
+
+  function generateBlockReason() {
+    return generateBlockItems().join(", ");
   }
 
   function updateGenerateButton() {
@@ -2545,11 +2656,15 @@
       if (wrap) wrap.title = tip;
       return;
     }
-    const reason = generateBlockReason();
-    btn.disabled = !!reason;
-    const tip = reason || "Сгенерировать (Ctrl+Enter)";
-    btn.title = tip;
-    if (wrap) wrap.title = tip;
+    const items = generateBlockItems();
+    btn.disabled = items.length > 0;
+    btn.title = items.length ? "" : "Сгенерировать (Ctrl+Enter)";
+    const miss = $("gen-miss");
+    if (miss) {
+      miss.hidden = !items.length;
+      miss.innerHTML = items.length ? `<b>Не хватает</b><ul>${items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : "";
+    }
+    renderPlaceToggle();
   }
 
   function openModelDrawer() {
@@ -2843,12 +2958,8 @@
       ${items.map((p) => {
         const i = indexOf(p.id);
         return `<div class="pp-row">
-          <input type="checkbox" data-pp-on="${escapeHtml(p.id)}" ${p.enabled ? "checked" : ""}>
+          <input type="checkbox" data-pp-on="${escapeHtml(p.id)}" ${p.enabled ? "checked" : ""} title="Включить">
           <button type="button" class="nm" data-pp-edit="${escapeHtml(p.id)}">${escapeHtml(p.name)}</button>
-          <button type="button" class="b s" data-pp-pos="${escapeHtml(p.id)}">${p.position === "after" ? "ПОСЛЕ" : "ДО"}</button>
-          <button type="button" class="b s" data-pp-up="${escapeHtml(p.id)}" ${i <= 0 ? "disabled" : ""} title="Раньше среди активных">↑</button>
-          <button type="button" class="b s" data-pp-down="${escapeHtml(p.id)}" ${i < 0 || i === active.length - 1 ? "disabled" : ""} title="Позже среди активных">↓</button>
-          <button type="button" class="b s" data-pp-dup="${escapeHtml(p.id)}">Дубль</button>
           <button type="button" class="b s" data-pp-del="${escapeHtml(p.id)}">Удалить</button>
         </div>`;
       }).join("")}
@@ -2857,23 +2968,20 @@
 
   function placePromptPop() {
     const pop = $("pp-pop");
-    const btn = $("pp-open");
-    const r = btn.getBoundingClientRect();
-    const width = Math.min(520, window.innerWidth - 16);
-    let left = Math.max(8, Math.min(r.left, window.innerWidth - width - 8));
+    const field = $("prompt").getBoundingClientRect();
+    const width = Math.min(360, window.innerWidth - 16);
+    const roomRight = window.innerWidth - field.right - 12;
     pop.style.width = width + "px";
-    pop.style.left = left + "px";
-    const below = window.innerHeight - r.bottom - 10;
-    const above = r.top - 10;
-    if (below < 260 && above > below) {
-      pop.style.top = "auto";
-      pop.style.bottom = (window.innerHeight - r.top + 6) + "px";
-      pop.style.maxHeight = Math.max(180, above - 8) + "px";
-    } else {
-      pop.style.bottom = "auto";
-      pop.style.top = (r.bottom + 6) + "px";
-      pop.style.maxHeight = Math.max(180, below - 8) + "px";
+    pop.style.bottom = "auto";
+    if (roomRight >= width) {
+      pop.style.left = (field.right + 8) + "px";
+      pop.style.top = Math.max(8, field.top) + "px";
+      pop.style.maxHeight = Math.max(180, window.innerHeight - field.top - 16) + "px";
+      return;
     }
+    pop.style.left = Math.max(8, field.left) + "px";
+    pop.style.top = "8px";
+    pop.style.maxHeight = Math.max(160, field.top - 16) + "px";
   }
 
   function openPromptPop() {
@@ -2999,11 +3107,11 @@
     } else {
       host.innerHTML = items.map((it) => {
         const m = it.meta || {};
-        const col = colors[m.edit_method] || colors[m.pipeline] || "#7d8594";
+        const mark = UX ? UX.modelMark(m) : { letter: "С", title: "Создание" };
         const id = escapeHtml(it.id);
         const tip = [m.model_label || m.unet || m.checkpoint || "Генерация", m.width && m.height ? m.width + "×" + m.height : "", m.seed != null ? "seed " + m.seed : ""].filter(Boolean).join(" · ");
         const file = U.fileBase(it.file);
-        return `<div class="g" role="button" tabindex="0" data-gal="${id}" title="${escapeHtml(tip)}"><img src="/view?filename=${encodeURIComponent(file)}&type=output&subfolder=zeroimagestudio/gallery" alt=""><s style="background:${col}"></s><span class="tile-actions"><button type="button" data-gal-apply="${id}" data-i="undo" data-s="13" title="Применить заново"></button><button type="button" data-gal-seed="${id}" data-i="dice" data-s="13" title="Взять сид"></button><button type="button" data-gal-lora="${id}" data-i="layers" data-s="13" title="Взять LoRA"></button></span></div>`;
+        return `<div class="g" role="button" tabindex="0" data-gal="${id}" title="${escapeHtml(tip)}"><img src="/view?filename=${encodeURIComponent(file)}&type=output&subfolder=zeroimagestudio/gallery" alt="" onerror="this.classList.add('broke')"><s class="mark" title="${escapeHtml(mark.title)}">${escapeHtml(mark.letter)}</s><span class="tile-actions"><button type="button" data-gal-apply="${id}" data-i="undo" data-s="13" title="Применить заново"></button><button type="button" data-gal-seed="${id}" data-i="dice" data-s="13" title="Взять сид"></button><button type="button" data-gal-lora="${id}" data-i="layers" data-s="13" title="Взять LoRA"></button></span></div>`;
       }).join("");
       if (window.zeroImageStudioHydrateIcons) window.zeroImageStudioHydrateIcons(host);
       $("gal-legend").innerHTML = `<span>${scopeNote}</span><span><b style="color:#ff7a1a">▬</b> Krea Edit</span><span><b style="color:#b18cff">▬</b> Создание</span><span><b style="color:#4aa8ff">▬</b> Qwen</span>`;
@@ -3440,6 +3548,7 @@
       if (!images.length) throw new Error("ComfyUI не вернул изображение.");
       const urls = images.map((img) => `/view?filename=${encodeURIComponent(img.filename)}&type=${encodeURIComponent(img.type || "output")}&subfolder=${encodeURIComponent(img.subfolder || "")}`);
       const pick = await chooseVariant(urls);
+      if (pick == null) { toast("Варианты отклонены. На холст ничего не добавлено."); return; }
       const blob = await (await fetch(urls[pick])).blob();
       const meta = generationMeta(spec, built.final_prompt);
       await rememberGallery(blob, meta);
@@ -3565,18 +3674,62 @@
 
   function chooseVariant(urls) {
     if (urls.length <= 1) return Promise.resolve(0);
+    const host = $("variant-strip");
+    if (!host) return Promise.resolve(0);
+    host.hidden = false;
+    host.innerHTML = `<b>Варианты</b>` + urls.map((u, i) => `<div class="var"><img src="${escapeHtml(u)}" alt=""><button type="button" class="b" data-accept="${i}">Принять на слой</button><button type="button" class="b s" data-reject="${i}">Отклонить</button></div>`).join("");
     return new Promise((resolve) => {
-      const back = document.createElement("div");
-      back.className = "modal-back";
-      back.innerHTML = `<div class="modal"><h3>Выберите вариант</h3><div class="gal" style="grid-template-columns:repeat(${Math.min(4, urls.length)},1fr)">${urls.map((u, i) => `<button class="g" data-i="${i}"><img src="${escapeHtml(u)}" alt=""></button>`).join("")}</div></div>`;
-      back.addEventListener("click", (e) => {
-        const b = e.target.closest("[data-i]");
-        if (!b) return;
-        back.remove();
-        resolve(Number(b.dataset.i));
-      });
-      document.body.appendChild(back);
+      host.onclick = (e) => {
+        const accept = e.target.closest("[data-accept]");
+        const reject = e.target.closest("[data-reject]");
+        if (accept) {
+          host.hidden = true;
+          host.innerHTML = "";
+          resolve(Number(accept.dataset.accept));
+        } else if (reject) {
+          const card = reject.closest(".var");
+          if (card) card.remove();
+          if (!host.querySelector(".var")) {
+            host.hidden = true;
+            resolve(null);
+          }
+        }
+      };
     });
+  }
+
+  function referenceFromActive() {
+    const layer = editor.activeLayer();
+    if (!layer) return;
+    const c = document.createElement("canvas");
+    c.width = layer.canvas.width;
+    c.height = layer.canvas.height;
+    c.getContext("2d").drawImage(layer.canvas, 0, 0);
+    state.references.push({ id: "r" + Date.now(), name: layer.name || ("#" + (state.references.length + 1)), canvas: c, url: c.toDataURL("image/png") });
+    renderRefs();
+    toast("Слой добавлен в референсы.");
+  }
+
+  function repeatActiveLayer() {
+    const layer = editor.activeLayer();
+    const seed = layer && layer.meta && layer.meta.seed;
+    if (seed != null && Number.isFinite(Number(seed))) {
+      state.sampler.seed = Number(seed) + 1;
+      state.sampler.seedMode = "fixed";
+    } else state.sampler.seedMode = "random";
+    renderSampler();
+    generate();
+  }
+
+  function toggleCompare() {
+    if (!editor || editor.active <= 0) { toast("Нужен слой под текущим, чтобы сравнить."); return; }
+    state.compareOn = !state.compareOn;
+    state.compareSplit = 0.5;
+    const bar = $("compare-bar");
+    if (bar) bar.hidden = !state.compareOn;
+    const range = $("compare-split");
+    if (range) range.value = "50";
+    editor.requestDraw();
   }
 
   function duplicateActive() {
@@ -3671,6 +3824,9 @@
       <button type="button" data-act="merge">Объединить с нижним</button>
       <button type="button" data-act="mask">Маска из слоя</button>
       <button type="button" data-act="fit-canvas">Холст по слою</button>
+      <button type="button" data-act="repeat">Повторить с новым сидом</button>
+      <button type="button" data-act="as-ref">Сделать референсом</button>
+      <button type="button" data-act="compare">Сравнить до/после</button>
       ${maskActs}
       <button type="button" data-act="del">Удалить</button>`;
     placeLayerMenu(menu, x, y);
@@ -3682,6 +3838,9 @@
       if (act.dataset.act === "merge") mergeDown();
       if (act.dataset.act === "mask") maskFromLayer();
       if (act.dataset.act === "fit-canvas") fitCanvasToContent("layer");
+      if (act.dataset.act === "repeat") repeatActiveLayer();
+      if (act.dataset.act === "as-ref") referenceFromActive();
+      if (act.dataset.act === "compare") toggleCompare();
       if (act.dataset.act === "delmask") editor.deleteLayerMask();
       if (act.dataset.act === "applymask") editor.applyLayerMask();
       if (act.dataset.act === "del") editor.deleteActive();
@@ -4506,6 +4665,12 @@
       if (cat.clips) target.clip = resolveInstalled(cat.clips, target.clip, d.clip);
       if (cat.vaes) target.vae = resolveInstalled(cat.vaes, target.vae, d.vae);
       if (cat.checkpoints) target.checkpoint = resolveInstalled(cat.checkpoints, target.checkpoint, d.checkpoint);
+      if (UX) {
+        target.unet = UX.singleFile(target.unet, cat.unets);
+        target.clip = UX.singleFile(target.clip, cat.clips);
+        target.vae = UX.singleFile(target.vae, cat.vaes);
+        target.checkpoint = UX.singleFile(target.checkpoint, cat.checkpoints);
+      }
     }
     syncKreaStack();
     modelMemory = true;
@@ -4640,40 +4805,72 @@
     onBind(host.querySelector(".modal"), () => { host.innerHTML = ""; });
   }
 
+  function kreaGapHtml() {
+    const rows = [];
+    for (const group of MODEL_DOWNLOADS) {
+      if (!/krea/i.test(group.title || "")) continue;
+      for (const file of group.files) {
+        if (!weightInstalled(file.kind, file.name)) rows.push(file.name);
+      }
+    }
+    if (!rows.length) return `<div class="mu">Для Krea всё из списка на месте.</div>`;
+    return `<div class="mu">Чего не хватает для Krea</div><ul class="gap-list">${rows.map((name) => `<li>${escapeHtml(name)}</li>`).join("")}</ul>`;
+  }
+
   function openSettings() {
     const s = state.settings || {};
     const civPlaceholder = s.has_civitai_token ? "сохранён — введите новый, чтобы заменить" : "";
     const keyPlaceholder = s.has_llm_key ? "сохранён — введите новый, чтобы заменить" : "";
     openModal(`<h3>Настройки</h3>
-      <div class="mu">Civitai API key (необязательно, для скрытых моделей)</div>
-      <input id="set-civ" type="password" value="" placeholder="${escapeHtml(civPlaceholder)}" autocomplete="new-password">
-      <div class="mu">LLM, OpenAI-совместимый адрес (Ollama, llama.cpp, LM Studio). Пример: http://127.0.0.1:11434/v1</div>
-      <input id="set-base" type="text" value="${escapeHtml(s.llm_base || "")}">
-      <div class="mu">Имя модели</div>
-      <input id="set-model" type="text" value="${escapeHtml(s.llm_model || "")}" placeholder="qwen2.5:7b">
-      <div class="mu">Ключ, если сервер его требует</div>
-      <input id="set-key" type="password" value="" placeholder="${escapeHtml(keyPlaceholder)}" autocomplete="new-password">
-      <div class="row" style="flex-wrap:wrap">
-        <button type="button" class="b" id="set-focus">Открыть в графе ComfyUI</button>
-        <button type="button" class="b" id="set-layout">Сбросить раскладку</button>
+      <div class="set-tabs" role="tablist">
+        <button type="button" data-settab="services" class="on">Сервисы</button>
+        <button type="button" data-settab="models">Модели</button>
+        <button type="button" data-settab="ui">Интерфейс</button>
       </div>
-      <div class="dl-models">
-        <div class="dl-head">Модели и загрузки</div>
-        <div class="mu">Рекомендуемые файлы. Это справка, не проверка: подойдут другие версии, файнтюны и свои модели. «Установлен» значит, что это имя уже есть в каталоге.</div>
-        <div id="dl-models-list">${modelDownloadsHtml()}</div>
-        <button type="button" class="b s" id="set-rescan">Проверить снова</button>
+      <div data-setpane="services">
+        <div class="mu">Ключ Civitai, если нужен доступ к скрытым моделям</div>
+        <input id="set-civ" type="password" value="" placeholder="${escapeHtml(civPlaceholder)}" autocomplete="new-password">
+        <div class="mu">Адрес LLM (Ollama, llama.cpp, LM Studio). Пример: http://127.0.0.1:11434/v1</div>
+        <input id="set-base" type="text" value="${escapeHtml(s.llm_base || "")}">
+        <div class="mu">Имя модели</div>
+        <input id="set-model" type="text" value="${escapeHtml(s.llm_model || "")}" placeholder="qwen2.5:7b">
+        <div class="mu">Ключ, если сервер его требует</div>
+        <input id="set-key" type="password" value="" placeholder="${escapeHtml(keyPlaceholder)}" autocomplete="new-password">
+      </div>
+      <div data-setpane="models" hidden>
+        <div class="dl-models">
+          <div class="dl-head">Модели и загрузки</div>
+          <div id="dl-models-list">${modelDownloadsHtml()}</div>
+          <div id="krea-gap">${kreaGapHtml()}</div>
+          <button type="button" class="b s" id="set-rescan">Проверить снова</button>
+        </div>
+      </div>
+      <div data-setpane="ui" hidden>
+        <div class="row" style="flex-wrap:wrap">
+          <button type="button" class="b" id="set-focus">Открыть в графе ComfyUI</button>
+          <button type="button" class="b" id="set-layout">Сбросить раскладку</button>
+        </div>
       </div>`, async (box, close) => {
       box.classList.add("wide");
+      box.querySelectorAll("[data-settab]").forEach((btn) => {
+        btn.onclick = () => {
+          box.querySelectorAll("[data-settab]").forEach((b) => b.classList.toggle("on", b === btn));
+          box.querySelectorAll("[data-setpane]").forEach((pane) => { pane.hidden = pane.dataset.setpane !== btn.dataset.settab; });
+        };
+      });
       box.querySelector("#set-focus").onclick = () => focusGraph();
       box.querySelector("#set-layout").onclick = () => { resetLayout(); close(); };
       box.querySelector("#set-rescan").onclick = () => rescanModels().then(() => {
         const list = box.querySelector("#dl-models-list");
         if (list) list.innerHTML = modelDownloadsHtml();
+        const gap = box.querySelector("#krea-gap");
+        if (gap) gap.innerHTML = kreaGapHtml();
       });
       box.querySelector("[data-ok]").onclick = async () => {
         state.settings = await api("/zeroimagestudio/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
           civitai_token: $("set-civ").value, llm_base: $("set-base").value, llm_model: $("set-model").value, llm_key: $("set-key").value,
         }) });
+        fillLlmPresets();
         close();
         toast("Настройки сохранены в user/zeroimagestudio/settings.json");
       };
@@ -4702,7 +4899,15 @@
   function fillLlmPresets() {
     const sel = $("llm-preset");
     const items = (state.settings && state.settings.llm_presets) || [];
-    sel.innerHTML = `<option value="">Режим: текущий</option>` + items.map((p) => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)}</option>`).join("");
+    sel.innerHTML = `<option value="">Пресет не выбран</option>` + items.map((p) => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)}</option>`).join("");
+    sel.title = "Пресет системного промта для Улучшить, Дописать и Описать";
+    const flag = $("llm-state");
+    if (flag) {
+      const ready = !!(state.settings && String(state.settings.llm_base || "").trim());
+      flag.textContent = ready ? "LLM настроен" : "LLM не настроен";
+      flag.classList.toggle("ok", ready);
+      flag.title = ready ? "Адрес LLM задан в Настройках → Сервисы" : "Адрес LLM пуст. Настройки → Сервисы";
+    }
   }
 
   function openCanvasSize() {
@@ -5310,6 +5515,8 @@
     else if (act === "fit") editor.fit();
     else if (act === "zoom100") editor.zoom100();
     else if (act === "reset-layout") resetLayout();
+    else if (act === "layout-focus") applyViewPreset("focus");
+    else if (act === "layout-all") applyViewPreset("all");
     else if (act === "settings") openSettings();
     else if (act === "focus-graph") focusGraph();
     else if (act === "help") toggleHelp(true);
@@ -5401,6 +5608,8 @@
     window.addEventListener("keyup", onMenuKeyUp, true);
     const model = $("model-node");
     model.addEventListener("click", (e) => {
+      const family = e.target.closest("[data-krea-family]");
+      if (family) { setKreaFamily(family.dataset.kreaFamily); return; }
       const task = e.target.closest("[data-krea-task]");
       if (task) { setKreaTask(task.dataset.kreaTask); return; }
       if (e.target.closest("[data-rescan]")) rescanModels();
@@ -5446,6 +5655,7 @@
     };
     $("file-block").addEventListener("change", onFileChange);
     $("graph-options").addEventListener("change", onFileChange);
+    $("inspector").addEventListener("change", onFileChange);
     $("tools").onclick = (e) => { const b = e.target.closest("[data-tool]"); if (b) setTool(b.dataset.tool); };
     $("swatch").oninput = () => { state.color = $("swatch").value; };
     $("prompt").oninput = () => { state.prompt = $("prompt").value; state.dirty = true; updateFinal(); updateGenerateButton(); fitPromptField(); if (isKreaEdit()) renderKreaChrome(); };
@@ -5968,11 +6178,13 @@
       if (key === "method" && c.method === "krea2_edit" && !(c.krea && c.krea.task)) applyKreaTaskDefaults("general");
     }
     if (t.dataset.krea) c.krea[t.dataset.krea] = t.dataset.krea === "grounding_px" ? Number(t.value) : t.value;
-    if (t.dataset.file === "method" || t.dataset.krea === "grounding_px") {
+    if (t.dataset.krea === "grounding_px" || t.dataset.krea === "fit_mode") rememberTaskLora();
+    if (t.dataset.file === "method" || t.dataset.krea === "grounding_px" || t.dataset.krea === "fit_mode") {
       syncKreaStack();
       renderKreaChrome();
       renderRefs();
       renderLoras();
+      renderInspector();
     }
     renderPipe();
     renderModelSummary();
@@ -6080,7 +6292,7 @@
 
   const LAYOUT_KEY = "zeroimagestudio.layout";
   const DEFAULT_LAYOUT = {
-    left: ["model", "refs", "lora", "sampler"],
+    left: ["model", "sampler", "refs", "lora"],
     center: ["canvas", "prompt"],
     right: ["inspector", "layers", "gallery"],
     collapsed: {},
@@ -6156,9 +6368,13 @@
     for (const child of node.children) {
       if (child.classList.contains("nh") || child.classList.contains("sock")) continue;
       if (collapsed) {
-        if (!child.hasAttribute("hidden")) child.setAttribute("hidden", "");
-      } else if (child.hasAttribute("hidden")) {
+        if (!child.hasAttribute("hidden")) {
+          child.setAttribute("hidden", "");
+          child.dataset.sealed = "1";
+        }
+      } else if (child.dataset.sealed) {
         child.removeAttribute("hidden");
+        delete child.dataset.sealed;
       }
     }
   }
@@ -6186,6 +6402,16 @@
         body: JSON.stringify({ layout }),
       }).then((saved) => { if (saved) state.settings = saved; }).catch(() => {});
     }, 250);
+  }
+
+  function applyViewPreset(name) {
+    const layout = normalizeLayout(state.layout || DEFAULT_LAYOUT);
+    if (name === "focus") {
+      layout.collapsed = { model: true, refs: true, lora: true, inspector: true, layers: true, gallery: true };
+    } else layout.collapsed = {};
+    applyLayout(layout);
+    saveLayout();
+    toast(name === "focus" ? "Фокус на холсте." : "Все панели развёрнуты.");
   }
 
   function resetLayout() {
@@ -6277,14 +6503,21 @@
       e.stopPropagation();
       togglePanel(node.dataset.panel);
     });
-    cols.addEventListener("dblclick", (e) => {
-      const header = e.target.closest(".nh");
-      if (!header || !cols.contains(header)) return;
-      if (e.target.closest("button, input, select, textarea, a, .d")) return;
-      const node = header.closest("[data-panel]");
-      if (!node || node.dataset.panel === "canvas") return;
-      togglePanel(node.dataset.panel);
-    });
+    const place = $("place-toggle");
+    if (place) place.onclick = (e) => {
+      const btn = e.target.closest("[data-place]");
+      if (!btn) return;
+      state.placeMode = btn.dataset.place;
+      try { localStorage.setItem("zeroimagestudio.placeMode", state.placeMode); } catch { /* private mode */ }
+      renderPlaceToggle();
+    };
+    const compare = $("compare-split");
+    if (compare) compare.oninput = () => {
+      state.compareSplit = (parseInt(compare.value, 10) || 0) / 100;
+      if (editor) editor.requestDraw();
+    };
+    const compareClose = $("compare-close");
+    if (compareClose) compareClose.onclick = () => { state.compareOn = false; $("compare-bar").hidden = true; if (editor) editor.requestDraw(); };
     const sealObs = new MutationObserver((records) => {
       for (const rec of records) {
         const node = rec.target.closest && rec.target.closest(".node.collapsed");
@@ -6304,6 +6537,7 @@
 
   async function boot() {
     loadModelSlots();
+    try { state.placeMode = localStorage.getItem("zeroimagestudio.placeMode") || ""; } catch { /* private mode */ }
     applyLayout(readLayout());
     bindPanelChrome();
     editor = new Editor($("stage"));

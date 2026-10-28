@@ -47,6 +47,8 @@
         <div class="menu-pop" role="menu" hidden>
           <button type="button" role="menuitem" data-act="fit">Вписать<kbd>Ctrl+0</kbd></button>
           <button type="button" role="menuitem" data-act="zoom100">100%<kbd>Ctrl+1</kbd></button>
+          <button type="button" role="menuitem" data-act="layout-focus">Фокус на холсте</button>
+          <button type="button" role="menuitem" data-act="layout-all">Всё</button>
           <button type="button" role="menuitem" data-act="reset-layout">Сбросить раскладку</button>
           <hr>
           <div class="menu-label">Панели</div>
@@ -151,8 +153,9 @@
     <div class="node" id="refs-node" data-panel="refs" style="--c:#4aa8ff">
       <div class="nh"><span class="d"></span>Референсы<span class="r" id="ref-cap">для Edit-моделей · 0</span></div>
       <div class="nb">
+        <div id="ref-slots"></div>
         <div class="refs" id="ref-list"></div>
-        <div class="mu" id="ref-hint" style="font-size:10.5px">Krea 2 Edit берёт исходный кроп и один дополнительный референс. Qwen Image 2.1 — до 16, в промте <span class="mono">&lt;image1&gt;</span>.</div>
+        <div class="mu" id="ref-hint" title="В режиме Создание референсы не идут в модель.">Только для LLM · 0</div>
       </div>
     </div>
     <div class="node lora-node" id="lora-node" data-panel="lora" style="--c:#b18cff">
@@ -186,6 +189,7 @@
       </div>
       <div class="opts" id="tool-options"></div>
       <div class="stage" id="stage"></div>
+      <div id="compare-bar" class="compare-bar" hidden><span>До</span><input id="compare-split" type="range" min="0" max="100" value="50" aria-label="Сравнить до и после"><span>После</span><button type="button" class="b s" id="compare-close">Закрыть</button></div>
     </div>
     <div class="node" id="prompt-node" data-panel="prompt" data-prompt="compact" style="--c:#e7c27a">
       <div class="nh"><span class="d"></span><span class="ht">Промт</span><span class="r"><span id="token-est">0 симв.</span><span id="prompt-fold-slot"></span></span></div>
@@ -223,7 +227,7 @@
         </div>
         <div class="mu" id="prompt-final" style="font-size:10.5px"></div>
         <div class="row llm-row" style="gap:5px">
-          <span style="color:var(--vi);font-weight:700" data-i="spark" data-s="13"> LLM</span>
+          <span id="llm-state" class="llm-state" title="Адрес LLM задаётся в Настройках → Сервисы">LLM не настроен</span>
           <button class="b s" id="llm-improve" data-i="wand" data-s="12">Улучшить</button>
           <button class="b s" id="llm-extend" data-i="pen" data-s="12">Дописать</button>
           <button class="b s" id="llm-describe" data-i="image" data-s="12">Описать изображение</button>
@@ -233,8 +237,16 @@
         </div>
         <div class="pp-compact" id="pp-compact" hidden></div>
         <div class="progress-line" id="gen-progress" style="display:none"><i></i></div>
-        <div class="gen-wrap" id="gen-wrap" title="Сгенерировать (Ctrl+Enter)">
-          <button class="gen" id="btn-gen" type="button" title="Сгенерировать (Ctrl+Enter)"><span data-i="play" data-s="14"></span><span id="gen-label">Сгенерировать</span> <span class="mono" id="gen-batch" style="font-weight:500;font-size:11px;opacity:.75">×1</span><span class="gen-key mono"> · Ctrl+↵</span></button>
+        <div id="variant-strip" class="variant-strip" hidden></div>
+        <div class="gen-row">
+          <div class="place-toggle" id="place-toggle" role="group" aria-label="Куда класть результат">
+            <button type="button" data-place="layer">Новый слой</button>
+            <button type="button" data-place="replace">Заменить</button>
+          </div>
+          <div class="gen-wrap" id="gen-wrap">
+            <button class="gen" id="btn-gen" type="button"><span data-i="play" data-s="14"></span><span id="gen-label">Сгенерировать</span> <span class="mono" id="gen-batch" style="font-weight:500;font-size:11px;opacity:.75">×1</span><span class="gen-key mono"> · Ctrl+↵</span></button>
+            <div class="gen-miss" id="gen-miss" hidden></div>
+          </div>
         </div>
       </div>
     </div>
@@ -316,9 +328,10 @@ try {
   }
 } catch (e) {}
 </script>
-<script src="zeroimagestudio_size.js?v=round5b"></script>
-<script src="zeroimagestudio_util.js?v=round5b"></script>
-<script src="zeroimagestudio_models.js?v=round5b"></script>
-<script src="zeroimagestudio_app.js?v=round5b"></script>
+<script src="zeroimagestudio_size.js?v=round6c"></script>
+<script src="zeroimagestudio_util.js?v=round6c"></script>
+<script src="zeroimagestudio_models.js?v=round6c"></script>
+<script src="zeroimagestudio_ux.js?v=round6c"></script>
+<script src="zeroimagestudio_app.js?v=round6c"></script>
 </body>
 </html>
