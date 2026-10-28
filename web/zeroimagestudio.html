@@ -6,7 +6,7 @@
   <title>ZeroImageStudio</title>
   <link rel="stylesheet" href="zeroimagestudio.css">
   <script>window.__ZEROIMAGESTUDIO_PAGE = true;</script>
-  <script src="icons.js?v=lorapick"></script>
+  <script src="icons.js?v=framecrop"></script>
 </head>
 <body data-tab="canvas">
 <header class="chrome" id="chrome">
@@ -93,7 +93,7 @@
 <div class="cols">
   <div class="toolcol" id="tools">
     <button class="tool" data-tool="move" data-i="move" data-s="17" title="Перемещение (V)"></button>
-    <button class="tool on" data-tool="genarea" data-for="edit" data-i="genarea" data-s="17" title="Рамка генерации (G): что увидит модель"></button>
+    <button class="tool on" data-tool="genarea" data-for="edit" data-i="genarea" data-s="17" title="Рамка генерации (G): внутри — перенос, края — размер, снаружи — новая рамка. Кисть и маска рисуют внутри; Alt переносит рамку."></button>
     <hr data-for="edit">
     <button class="tool" data-tool="mask" data-for="edit" data-i="mask" data-s="17" title="Маска (Q): закрасьте, что менять"></button>
     <button class="tool" data-tool="maskerase" data-for="edit" data-i="maskerase" data-s="17" title="Ластик маски: сотрите лишнее с маски"></button>
@@ -337,10 +337,10 @@ try {
   }
 } catch (e) {}
 </script>
-<script src="zeroimagestudio_size.js?v=lorapick"></script>
-<script src="zeroimagestudio_util.js?v=lorapick"></script>
-<script src="zeroimagestudio_models.js?v=lorapick"></script>
-<script src="zeroimagestudio_ux.js?v=lorapick"></script>
-<script src="zeroimagestudio_app.js?v=lorapick"></script>
+<script src="zeroimagestudio_size.js?v=framecrop"></script>
+<script src="zeroimagestudio_util.js?v=framecrop"></script>
+<script src="zeroimagestudio_models.js?v=framecrop"></script>
+<script src="zeroimagestudio_ux.js?v=framecrop"></script>
+<script src="zeroimagestudio_app.js?v=framecrop"></script>
 </body>
 </html>

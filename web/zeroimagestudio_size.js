@@ -80,6 +80,77 @@
     return { x: Math.round((bw - w) / 2), y: Math.round((bh - h) / 2), w: w, h: h };
   }
 
+  const FRAME_HANDLES = { n: 1, s: 1, e: 1, w: 1, nw: 1, ne: 1, sw: 1, se: 1 };
+
+  function contextRect(frame, docW, docH, frac) {
+    const g = frame || { x: 0, y: 0, w: docW, h: docH };
+    const docWidth = Math.max(1, Number(docW) || 1);
+    const docHeight = Math.max(1, Number(docH) || 1);
+    let x = g.x || 0;
+    let y = g.y || 0;
+    let w = g.w || 0;
+    let h = g.h || 0;
+    const expand = Number(frac) || 0;
+    if (expand > 0 && w > 0 && h > 0) {
+      const px = Math.round(w * expand);
+      const py = Math.round(h * expand);
+      const x2 = Math.min(docWidth, (g.x || 0) + w + px);
+      const y2 = Math.min(docHeight, (g.y || 0) + h + py);
+      x = Math.max(0, (g.x || 0) - px);
+      y = Math.max(0, (g.y || 0) - py);
+      w = x2 - x;
+      h = y2 - y;
+    }
+    x = Math.round(x);
+    y = Math.round(y);
+    w = Math.round(w);
+    h = Math.round(h);
+    w = Math.max(1, Math.min(docWidth - x, w));
+    h = Math.max(1, Math.min(docHeight - y, h));
+    return { x: x, y: y, w: w, h: h };
+  }
+
+  function previewMap(crop, genW, genH, placed) {
+    const box = placed || { x: 0, y: 0, w: genW, h: genH };
+    const pw = Math.max(1, box.w);
+    const ph = Math.max(1, box.h);
+    const sx = crop.w / pw;
+    const sy = crop.h / ph;
+    return {
+      x: crop.x - box.x * sx,
+      y: crop.y - box.y * sy,
+      w: Math.max(1, genW) * sx,
+      h: Math.max(1, genH) * sy,
+    };
+  }
+
+  function frameGesture(x, y, frame, zoom, opts) {
+    const paint = !!(opts && opts.paint);
+    const alt = !!(opts && opts.alt);
+    const frameTool = !!(opts && opts.frameTool);
+    if (!frame || !(frame.w > 0) || !(frame.h > 0)) return frameTool ? "new" : "";
+    const pad = 12 / Math.max(0.05, Number(zoom) || 1);
+    const x0 = frame.x;
+    const y0 = frame.y;
+    const x1 = frame.x + frame.w;
+    const y1 = frame.y + frame.h;
+    const near = x >= x0 - pad && x <= x1 + pad && y >= y0 - pad && y <= y1 + pad;
+    if (!near) return frameTool ? "new" : "";
+    const corners = [["nw", x0, y0], ["ne", x1, y0], ["sw", x0, y1], ["se", x1, y1]];
+    for (let i = 0; i < corners.length; i++) {
+      if (Math.abs(x - corners[i][1]) <= pad && Math.abs(y - corners[i][2]) <= pad) return corners[i][0];
+    }
+    if (Math.abs(y - y0) <= pad && x >= x0 && x <= x1) return "n";
+    if (Math.abs(y - y1) <= pad && x >= x0 && x <= x1) return "s";
+    if (Math.abs(x - x0) <= pad && y >= y0 && y <= y1) return "w";
+    if (Math.abs(x - x1) <= pad && y >= y0 && y <= y1) return "e";
+    const inside = x >= x0 && y >= y0 && x <= x1 && y <= y1;
+    if (!inside) return frameTool ? "new" : "";
+    if (paint && !alt) return "paint";
+    if (frameTool || alt) return "move";
+    return "";
+  }
+
   function snapRect(rect, step, doc) {
     const s = Math.max(1, step || 16);
     const maxW = Math.max(s, (doc && doc.w) || 0);
@@ -153,6 +224,10 @@
     areaLabelText: areaLabelText,
     sizeForMegapixels: sizeForMegapixels,
     snapRect: snapRect,
+    frameGesture: frameGesture,
+    contextRect: contextRect,
+    previewMap: previewMap,
+    FRAME_HANDLES: FRAME_HANDLES,
     cropSizeToStep: cropSizeToStep,
     containInside: containInside,
     CREATE_ASPECTS: CREATE_ASPECTS,

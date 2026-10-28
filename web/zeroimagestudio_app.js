@@ -227,6 +227,11 @@
       this.stage.appendChild(this.variantStrip);
       this._pointer = null;
       this.ga = this.overlay.querySelector(".ga");
+      this.contextBox = document.createElement("div");
+      this.contextBox.id = "ga-context";
+      this.contextBox.className = "ga-context";
+      this.contextBox.hidden = true;
+      this.stage.appendChild(this.contextBox);
       this.doc = { w: 1024, h: 1024 };
       this.layers = [];
       this.active = 0;
@@ -508,17 +513,28 @@
       paintStatus();
       lab.classList.toggle("inside", (this.panY + g.y * this.zoom) < 26);
       const run = $("ga-run");
+      const region = state.pipeline === "edit" && state.area.editScope === "region";
+      const crop = region
+        ? window.ZeroImageStudioSize.contextRect(g, this.doc.w, this.doc.h, state.area.context || 0)
+        : { x: 0, y: 0, w: this.doc.w, h: this.doc.h };
+      const gen = frame;
+      const fitFrame = region ? window.ZeroImageStudioSize.frameForRegion(crop.w, crop.h, gen.w, gen.h) : gen;
+      const placed = region ? window.ZeroImageStudioSize.containRect(crop.w, crop.h, fitFrame.w, fitFrame.h) : { x: 0, y: 0, w: gen.w, h: gen.h };
+      const mapped = region ? window.ZeroImageStudioSize.previewMap(crop, fitFrame.w, fitFrame.h, placed) : crop;
       if (run) {
         run.hidden = !state.running;
-        const region = state.pipeline === "edit" && state.area.editScope === "region";
-        const rx = region ? g.x : 0;
-        const ry = region ? g.y : 0;
-        const rw = region ? g.w : this.doc.w;
-        const rh = region ? g.h : this.doc.h;
-        run.style.left = (this.panX + rx * this.zoom) + "px";
-        run.style.top = (this.panY + ry * this.zoom) + "px";
-        run.style.width = Math.max(8, rw * this.zoom) + "px";
-        run.style.height = Math.max(8, rh * this.zoom) + "px";
+        run.style.left = (this.panX + mapped.x * this.zoom) + "px";
+        run.style.top = (this.panY + mapped.y * this.zoom) + "px";
+        run.style.width = Math.max(8, mapped.w * this.zoom) + "px";
+        run.style.height = Math.max(8, mapped.h * this.zoom) + "px";
+      }
+      if (this.contextBox) {
+        const showContext = !!(state.running && region && (crop.w > g.w + 1 || crop.h > g.h + 1 || crop.x < g.x - 1 || crop.y < g.y - 1));
+        this.contextBox.hidden = !showContext;
+        this.contextBox.style.left = (this.panX + crop.x * this.zoom) + "px";
+        this.contextBox.style.top = (this.panY + crop.y * this.zoom) + "px";
+        this.contextBox.style.width = Math.max(8, crop.w * this.zoom) + "px";
+        this.contextBox.style.height = Math.max(8, crop.h * this.zoom) + "px";
       }
       const preview = $("variant-preview");
       if (preview && !preview.hidden) {
@@ -1019,7 +1035,7 @@
       return handle.dataset.h || "";
     }
 
-    beginFrameDrag(handle, clientX, clientY, captureEl) {
+    beginFrameDrag(handle, clientX, clientY, captureEl, pointerId) {
       if (state.pipeline === "edit" && state.area.editScope !== "region") applyEditScope("region");
       const p = this.screenToDoc(clientX, clientY);
       this.drag = {
@@ -1036,13 +1052,28 @@
       }
     }
 
+    frameGestureAt(clientX, clientY, alt) {
+      if (!this.ga || this.ga.hidden || state.pipeline !== "edit") return "";
+      const p = this.screenToDoc(clientX, clientY);
+      const paint = state.tool === "brush" || state.tool === "eraser" || state.tool === "mask" || state.tool === "maskerase";
+      return window.ZeroImageStudioSize.frameGesture(p.x, p.y, this.gen, this.zoom, {
+        paint: paint,
+        frameTool: state.tool === "genarea",
+        alt: !!alt,
+      });
+    }
+
     pointerDown(e) {
       if (e.button === 1 || this.space || state.tool === "hand") {
         this.drag = { kind: "pan", x: e.clientX, y: e.clientY, panX: this.panX, panY: this.panY };
         return;
       }
       const hit = this.frameHit(e.clientX, e.clientY);
-      if (hit) { this.beginFrameDrag(hit, e.clientX, e.clientY, e.target, e.pointerId); return; }
+      const gesture = this.frameGestureAt(e.clientX, e.clientY, e.altKey);
+      const handle = window.ZeroImageStudioSize.FRAME_HANDLES[gesture] ? gesture : (hit && hit !== "move" ? hit : "");
+      const moveFrame = gesture === "move" || hit === "move";
+      if (handle) { this.beginFrameDrag(handle, e.clientX, e.clientY, e.target, e.pointerId); return; }
+      if (moveFrame && (state.tool === "genarea" || e.altKey)) { this.beginFrameDrag("move", e.clientX, e.clientY, e.target, e.pointerId); return; }
       const p = this.screenToDoc(e.clientX, e.clientY);
       const tool = state.tool;
       if (tool === "zoom") {
@@ -1123,10 +1154,14 @@
       this._pointer = { x: e.clientX, y: e.clientY };
       this.syncBrushCursor();
       if (!this.drag) {
-        const hit = this.frameHit(e.clientX, e.clientY);
-        if (hit && state.tool !== "hand") {
-          const cursors = { n: "ns-resize", s: "ns-resize", e: "ew-resize", w: "ew-resize", ne: "nesw-resize", sw: "nesw-resize", nw: "nwse-resize", se: "nwse-resize", move: "move" };
-          this.canvas.style.cursor = cursors[hit] || "move";
+        const gesture = this.frameGestureAt(e.clientX, e.clientY, e.altKey);
+        const handles = window.ZeroImageStudioSize.FRAME_HANDLES;
+        const cursors = { n: "ns-resize", s: "ns-resize", e: "ew-resize", w: "ew-resize", ne: "nesw-resize", sw: "nesw-resize", nw: "nwse-resize", se: "nwse-resize", move: "move" };
+        if (handles[gesture]) this.canvas.style.cursor = cursors[gesture];
+        else if (gesture === "move") this.canvas.style.cursor = "move";
+        else if (state.tool !== "hand") {
+          const base = { brush: "none", eraser: "none", mask: "none", maskerase: "none", zoom: "zoom-in", move: "move", genarea: "crosshair", crop: "crosshair", select: "crosshair", lasso: "crosshair", eyedrop: "crosshair", transform: "move" };
+          this.canvas.style.cursor = base[state.tool] || "default";
         }
         return;
       }
@@ -2462,7 +2497,7 @@
       if (toMask) toMask.onclick = () => selectionToMask();
       if (clear) clear.onclick = () => clearSelection();
     } else if (tool === "genarea") {
-      host.innerHTML = `${toolHeading(tool)}<span class="mu" id="opt-status"></span>`;
+      host.innerHTML = `${toolHeading(tool)}<span class="mu" title="Кисть и маска рисуют внутри рамки. Alt переносит её, углы и края меняют размер.">Внутри — перенос, снаружи — новая рамка</span><span class="mu" id="opt-status" hidden></span>`;
       paintStatus();
     } else {
       const hints = {

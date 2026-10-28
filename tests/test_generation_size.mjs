@@ -84,3 +84,30 @@ test("a wide crop keeps its aspect inside the generation budget", () => {
   assert.ok(placed.x >= 0 && placed.y >= 0);
   assert.ok(placed.w === frame.w || placed.h === frame.h);
 });
+
+test("context padding grows the crop past the frame and the preview maps back onto it", () => {
+  const frame = { x: 50, y: 40, w: 200, h: 100 };
+  const crop = size.contextRect(frame, 1000, 1000, 0.15);
+  assert.deepEqual(crop, { x: 20, y: 25, w: 260, h: 130 });
+  const edge = size.contextRect({ x: 0, y: 0, w: 200, h: 100 }, 220, 1000, 0.15);
+  assert.equal(edge.x, 0);
+  assert.ok(edge.w <= 220);
+  const placed = { x: 20, y: 0, w: 240, h: 120 };
+  const mapped = size.previewMap(crop, 280, 120, placed);
+  assert.ok(mapped.x < crop.x);
+  assert.ok(mapped.w > crop.w);
+  assert.equal(Math.round(mapped.y), crop.y);
+});
+
+test("inside a frame moves it, a handle resizes it, and outside starts a new one", () => {
+  const frame = { x: 100, y: 80, w: 200, h: 160 };
+  assert.equal(size.frameGesture(180, 140, frame, 1, { frameTool: true }), "move");
+  assert.equal(size.frameGesture(100, 80, frame, 1, { frameTool: true }), "nw");
+  assert.equal(size.frameGesture(20, 20, frame, 1, { frameTool: true }), "new");
+  assert.equal(size.frameGesture(200, 80, frame, 1, { frameTool: true }), "n");
+  assert.equal(size.frameGesture(180, 140, frame, 1, { paint: true }), "paint");
+  assert.equal(size.frameGesture(180, 140, frame, 1, { paint: true, alt: true }), "move");
+  assert.equal(size.FRAME_HANDLES[size.frameGesture(300, 240, frame, 2, { frameTool: true })], 1);
+  assert.equal(size.frameGesture(100 - 8, 160, frame, 2, { frameTool: true }), "new");
+  assert.equal(size.frameGesture(100 - 8, 160, frame, 1, { frameTool: true }), "w");
+});
