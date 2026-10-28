@@ -319,9 +319,19 @@
 
     async addImage(img, opts = {}) {
       const c = document.createElement("canvas");
-      c.width = opts.w || img.naturalWidth || img.width;
-      c.height = opts.h || img.naturalHeight || img.height;
-      c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+      let w = opts.w || img.naturalWidth || img.width;
+      let h = opts.h || img.naturalHeight || img.height;
+      if (!opts.keepCanvas && canvasIsEmpty()) {
+        const size = window.ZeroImageStudioSize.cropSizeToStep(w, h, modelStep());
+        c.width = size.w;
+        c.height = size.h;
+        c.getContext("2d").drawImage(img, Math.floor((w - size.w) / 2), Math.floor((h - size.h) / 2), size.w, size.h, 0, 0, size.w, size.h);
+        adoptCanvasSize(size.w, size.h);
+      } else {
+        c.width = w;
+        c.height = h;
+        c.getContext("2d").drawImage(img, 0, 0, w, h);
+      }
       const layer = this.makeLayer(opts.name || "Слой", c);
       layer.x = opts.x || 0;
       layer.y = opts.y || 0;
@@ -3692,6 +3702,7 @@
   }
 
   function canvasIsEmpty() {
+    // Size of the blank canvas does not matter. After the last content layer is deleted, the next image sets it again.
     return !editor || !editor.layers.some(layerHasPixels);
   }
 
@@ -3969,7 +3980,7 @@
           <label class="row"><input type="radio" name="import-place" value="grow"> Холст под изображение</label>
           <label class="row"><input type="radio" name="import-place" value="fit"> Вписать в холст</label>
         </div>
-        <div class="mu" id="import-blank" ${blankCanvas ? "" : "hidden"}>Пустой холст примет размер изображения.</div>
+        <div class="mu" id="import-blank" ${blankCanvas ? "" : "hidden"}>На холсте нет слоёв: это изображение задаст его размер, даже если пустой холст уже меняли.</div>
         <div class="row" style="justify-content:flex-end">
           <button type="button" class="b" data-cancel="1">Отмена</button>
           <button type="button" class="b ac" data-ok="1">Импорт</button>
@@ -4078,7 +4089,7 @@
       canvas.addEventListener("pointerup", () => { drag = null; });
       const finish = (ok) => {
         const picked = back.querySelector('input[name="import-place"]:checked');
-        const mode = blankCanvas ? "new" : (picked && picked.value === "grow" ? "grow" : "fit");
+        const mode = U.importPlacement(!blankCanvas, picked && picked.value);
         window.removeEventListener("keydown", onKey, true);
         back.remove();
         resolve(ok ? mode : null);

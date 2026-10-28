@@ -66,6 +66,15 @@ test("a saved task LoRA is not replaced by the suggested file", () => {
   assert.equal(U.resolveTaskLora({ name: "  " }, "suggested.safetensors").name, "suggested.safetensors");
 });
 
+test("the first image sets the canvas even after a manual blank size", () => {
+  assert.equal(U.importPlacement(false, "fit"), "new");
+  assert.equal(U.importPlacement(false, "grow"), "new");
+  assert.equal(U.importPlacement(false, null), "new");
+  assert.equal(U.importPlacement(true, "grow"), "grow");
+  assert.equal(U.importPlacement(true, "fit"), "fit");
+  assert.equal(U.importPlacement(true, null), "fit");
+});
+
 test("a preset without a category lands in Общее", () => {
   assert.equal(U.presetCategory({}), "Общее");
   assert.equal(U.presetCategory({ category: "  " }), "Общее");

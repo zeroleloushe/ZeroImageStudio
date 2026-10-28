@@ -118,6 +118,12 @@
   }
 
   // A saved task-LoRA choice wins. The suggested file is only the first visit.
+  // No content yet: the first image defines the canvas. A later image keeps it.
+  function importPlacement(hasContent, choice) {
+    if (!hasContent) return "new";
+    return choice === "grow" ? "grow" : "fit";
+  }
+
   function presetCategory(item) {
     const name = item && String(item.category || "").trim();
     return name || "Общее";
@@ -167,6 +173,7 @@
     brushTargetsMask,
     resolveTaskLora,
     presetCategory,
+    importPlacement,
     workMaskRowVisible,
     maskShortcutClears,
     historyBytes,
