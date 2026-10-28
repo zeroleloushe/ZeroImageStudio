@@ -97,6 +97,45 @@
     return { x: x, y: y, w: w, h: h };
   }
 
+  const CREATE_ASPECTS = [
+    ["1:1", 1, 1], ["16:9", 16, 9], ["9:16", 9, 16], ["2:1", 2, 1],
+    ["3:2", 3, 2], ["2:3", 2, 3], ["4:3", 4, 3], ["3:4", 3, 4], ["4:5", 4, 5],
+  ];
+  const NAMED_SIZES = {
+    "1:1": [[512, 512], [768, 768], [1024, 1024], [1280, 1280], [1536, 1536]],
+    "9:16": [[480, 832], [720, 1280], [768, 1344], [864, 1536], [1088, 1920]],
+    "16:9": [[832, 480], [1280, 720], [1344, 768], [1536, 864], [1920, 1088]],
+  };
+
+  function resolutionCatalog(aspect, step, mp) {
+    const hit = CREATE_ASPECTS.find((item) => item[0] === aspect) || CREATE_ASPECTS[0];
+    const ratio = hit[1] / hit[2];
+    const s = Math.max(1, step || 16);
+    const named = (NAMED_SIZES[hit[0]] || []).map(([w, h]) => ({ w: w, h: h }));
+    const gen = [];
+    for (let h0 = 480; h0 <= 1920; h0 += 64) {
+      const h = snapSize(h0, s, s);
+      const w = snapSize(h * ratio, s, s);
+      if (Math.abs(w / h - ratio) / ratio > 0.035) continue;
+      if (named.some((n) => Math.abs(n.w - w) <= 32 && Math.abs(n.h - h) <= 32)) continue;
+      if (gen.some((item) => item.w === w && item.h === h)) continue;
+      gen.push({ w: w, h: h });
+    }
+    const seen = new Set();
+    let all = named.concat(gen).filter((item) => {
+      const key = item.w + "x" + item.h;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return item.w % s === 0 && item.h % s === 0;
+    });
+    all.sort((a, b) => a.w * a.h - b.w * b.h);
+    if (mp == null || mp === "") return all;
+    const target = Number(mp);
+    if (!Number.isFinite(target)) return all;
+    const filtered = all.filter((item) => Math.abs((item.w * item.h) / 1e6 - target) <= 0.28);
+    return filtered.length ? filtered : all.slice(0, 8);
+  }
+
   function areaLabelText(gen, doc, area) {
     const frame = generationFrame(doc, area);
     const kind = area && area.userPlaced ? "Область" : "Весь холст";
@@ -116,5 +155,7 @@
     snapRect: snapRect,
     cropSizeToStep: cropSizeToStep,
     containInside: containInside,
+    CREATE_ASPECTS: CREATE_ASPECTS,
+    resolutionCatalog: resolutionCatalog,
   };
 });

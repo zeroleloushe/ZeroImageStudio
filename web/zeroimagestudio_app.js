@@ -30,7 +30,7 @@
     create: blankPipe("create"),
     edit: blankPipe("edit"),
     references: [],
-    area: { outW: 1024, outH: 1024, aspect: "free", context: 0.15, feather: 48, paste: "poisson", colorMatch: true, userPlaced: false, outputLinked: true, mp: 1, pasteOpen: false, editScope: "full", region: null, exactOpen: false },
+    area: { outW: 1024, outH: 1024, aspect: "free", context: 0.15, feather: 48, paste: "poisson", colorMatch: true, userPlaced: false, outputLinked: true, mp: 1, mpFilter: 1, pasteOpen: false, editScope: "full", region: null, exactOpen: false, createAspect: "1:1", resPanel: "" },
     tool: "genarea",
     color: "#e7c27a",
     brush: { size: 64, hardness: 0.3, opacity: 1 },
@@ -59,6 +59,7 @@
     maskFocus: null,
     workMaskHidden: false,
     kreaTaskSlots: {},
+    modelSlots: {},
   };
   state.edit.method = "krea2_edit";
   state.edit.clip_type = "krea2";
@@ -201,6 +202,12 @@
       this.runBox.hidden = true;
       this.runBox.innerHTML = '<img id="ga-preview" alt=""><div id="ga-run-label">В очереди</div><button type="button" class="b" id="btn-cancel">Отмена</button>';
       this.stage.appendChild(this.runBox);
+      this.brushCursor = document.createElement("div");
+      this.brushCursor.className = "brush-cursor";
+      this.brushCursor.hidden = true;
+      this.brushCursor.innerHTML = '<i class="brush-cursor-dark"></i><i class="brush-cursor-light"></i>';
+      this.stage.appendChild(this.brushCursor);
+      this._pointer = null;
       this.ga = this.overlay.querySelector(".ga");
       this.doc = { w: 1024, h: 1024 };
       this.layers = [];
@@ -480,10 +487,15 @@
       const run = $("ga-run");
       if (run) {
         run.hidden = !state.running;
-        run.style.left = this.ga.style.left;
-        run.style.top = this.ga.style.top;
-        run.style.width = this.ga.style.width;
-        run.style.height = this.ga.style.height;
+        const region = state.pipeline === "edit" && state.area.editScope === "region";
+        const rx = region ? g.x : 0;
+        const ry = region ? g.y : 0;
+        const rw = region ? g.w : this.doc.w;
+        const rh = region ? g.h : this.doc.h;
+        run.style.left = (this.panX + rx * this.zoom) + "px";
+        run.style.top = (this.panY + ry * this.zoom) + "px";
+        run.style.width = Math.max(8, rw * this.zoom) + "px";
+        run.style.height = Math.max(8, rh * this.zoom) + "px";
       }
     }
 
@@ -908,6 +920,7 @@
       });
       window.addEventListener("pointermove", (e) => this.pointerMove(e));
       window.addEventListener("pointerup", (e) => this.pointerUp(e));
+      this.stage.addEventListener("pointerleave", () => { this._pointer = null; this.syncBrushCursor(); });
       this.stage.addEventListener("wheel", (e) => {
         e.preventDefault();
         const factor = e.deltaY < 0 ? 1.08 : 1 / 1.08;
@@ -946,8 +959,8 @@
           this.deleteActive();
           return;
         }
-        if (e.key === "[") { state.brush.size = Math.max(1, state.brush.size - 4); const b = $("brush-size"); if (b) b.value = state.brush.size; renderToolOptions(); }
-        if (e.key === "]") { state.brush.size = Math.min(300, state.brush.size + 4); const b = $("brush-size"); if (b) b.value = state.brush.size; renderToolOptions(); }
+        if (e.key === "[") { state.brush.size = Math.max(1, state.brush.size - 4); const b = $("brush-size"); if (b) b.value = state.brush.size; renderToolOptions(); this.syncBrushCursor(); }
+        if (e.key === "]") { state.brush.size = Math.min(300, state.brush.size + 4); const b = $("brush-size"); if (b) b.value = state.brush.size; renderToolOptions(); this.syncBrushCursor(); }
         if (map[e.code]) { setTool(map[e.code]); }
       });
       window.addEventListener("keyup", (e) => { if (e.code === "Space") this.space = false; });
@@ -1044,7 +1057,26 @@
       }
     }
 
+    syncBrushCursor() {
+      const el = this.brushCursor;
+      if (!el) return;
+      const show = state.tool === "brush" || state.tool === "eraser" || state.tool === "mask";
+      const pt = this._pointer;
+      const rect = this.canvas.getBoundingClientRect();
+      const inside = pt && pt.x >= rect.left && pt.x <= rect.right && pt.y >= rect.top && pt.y <= rect.bottom;
+      if (!show || !inside) { el.hidden = true; return; }
+      const p = this.screenToDoc(pt.x, pt.y);
+      const d = Math.max(1, state.brush.size * this.zoom);
+      el.hidden = false;
+      el.style.width = d + "px";
+      el.style.height = d + "px";
+      el.style.left = (this.panX + p.x * this.zoom - d / 2) + "px";
+      el.style.top = (this.panY + p.y * this.zoom - d / 2) + "px";
+    }
+
     pointerMove(e) {
+      this._pointer = { x: e.clientX, y: e.clientY };
+      this.syncBrushCursor();
       if (!this.drag) {
         const hit = this.frameHit(e.clientX, e.clientY);
         if (hit && state.tool !== "hand") {
@@ -1353,14 +1385,17 @@
   let editor;
 
   function setTool(name) {
+    if (state.pipeline === "create" && (name === "mask" || name === "genarea")) return;
     state.tool = name;
     document.querySelectorAll(".tool").forEach((b) => b.classList.toggle("on", b.dataset.tool === name));
     renderToolOptions();
     const meta = $("insp-meta");
     if (meta && editor) meta.textContent = inspectorContext();
-    const cursors = { brush: "crosshair", eraser: "crosshair", mask: "crosshair", hand: "grab", zoom: "zoom-in", move: "move", genarea: "crosshair", crop: "crosshair", select: "crosshair", lasso: "crosshair", eyedrop: "crosshair", transform: "move" };
+    const cursors = { brush: "none", eraser: "none", mask: "none", hand: "grab", zoom: "zoom-in", move: "move", genarea: "crosshair", crop: "crosshair", select: "crosshair", lasso: "crosshair", eyedrop: "crosshair", transform: "move" };
     editor.canvas.style.cursor = cursors[name] || "default";
     if (name === "mask") state.maskFocus = "work";
+    if (name === "genarea" && state.pipeline === "edit" && state.area.editScope !== "region") applyEditScope("region");
+    editor.syncBrushCursor();
     editor.requestDraw();
     renderLayers();
   }
@@ -1381,6 +1416,7 @@
     renderKreaChrome();
     updateGenerateButton();
     renderModelSummary();
+    document.body.dataset.pipe = state.pipeline;
     $("prompt").value = state.prompt;
     $("negative").value = state.negative;
     fitPromptField();
@@ -1558,6 +1594,7 @@
     </div>`;
     if (window.zeroImageStudioHydrateIcons) window.zeroImageStudioHydrateIcons($("lora-panel"));
     sealCollapsed($("lora-node"));
+    rememberCurrentModel();
   }
 
   function loraListing(path, query) {
@@ -1758,18 +1795,18 @@
     const link = (range, num, key, parse) => {
       const a = $(range), b = $(num);
       if (!a || !b) return;
-      const apply = (v) => { state.sampler[key] = parse(v); a.value = state.sampler[key]; b.value = state.sampler[key]; renderPipe(); };
+      const apply = (v) => { state.sampler[key] = parse(v); a.value = state.sampler[key]; b.value = state.sampler[key]; renderPipe(); rememberCurrentModel(); };
       a.oninput = () => apply(a.value);
       b.onchange = () => apply(b.value);
     };
     link("steps-range", "steps", "steps", (v) => Math.max(1, parseInt(v, 10) || 1));
     link("cfg-range", "cfg", "cfg", (v) => Math.max(0, parseFloat(v) || 0));
     link("denoise-range", "denoise", "denoise", (v) => Math.min(1, Math.max(0, parseFloat(v) || 0)));
-    $("seed").onchange = () => { state.sampler.seed = Math.max(0, parseInt($("seed").value, 10) || 0); if (state.sampler.seedMode === "random") state.sampler.seedMode = "fixed"; if ($("seed-mode")) $("seed-mode").value = state.sampler.seedMode; };
-    $("seed-mode").onchange = () => { state.sampler.seedMode = $("seed-mode").value; };
-    $("sampler").onchange = () => { state.sampler.sampler = $("sampler").value; renderPipe(); };
-    $("scheduler").onchange = () => { state.sampler.scheduler = $("scheduler").value; };
-    $("batch").onchange = () => { state.sampler.batch = Math.max(1, Math.min(8, parseInt($("batch").value, 10) || 1)); $("gen-batch").textContent = `×${state.sampler.batch}`; };
+    $("seed").onchange = () => { state.sampler.seed = Math.max(0, parseInt($("seed").value, 10) || 0); if (state.sampler.seedMode === "random") state.sampler.seedMode = "fixed"; if ($("seed-mode")) $("seed-mode").value = state.sampler.seedMode; rememberCurrentModel(); };
+    $("seed-mode").onchange = () => { state.sampler.seedMode = $("seed-mode").value; rememberCurrentModel(); };
+    $("sampler").onchange = () => { state.sampler.sampler = $("sampler").value; renderPipe(); rememberCurrentModel(); };
+    $("scheduler").onchange = () => { state.sampler.scheduler = $("scheduler").value; rememberCurrentModel(); };
+    $("batch").onchange = () => { state.sampler.batch = Math.max(1, Math.min(8, parseInt($("batch").value, 10) || 1)); $("gen-batch").textContent = `×${state.sampler.batch}`; rememberCurrentModel(); };
     $("btn-seed").onclick = () => { state.sampler.seed = Math.floor(Math.random() * 1e9); $("seed").value = state.sampler.seed; };
   }
 
@@ -1949,7 +1986,147 @@
     paintStatus();
   }
 
+  function applyCreateSize(w, h) {
+    const step = modelStep();
+    const sw = snapSize(w, step);
+    const sh = snapSize(h, step);
+    if (!editor || (editor.doc.w === sw && editor.doc.h === sh)) {
+      state.area.outW = sw;
+      state.area.outH = sh;
+      renderInspector();
+      return;
+    }
+    editor.pushUndo(editor.fullSnapshot());
+    editor.doc = { w: sw, h: sh };
+    editor.resizeMask();
+    state.area.userPlaced = false;
+    state.area.outputLinked = true;
+    state.area.editScope = "full";
+    syncDefaultArea();
+    editor.fit();
+    state.dirty = true;
+    editor.requestDraw();
+    renderInspector();
+    renderPipe();
+    paintStatus();
+  }
+
+  function renderCreateInspector() {
+    const Size = window.ZeroImageStudioSize;
+    const aspects = Size.CREATE_ASPECTS;
+    const step = modelStep();
+    const docW = editor ? editor.doc.w : 1024;
+    const docH = editor ? editor.doc.h : 1024;
+    let aspect = state.area.createAspect || "";
+    if (!aspects.some((item) => item[0] === aspect)) {
+      const matched = aspects.find((item) => Math.abs(docW / Math.max(1, docH) - item[1] / item[2]) < 0.04);
+      aspect = matched ? matched[0] : "1:1";
+      state.area.createAspect = aspect;
+    }
+    const mp = state.area.mpFilter == null ? 1 : state.area.mpFilter;
+    const list = Size.resolutionCatalog(aspect, step, mp === "custom" ? Number(state.area.mp) || 1 : mp);
+    const selected = list.reduce((best, item) => {
+      if (!best) return item;
+      const db = Math.abs(best.w - docW) + Math.abs(best.h - docH);
+      const di = Math.abs(item.w - docW) + Math.abs(item.h - docH);
+      return di < db ? item : best;
+    }, null);
+    const icon = (aw, ah) => {
+      const max = 16;
+      const w = Math.max(6, Math.round(max * aw / Math.max(aw, ah)));
+      const h = Math.max(6, Math.round(max * ah / Math.max(aw, ah)));
+      return `<i class="ratio-ico" style="width:${w}px;height:${h}px"></i>`;
+    };
+    const buttons = aspects.map(([name, aw, ah]) =>
+      `<button type="button" class="ratio ${name === aspect ? "on" : ""}" data-create-aspect="${name}">${icon(aw, ah)}<span>${name}</span></button>`
+    ).join("");
+    const mpButtons = [0.5, 1, 1.5, 2].map((m) =>
+      `<button type="button" class="b s ${mp === m ? "on" : ""}" data-create-mp="${m}">${m}</button>`
+    ).join("") + `<button type="button" class="b s ${mp === "custom" ? "on" : ""}" data-create-mp="custom">Своё</button>`;
+    const sizes = list.map((item) => {
+      const on = selected && item.w === selected.w && item.h === selected.h && item.w === docW && item.h === docH;
+      return `<button type="button" class="size ${on ? "on" : ""}" data-create-size="${item.w}x${item.h}">${item.w}×${item.h}</button>`;
+    }).join("");
+    const custom = state.area.resPanel === "ratio"
+      ? `<div class="row"><input id="cr-a" class="f" value="4" style="width:48px"><span>:</span><input id="cr-b" class="f" value="5" style="width:48px"><button type="button" class="b s" id="cr-apply">Ок</button></div>`
+      : state.area.resPanel === "size"
+        ? `<div class="row"><input id="cs-w" class="f" value="${docW}" style="width:72px"><span>×</span><input id="cs-h" class="f" value="${docH}" style="width:72px"><button type="button" class="b s" id="cs-apply">Ок</button></div>`
+        : "";
+    $("inspector").innerHTML = `<div class="resx">
+      <div class="resx-grid">${buttons}</div>
+      <div class="row">
+        <button type="button" class="b s" data-res-panel="ratio">Свой аспект</button>
+        <button type="button" class="b s" data-res-panel="size">Свой размер</button>
+        <button type="button" class="b s" id="res-swap" title="Сменить ориентацию">⇄</button>
+      </div>
+      ${custom}
+      <div class="mp-row">${mpButtons}${mp === "custom" ? `<input id="create-mp-custom" class="f" value="${Number(state.area.mp) || 1}" style="width:64px">` : ""}</div>
+      <div class="resx-list">${sizes || `<div class="empty">Нет готового размера для этого фильтра.</div>`}</div>
+    </div>`;
+    $("inspector").querySelectorAll("[data-create-aspect]").forEach((btn) => {
+      btn.onclick = () => {
+        state.area.createAspect = btn.dataset.createAspect;
+        const next = Size.resolutionCatalog(state.area.createAspect, step, mp === "custom" ? Number(state.area.mp) || 1 : mp);
+        const pick = next[Math.floor(next.length / 2)] || next[0];
+        if (pick) applyCreateSize(pick.w, pick.h);
+        else renderInspector();
+      };
+    });
+    $("inspector").querySelectorAll("[data-create-mp]").forEach((btn) => {
+      btn.onclick = () => {
+        const value = btn.dataset.createMp;
+        if (value === "custom") {
+          state.area.mpFilter = "custom";
+          if (!state.area.mp) state.area.mp = 1;
+        } else {
+          state.area.mpFilter = parseFloat(value);
+          state.area.mp = state.area.mpFilter;
+        }
+        renderInspector();
+      };
+    });
+    const mpInput = $("create-mp-custom");
+    if (mpInput) mpInput.onchange = () => { state.area.mp = Math.max(0.25, parseFloat(mpInput.value) || 1); state.area.mpFilter = "custom"; renderInspector(); };
+    $("inspector").querySelectorAll("[data-res-panel]").forEach((btn) => {
+      btn.onclick = () => { state.area.resPanel = state.area.resPanel === btn.dataset.resPanel ? "" : btn.dataset.resPanel; renderInspector(); };
+    });
+    const swap = $("res-swap");
+    if (swap) swap.onclick = () => {
+      const hit = aspects.find((item) => item[0] === state.area.createAspect);
+      if (!hit) return;
+      const flipped = aspects.find((item) => item[1] === hit[2] && item[2] === hit[1]);
+      state.area.createAspect = flipped ? flipped[0] : state.area.createAspect;
+      applyCreateSize(docH, docW);
+    };
+    const ratioOk = $("cr-apply");
+    if (ratioOk) ratioOk.onclick = () => {
+      const a = Math.max(1, parseFloat($("cr-a").value) || 1);
+      const b = Math.max(1, parseFloat($("cr-b").value) || 1);
+      const pixels = (Number(state.area.mp) || 1) * 1e6;
+      const height = Math.sqrt(pixels / (a / b));
+      applyCreateSize(snapSize(height * a / b, step), snapSize(height, step));
+    };
+    const sizeOk = $("cs-apply");
+    if (sizeOk) sizeOk.onclick = () => applyCreateSize(parseInt($("cs-w").value, 10) || docW, parseInt($("cs-h").value, 10) || docH);
+    $("inspector").querySelectorAll("[data-create-size]").forEach((btn) => {
+      btn.onclick = () => {
+        const [w, h] = btn.dataset.createSize.split("x").map((n) => parseInt(n, 10));
+        applyCreateSize(w, h);
+      };
+    });
+  }
+
   function renderInspector() {
+    const title = document.querySelector("#inspector-node .ht");
+    if (title) title.textContent = state.pipeline === "create" ? "Разрешение" : "Инспектор";
+    if (state.pipeline === "create") {
+      const meta = $("insp-meta");
+      if (meta) meta.textContent = editor ? editor.doc.w + "×" + editor.doc.h : "";
+      const full = $("btn-gen-full");
+      if (full) full.hidden = true;
+      renderCreateInspector();
+      return;
+    }
     const frame = generationSize();
     const g = editor.gen;
     const a = state.area;
@@ -2051,7 +2228,7 @@
         <label>Жёсткость <input id="brush-hard" class="range" type="range" min="0" max="100" value="${Math.round(b.hardness * 100)}" title="Жёсткость"></label>
         <label>Непрозр. <input id="brush-op" class="range" type="range" min="1" max="100" value="${Math.round(b.opacity * 100)}" title="Непрозрачность"></label>
         <span class="mu" id="opt-status"></span>`;
-      $("brush-size").oninput = () => { state.brush.size = parseInt($("brush-size").value, 10) || 1; paintStatus(); };
+      $("brush-size").oninput = () => { state.brush.size = parseInt($("brush-size").value, 10) || 1; paintStatus(); if (editor) editor.syncBrushCursor(); };
       $("brush-hard").oninput = () => { state.brush.hardness = (parseInt($("brush-hard").value, 10) || 0) / 100; paintStatus(); };
       $("brush-op").oninput = () => { state.brush.opacity = Math.min(1, (parseInt($("brush-op").value, 10) || 1) / 100); paintStatus(); };
       paintStatus();
@@ -3064,6 +3241,12 @@
     ws.addEventListener("close", () => setTimeout(connectWs, 1500));
   }
 
+  function clearLivePreview() {
+    const img = $("ga-preview");
+    if (img && img.src && img.src.startsWith("blob:")) URL.revokeObjectURL(img.src);
+    if (img) { img.removeAttribute("src"); img.hidden = true; }
+  }
+
   function showBinaryPreview(buf) {
     if (!state.running || buf.byteLength < 8) return;
     const view = new DataView(buf);
@@ -3237,7 +3420,7 @@
       }
       const built = await api("/zeroimagestudio/build_workflow", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(spec) });
       if (built.warnings && built.warnings.length) toast(built.warnings[0]);
-      const queued = await api("/prompt", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: built.workflow, client_id: clientId }) });
+      const queued = await api("/prompt", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: built.workflow, client_id: clientId, extra_data: { preview_method: "taesd" } }) });
       if (queued.node_errors && Object.keys(queued.node_errors).length) {
         const first = Object.values(queued.node_errors)[0];
         throw new Error((first.errors && first.errors[0] && first.errors[0].message) || "Граф отклонён ComfyUI");
@@ -3319,6 +3502,7 @@
       toast(msg, { openModels: missing });
       if (missing) openModelDrawer();
     } finally {
+      clearLivePreview();
       state.running = false;
       state.promptId = null;
       $("btn-gen").classList.remove("stop");
@@ -3548,6 +3732,7 @@
       sampler: state.sampler, create: state.create, edit: state.edit, area: state.area, color: state.color, brush: state.brush,
       maskFocus: state.maskFocus, workMaskHidden: !!state.workMaskHidden,
       kreaTaskSlots: state.kreaTaskSlots,
+      modelSlots: state.modelSlots,
     };
     const fd = new FormData();
     fd.append("meta", JSON.stringify(meta));
@@ -3615,6 +3800,10 @@
       maskFocus: meta.state.maskFocus || null,
       workMaskHidden: !!meta.state.workMaskHidden,
     });
+    if (meta.state.modelSlots && typeof meta.state.modelSlots === "object" && window.ZeroImageStudioModels) {
+      state.modelSlots = window.ZeroImageStudioModels.sanitizeSlots(meta.state.modelSlots);
+      saveModelSlots();
+    }
     if (meta.state.kreaTaskSlots && typeof meta.state.kreaTaskSlots === "object") {
       state.kreaTaskSlots = meta.state.kreaTaskSlots;
       state._taskSlotsLoaded = true;
@@ -4262,52 +4451,60 @@
     }
   }
 
-  function applyHint(h) {
+  const MODEL_SLOT_KEY = "zeroimagestudio.modelSlots";
+  let modelMemory = false;
+  function loadModelSlots() {
+    try { state.modelSlots = Models.sanitizeSlots(JSON.parse(localStorage.getItem(MODEL_SLOT_KEY) || "{}")); }
+    catch { state.modelSlots = {}; }
+  }
+  function saveModelSlots() {
+    try { localStorage.setItem(MODEL_SLOT_KEY, JSON.stringify(state.modelSlots || {})); } catch { /* private mode */ }
+  }
+  function rememberCurrentModel() {
+    if (!modelMemory || !state.hintId || !window.ZeroImageStudioModels) return;
+    state.modelSlots = window.ZeroImageStudioModels.remember(state.modelSlots, canonicalHintId(state.hintId), cfg(), state.pipeline, state.sampler);
+    saveModelSlots();
+  }
+
+  function applyHint(h, opts) {
+    const ModelsApi = window.ZeroImageStudioModels;
     rememberTaskLora();
+    const toId = canonicalHintId(h.id);
+    const fromId = canonicalHintId(state.hintId);
+    if (!(opts && opts.skipSave) && fromId && fromId !== toId) rememberCurrentModel();
     const pipes = hintPipelines(h);
     if (!pipes.includes(state.pipeline)) state.pipeline = pipes[0];
-    state.hintId = canonicalHintId(h.id);
+    state.hintId = toId;
     state.hintByMode[state.pipeline] = state.hintId;
     const target = cfg();
-    const d = h.defaults || {};
-    ["loader", "clip_type", "weight_dtype", "latent_mode", "encoder"].forEach((k) => {
-      if (d[k] != null) target[k] = d[k];
-    });
-    ["unet", "clip", "vae", "checkpoint"].forEach((k) => {
-      if (d[k] == null || (target[k] || "").trim()) return;
-      target[k] = d[k];
-    });
-    if (state.pipeline === "edit" && h.edit_method) target.method = h.edit_method;
-    if (h.qwen_resolution) target.qwen_resolution = h.qwen_resolution;
-    const keepTask = target.krea && target.krea.task;
-    if (h.krea) target.krea = { ...(target.krea || {}), ...h.krea };
-    if (keepTask && target.krea) target.krea.task = keepTask;
-    if (h.sampler) Object.assign(state.sampler, h.sampler);
+    const restored = ModelsApi ? ModelsApi.adopt(state.modelSlots, toId, target, state.pipeline, h, state.sampler) : false;
     syncDefaultArea();
-    if (h.lora && h.lora.name && target.method !== "krea2_edit") {
-      const existing = target.loras.find((l) => l.name === h.lora.name);
-      if (!existing) target.loras.push({ triggers: [], trigger_mode: "off", ...h.lora });
-    }
     if (target.method === "krea2_edit") {
+      if (!target.krea) target.krea = blankPipe("edit").krea;
       if (!target.krea.task) target.krea.task = "general";
-      if (!keepTask) applyKreaTaskDefaults(target.krea.task);
+      if (!restored) applyKreaTaskDefaults(target.krea.task);
       else applyKreaPlacement(target.krea.task);
     }
-    // A suggested name that is not on disk stays empty. A file the user already chose stays.
-    const cat = state.catalog || {};
-    const resolveInstalled = (list, name, suggested) => {
-      if (!name) return "";
-      if (!list) return name;
-      if (list.includes(name)) return name;
-      const hit = list.find((n) => basenameOf(n) === basenameOf(name));
-      if (hit) return hit;
-      if (suggested && basenameOf(name) === basenameOf(suggested)) return "";
-      return name;
-    };
-    if (cat.unets) target.unet = resolveInstalled(cat.unets, target.unet, d.unet);
-    if (cat.clips) target.clip = resolveInstalled(cat.clips, target.clip, d.clip);
-    if (cat.vaes) target.vae = resolveInstalled(cat.vaes, target.vae, d.vae);
-    if (cat.checkpoints) target.checkpoint = resolveInstalled(cat.checkpoints, target.checkpoint, d.checkpoint);
+    if (!restored) {
+      const d = h.defaults || {};
+      const cat = state.catalog || {};
+      const resolveInstalled = (list, name, suggested) => {
+        if (!name) return "";
+        if (!list) return name;
+        if (list.includes(name)) return name;
+        const hit = list.find((n) => basenameOf(n) === basenameOf(name));
+        if (hit) return hit;
+        if (suggested && basenameOf(name) === basenameOf(suggested)) return "";
+        return name;
+      };
+      if (cat.unets) target.unet = resolveInstalled(cat.unets, target.unet, d.unet);
+      if (cat.clips) target.clip = resolveInstalled(cat.clips, target.clip, d.clip);
+      if (cat.vaes) target.vae = resolveInstalled(cat.vaes, target.vae, d.vae);
+      if (cat.checkpoints) target.checkpoint = resolveInstalled(cat.checkpoints, target.checkpoint, d.checkpoint);
+    }
+    syncKreaStack();
+    modelMemory = true;
+    rememberCurrentModel();
     renderAll();
   }
 
@@ -5220,11 +5417,12 @@
       const b = e.target.closest("[data-pipe]");
       if (!b || b.dataset.pipe === state.pipeline) return;
       state.hintByMode[state.pipeline] = state.hintId;
+      rememberCurrentModel();
       state.pipeline = b.dataset.pipe;
       const list = hintsForMode(state.pipeline);
       const remembered = canonicalHintId(state.hintByMode[state.pipeline]);
       const hint = list.find((h) => h.id === remembered) || list[0];
-      if (hint) applyHint(hint);
+      if (hint) applyHint(hint, { skipSave: true });
       else renderAll();
     };
     $("model-toggle").onclick = () => {
@@ -5775,6 +5973,7 @@
     renderModelSummary();
     renderModelWarn();
     updateGenerateButton();
+    rememberCurrentModel();
   }
 
   async function onLoraClick(e) {
@@ -6099,6 +6298,7 @@
   let pendingGraphOpen = null;
 
   async function boot() {
+    loadModelSlots();
     applyLayout(readLayout());
     bindPanelChrome();
     editor = new Editor($("stage"));
@@ -6152,6 +6352,7 @@
       }
     }
     state.dirty = false;
+    modelMemory = true;
     renderGallery();
     pollStats();
     booted = true;

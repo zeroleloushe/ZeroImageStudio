@@ -32,6 +32,13 @@ test("megapixels follow the frame aspect and the model step", () => {
   assert.ok(Math.abs(frame.w * frame.h - 1e6) / 1e6 < 0.08);
 });
 
+test("9:16 at 1 MP keeps the named 768×1344 and drops 752×1344", () => {
+  const list = size.resolutionCatalog("9:16", 16, 1);
+  assert.ok(list.some((item) => item.w === 768 && item.h === 1344));
+  assert.equal(list.some((item) => item.w === 752 && item.h === 1344), false);
+  assert.ok(list.every((item) => item.w % 16 === 0 && item.h % 16 === 0));
+});
+
 test("canvas snap crops a few pixels and does not grow the image", () => {
   const cropped = size.cropSizeToStep(1000, 1500, 16);
   assert.equal(cropped.w, 992);
