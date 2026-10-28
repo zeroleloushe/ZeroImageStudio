@@ -82,6 +82,58 @@
 
   const FRAME_HANDLES = { n: 1, s: 1, e: 1, w: 1, nw: 1, ne: 1, sw: 1, se: 1 };
 
+  function refEditDefaults(w, h) {
+    return {
+      crop: { x: 0, y: 0, w: Math.max(1, w), h: Math.max(1, h) },
+      aspect: "free",
+      rot: 0,
+      flipX: false,
+      flipY: false,
+      straighten: 0,
+    };
+  }
+
+  function refAspectRatio(aspect, frameW, frameH) {
+    if (aspect === "1:1") return 1;
+    if (aspect === "3:4") return 3 / 4;
+    if (aspect === "4:3") return 4 / 3;
+    if (aspect === "16:9") return 16 / 9;
+    if (aspect === "frame") return Math.max(1, Number(frameW) || 1) / Math.max(1, Number(frameH) || 1);
+    return 0;
+  }
+
+  function clampRefCrop(crop, imgW, imgH) {
+    const boundsW = Math.max(1, imgW);
+    const boundsH = Math.max(1, imgH);
+    let x = crop.x, y = crop.y, w = crop.w, h = crop.h;
+    if (w < 0) { x += w; w = -w; }
+    if (h < 0) { y += h; h = -h; }
+    w = Math.max(1, Math.min(w, boundsW));
+    h = Math.max(1, Math.min(h, boundsH));
+    x = Math.max(0, Math.min(x, boundsW - w));
+    y = Math.max(0, Math.min(y, boundsH - h));
+    return { x: x, y: y, w: w, h: h };
+  }
+
+  function fitRefCrop(imgW, imgH, ratio) {
+    const iw = Math.max(1, imgW);
+    const ih = Math.max(1, imgH);
+    if (!ratio) return { x: 0, y: 0, w: iw, h: ih };
+    let w = iw;
+    let h = w / ratio;
+    if (h > ih) { h = ih; w = h * ratio; }
+    return clampRefCrop({ x: (iw - w) / 2, y: (ih - h) / 2, w: w, h: h }, iw, ih);
+  }
+
+  function rotateRefCrop90(crop, imgW, imgH, direction) {
+    const dir = direction < 0 ? -1 : 1;
+    const box = clampRefCrop(crop, imgW, imgH);
+    if (dir > 0) {
+      return clampRefCrop({ x: box.y, y: imgW - (box.x + box.w), w: box.h, h: box.w }, imgH, imgW);
+    }
+    return clampRefCrop({ x: imgH - (box.y + box.h), y: box.x, w: box.h, h: box.w }, imgH, imgW);
+  }
+
   function effectiveSeam(requested, maskW, maskH) {
     const side = Math.max(1, Math.min(Number(maskW) || 1, Number(maskH) || 1));
     const cap = Math.max(0, Math.round(side * 0.25));
@@ -296,6 +348,11 @@
     frameGesture: frameGesture,
     contextRect: contextRect,
     effectiveSeam: effectiveSeam,
+    refEditDefaults: refEditDefaults,
+    refAspectRatio: refAspectRatio,
+    clampRefCrop: clampRefCrop,
+    fitRefCrop: fitRefCrop,
+    rotateRefCrop90: rotateRefCrop90,
     editGeometry: editGeometry,
     previewMap: previewMap,
     pasteSuppliesCoverage: pasteSuppliesCoverage,

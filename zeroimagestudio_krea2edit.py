@@ -309,6 +309,7 @@ class Krea2EditModelPatch:
             "vae": ("VAE", {"tooltip": "RECOMMENDED with source_image: enables the blur-proof pixel-space path (crop+resize in pixels, encode internally) — immune to input/output resolution mismatches"}),
             "source_image": ("IMAGE", {"tooltip": "source as IMAGE (with vae connected): overrides source_latent with exact pixel-space fitting — fixes blurry results from mismatched resolutions"}),
             "source_image_b": ("IMAGE", {"tooltip": "2nd reference as IMAGE (with vae)"}),
+            "source_image_c": ("IMAGE", {"tooltip": "3rd reference as IMAGE (with vae). The crop stays the main image; this is the second extra reference."}),
             # declared last on purpose: appending keeps every existing socket index put,
             # so workflows saved before this input still reload with their links intact.
             "target_latent": ("LATENT", {"tooltip": "RECOMMENDED with vae + source_image: wire the SAME latent you feed KSampler.latent_image. Lets the node VAE-encode the source here, before sampling starts, instead of on the first step — otherwise the VAE is pulled onto the GPU mid-sampling and can evict part of the diffusion model, slowing every remaining step on VRAM-tight setups"}),
@@ -327,7 +328,8 @@ class Krea2EditModelPatch:
     def patch(self, model, source_latent, source_latent_b=None, ref_boost=1.0, ref_boost_a=1.0,
               ref_boost_mask=None, vae=None, source_image=None,
               source_image_b=None, fit_mode="fit", target_latent=None,
-              ref_position="aligned (trained)", ref_position_a="aligned (trained)", **_future):
+              ref_position="aligned (trained)", ref_position_a="aligned (trained)",
+              source_image_c=None, **_future):
         if _future:
             print(f"[krea2edit] WARNING: workflow provides inputs this node version does not "
                   f"know ({', '.join(sorted(_future))}). The workflow is newer than the "
@@ -368,6 +370,8 @@ class Krea2EditModelPatch:
                 _fit_encode_image(source_image, vae, Hh, Ww, px_cache, ("a", Hh, Ww), fit_mode)
                 if source_image_b is not None:
                     _fit_encode_image(source_image_b, vae, Hh, Ww, px_cache, ("b", Hh, Ww), fit_mode)
+                if source_image_c is not None:
+                    _fit_encode_image(source_image_c, vae, Hh, Ww, px_cache, ("c", Hh, Ww), fit_mode)
                 primed = (Hh, Ww)
             else:
                 print("[krea2edit] NOTE: connect 'target_latent' (the same latent that feeds "
@@ -405,9 +409,12 @@ class Krea2EditModelPatch:
                               f"will run mid-sampling. Wire the SAME latent that feeds KSampler.",
                               flush=True)
                 lat = mm.process_latent_in(_fit_encode_image(source_image, vae, Hh, Ww, px_cache, ("a", Hh, Ww), fit_mode))
+                extras = []
                 if source_image_b is not None:
-                    lat = [lat, mm.process_latent_in(_fit_encode_image(source_image_b, vae, Hh, Ww, px_cache, ("b", Hh, Ww), fit_mode))]
-                src = lat
+                    extras.append(mm.process_latent_in(_fit_encode_image(source_image_b, vae, Hh, Ww, px_cache, ("b", Hh, Ww), fit_mode)))
+                if source_image_c is not None:
+                    extras.append(mm.process_latent_in(_fit_encode_image(source_image_c, vae, Hh, Ww, px_cache, ("c", Hh, Ww), fit_mode)))
+                src = [lat] + extras if extras else lat
             v = krea2_edit_forward(dm, x, timesteps, context, src, transformer_options,
                                    ref_boost=ref_boost, ref_boost_a=ref_boost_a,
                                    ref_boost_mask=ref_boost_mask,
@@ -468,6 +475,7 @@ class Krea2EditGroundedEncode:
             "optional": {
                 "image": ("IMAGE",),
                 "image_b": ("IMAGE", {"tooltip": "2nd reference (subject) for multi-ref LoRAs; vision blocks in training order: scene, subject"}),
+                "image_c": ("IMAGE", {"tooltip": "3rd reference. The first image stays the crop being edited."}),
                 "grounding_px": ("INT", {"default": 768, "min": 0, "max": 4096, "step": 64,
                                           "tooltip": "cap longest side fed to Qwen3-VL; 0 = native"}),
                 "system_prompt": ("STRING", {"multiline": True, "default": "",
@@ -496,7 +504,7 @@ class Krea2EditGroundedEncode:
             samples = comfy.utils.common_upscale(samples, round(w * s), round(h * s), "area", "disabled")
         return samples.movedim(1, -1)[:, :, :, :3]
 
-    def encode(self, clip, prompt, image=None, image_b=None, grounding_px=768, system_prompt="", **_future):
+    def encode(self, clip, prompt, image=None, image_b=None, grounding_px=768, system_prompt="", image_c=None, **_future):
         if _future:
             print(f"[krea2edit] WARNING: workflow provides inputs this node version does not "
                   f"know ({', '.join(sorted(_future))}). Update comfyui-krea2edit and restart "
@@ -507,6 +515,8 @@ class Krea2EditGroundedEncode:
         imgs = [self._prep(image, grounding_px)]
         if image_b is not None:
             imgs.append(self._prep(image_b, grounding_px))
+        if image_c is not None:
+            imgs.append(self._prep(image_c, grounding_px))
         template = self._template(len(imgs), system_prompt)
         tokens = clip.tokenize(prompt, images=imgs, llama_template=template)
         return (clip.encode_from_tokens_scheduled(tokens),)

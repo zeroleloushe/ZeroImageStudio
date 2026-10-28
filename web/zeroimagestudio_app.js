@@ -1518,7 +1518,12 @@
           x: l.x, y: l.y, visible: l.visible, opacity: l.opacity, blend: l.blend,
           locked: l.locked, meta: l.meta,
         })),
-        references: state.references.map((r) => ({ id: r.id, name: r.name, file: "refs/" + r.id + ".png" })),
+        references: state.references.map((r) => ({
+          id: r.id, name: r.name, role: r.role || "object",
+          file: "refs/" + r.id + ".png",
+          source: r.original ? "refs/" + r.id + ".source.png" : "",
+          edit: r.edit || null,
+        })),
       };
     }
   }
@@ -1801,7 +1806,8 @@
     const ctx = { pipeline: state.pipeline, method: cfg().method, task: kreaTaskId() };
     const cards = state.references.map((r, index) => {
       const badge = UX ? UX.refBadge(ctx, index) : { label: "", used: true, reason: "" };
-      return `<div class="ref ${r.selected ? "on" : ""} ${badge.used ? "" : "unused"}" data-ref="${escapeHtml(r.id)}" title="${escapeHtml(badge.reason)}"><img src="${r.url}" alt=""><span class="ref-badge">${escapeHtml(badge.label)}</span><s>${escapeHtml(r.name)}</s><button class="x" data-ref-del="${escapeHtml(r.id)}">×</button></div>`;
+      const roleLabel = { style: "Стиль", face: "Лицо", texture: "Текстура", object: "Объект" }[r.role] || badge.label;
+      return `<div class="ref ${r.selected ? "on" : ""} ${badge.used ? "" : "unused"}" data-ref="${escapeHtml(r.id)}" title="Открыть редактор референса"><img src="${r.url}" alt=""><span class="ref-badge">${escapeHtml(roleLabel)}</span><s>${escapeHtml(r.name)}</s><button class="x" data-ref-del="${escapeHtml(r.id)}" title="Удалить" type="button">×</button></div>`;
     }).join("");
     host.innerHTML = cards +
       `<button class="ref add" id="ref-upload" type="button"><div><span data-i="upload" data-s="15"></span><br>Загрузить</div></button>` +
@@ -4434,7 +4440,10 @@
       fd.append("layers/" + layer.id + ".png", await canvasBlob(layer.canvas), layer.id + ".png");
       if (layer.mask) fd.append("layers/" + layer.id + ".mask.png", await canvasBlob(layer.mask.canvas), layer.id + ".mask.png");
     }
-    for (const ref of state.references) fd.append("refs/" + ref.id + ".png", await canvasBlob(ref.canvas), ref.id + ".png");
+    for (const ref of state.references) {
+      fd.append("refs/" + ref.id + ".png", await canvasBlob(ref.canvas), ref.id + ".png");
+      if (ref.original) fd.append("refs/" + ref.id + ".source.png", await canvasBlob(ref.original), ref.id + ".source.png");
+    }
     const path = state.projectId ? "/zeroimagestudio/project/" + state.projectId : "/zeroimagestudio/project";
     const saved = await api(path, { method: "POST", body: fd });
     state.projectId = saved.id;
@@ -4553,12 +4562,24 @@
       const c = document.createElement("canvas");
       c.width = img.width; c.height = img.height;
       c.getContext("2d").drawImage(img, 0, 0);
-      state.references.push({
+      let original = c;
+      if (ref.source) {
+        try {
+          const srcImg = await loadImage(projectFileUrl(id, ref.source));
+          original = canvasFromImage(srcImg);
+        } catch { /* older projects stored only the edited frame */ }
+      }
+      const item = {
         id: U.safeId(ref.id, "r" + state.references.length),
         name: String(ref.name || "Реф").slice(0, 200),
+        role: ref.role || "object",
+        original: original,
+        edit: ref.edit || window.ZeroImageStudioSize.refEditDefaults(original.width, original.height),
         canvas: c,
         url: c.toDataURL("image/png"),
-      });
+      };
+      if (ref.edit && ref.source) commitReferencePreview(item);
+      state.references.push(item);
     }
     editor.active = Math.max(0, editor.layers.length - 1);
     editor.clearHistory();
@@ -4796,8 +4817,8 @@
     c.width = img.width;
     c.height = img.height;
     c.getContext("2d").drawImage(img, 0, 0);
-    state.references.push({ id: "r" + Math.random().toString(36).slice(2, 7), name: (asset && asset.name) || ("#" + (state.references.length + 1)), canvas: c, url: c.toDataURL("image/png") });
-    renderRefs();
+    const ref = await adoptReference(c, (asset && asset.name) || ("#" + (state.references.length + 1)));
+    if (!ref) return;
     const file = new File([blob], (asset && asset.name) || "ref.png", { type: blob.type || "image/png" });
     try { await rememberAsset(file, "reference", asset && asset.import); }
     catch (err) { toast(err.message || String(err)); }
@@ -4810,6 +4831,358 @@
     await api("/zeroimagestudio/assets/" + encodeURIComponent(id), { method: "DELETE" });
     state.assets = (state.assets || []).filter((item) => item.id !== id);
     renderGallery();
+  }
+
+  const REF_ROLES = [["style", "Стиль"], ["face", "Лицо"], ["texture", "Текстура"], ["object", "Объект"]];
+
+  function rotateCanvasSteps(src, rot) {
+    const turns = ((Number(rot) || 0) % 360 + 360) % 360;
+    if (!turns) return src;
+    const swap = turns === 90 || turns === 270;
+    const c = document.createElement("canvas");
+    c.width = swap ? src.height : src.width;
+    c.height = swap ? src.width : src.height;
+    const g = c.getContext("2d");
+    g.translate(c.width / 2, c.height / 2);
+    g.rotate(turns * Math.PI / 180);
+    g.drawImage(src, -src.width / 2, -src.height / 2);
+    return c;
+  }
+
+  function flipCanvas(src, flipX, flipY) {
+    if (!flipX && !flipY) return src;
+    const c = document.createElement("canvas");
+    c.width = src.width;
+    c.height = src.height;
+    const g = c.getContext("2d");
+    g.translate(flipX ? c.width : 0, flipY ? c.height : 0);
+    g.scale(flipX ? -1 : 1, flipY ? -1 : 1);
+    g.drawImage(src, 0, 0);
+    return c;
+  }
+
+  function straightenCanvas(src, degrees) {
+    const angle = Number(degrees) || 0;
+    if (Math.abs(angle) < 0.05) return src;
+    const rad = angle * Math.PI / 180;
+    const sin = Math.abs(Math.sin(rad));
+    const cos = Math.abs(Math.cos(rad));
+    const w = Math.max(1, Math.ceil(src.width * cos + src.height * sin));
+    const h = Math.max(1, Math.ceil(src.width * sin + src.height * cos));
+    const c = document.createElement("canvas");
+    c.width = w;
+    c.height = h;
+    const g = c.getContext("2d");
+    g.translate(w / 2, h / 2);
+    g.rotate(rad);
+    g.drawImage(src, -src.width / 2, -src.height / 2);
+    return c;
+  }
+
+  function orientReference(src, edit) {
+    return straightenCanvas(flipCanvas(rotateCanvasSteps(src, edit.rot || 0), !!edit.flipX, !!edit.flipY), edit.straighten || 0);
+  }
+
+  function renderReferenceResult(src, edit) {
+    const S = window.ZeroImageStudioSize;
+    const working = orientReference(src, edit);
+    const crop = S.clampRefCrop(edit.crop || { x: 0, y: 0, w: working.width, h: working.height }, working.width, working.height);
+    const out = document.createElement("canvas");
+    out.width = Math.max(1, Math.round(crop.w));
+    out.height = Math.max(1, Math.round(crop.h));
+    out.getContext("2d").drawImage(working, crop.x, crop.y, crop.w, crop.h, 0, 0, out.width, out.height);
+    return { canvas: out, working: working, crop: crop };
+  }
+
+  function commitReferencePreview(ref) {
+    const source = ref.original || ref.canvas;
+    const rendered = renderReferenceResult(source, ref.edit);
+    ref.canvas = rendered.canvas;
+    ref.url = rendered.canvas.toDataURL("image/png");
+    ref.edit.crop = rendered.crop;
+  }
+
+  function canvasFromImage(img) {
+    const c = document.createElement("canvas");
+    c.width = img.naturalWidth || img.width;
+    c.height = img.naturalHeight || img.height;
+    c.getContext("2d").drawImage(img, 0, 0);
+    return c;
+  }
+
+  function openReferenceEditor(source, editIn, roleIn, name) {
+    const S = window.ZeroImageStudioSize;
+    const edit = JSON.parse(JSON.stringify(editIn || S.refEditDefaults(source.width, source.height)));
+    let role = REF_ROLES.some(([id]) => id === roleIn) ? roleIn : "object";
+    const frame = editor ? editor.doc : { w: source.width, h: source.height };
+    return new Promise((resolve) => {
+      const back = document.createElement("div");
+      back.className = "modal-back";
+      back.innerHTML = `<div class="modal ref-edit" role="dialog" aria-modal="true" aria-labelledby="ref-edit-title">
+        <h3 id="ref-edit-title">Референс</h3>
+        <div class="mu">${escapeHtml(name || "референс")} · исходник ${source.width}×${source.height}. Файл не меняется, в модель уходит кадр.</div>
+        <div class="import-stage"><canvas id="ref-edit-view"></canvas></div>
+        <div class="mu">Кадр</div>
+        <div class="ref-edit-aspects" id="ref-edit-aspects">
+          <button type="button" class="b s" data-aspect="free">Свободно</button>
+          <button type="button" class="b s" data-aspect="1:1">1:1</button>
+          <button type="button" class="b s" data-aspect="3:4">3:4</button>
+          <button type="button" class="b s" data-aspect="4:3">4:3</button>
+          <button type="button" class="b s" data-aspect="16:9">16:9</button>
+          <button type="button" class="b s" data-aspect="frame">Как у кадра</button>
+        </div>
+        <div class="ref-edit-tools">
+          <button type="button" class="b s" data-turn="-1" title="Повернуть на 90° против часовой">↺</button>
+          <button type="button" class="b s" data-turn="1" title="Повернуть на 90° по часовой">↻</button>
+          <button type="button" class="b s" data-flip="x" title="Отразить по горизонтали">↔</button>
+          <button type="button" class="b s" data-flip="y" title="Отразить по вертикали">↕</button>
+          <button type="button" class="b s" data-reset="1">Сбросить</button>
+          <label class="grow">Выровнять <input id="ref-edit-straight" class="range" type="range" min="-15" max="15" step="0.1" value="${Number(edit.straighten) || 0}"></label>
+          <label>Роль <select id="ref-edit-role" class="dd">${REF_ROLES.map(([id, label]) => `<option value="${id}" ${role === id ? "selected" : ""}>${label}</option>`).join("")}</select></label>
+        </div>
+        <div class="mu" id="ref-edit-live"></div>
+        <div class="row" style="justify-content:flex-end">
+          <button type="button" class="b" data-cancel="1">Отмена</button>
+          <button type="button" class="b done" data-ok="1">Готово</button>
+        </div>
+      </div>`;
+      const canvas = back.querySelector("#ref-edit-view");
+      const viewW = Math.min(780, Math.max(280, window.innerWidth - 80));
+      const viewH = Math.min(420, Math.max(220, window.innerHeight - 280));
+      canvas.width = viewW;
+      canvas.height = viewH;
+      let view = { z: 1, x: 0, y: 0 };
+      let drag = null;
+      const working = () => orientReference(source, edit);
+      const place = (img) => {
+        const base = Math.min(viewW / img.width, viewH / img.height);
+        const scale = base * view.z;
+        return {
+          scale: scale,
+          ox: (viewW - img.width * scale) / 2 + view.x,
+          oy: (viewH - img.height * scale) / 2 + view.y,
+        };
+      };
+      const paint = () => {
+        const img = working();
+        edit.crop = S.clampRefCrop(edit.crop, img.width, img.height);
+        const g = canvas.getContext("2d");
+        g.setTransform(1, 0, 0, 1, 0, 0);
+        g.clearRect(0, 0, viewW, viewH);
+        g.fillStyle = "#101216";
+        g.fillRect(0, 0, viewW, viewH);
+        const box = place(img);
+        g.drawImage(img, box.ox, box.oy, img.width * box.scale, img.height * box.scale);
+        const x = box.ox + edit.crop.x * box.scale;
+        const y = box.oy + edit.crop.y * box.scale;
+        const w = edit.crop.w * box.scale;
+        const h = edit.crop.h * box.scale;
+        g.fillStyle = "rgba(0,0,0,.55)";
+        g.beginPath();
+        g.rect(0, 0, viewW, viewH);
+        g.rect(x, y, w, h);
+        g.fill("evenodd");
+        g.strokeStyle = "#ff7a1a";
+        g.lineWidth = 2;
+        g.strokeRect(x + 1, y + 1, Math.max(0, w - 2), Math.max(0, h - 2));
+        g.fillStyle = "#ff7a1a";
+        [[x, y], [x + w / 2, y], [x + w, y], [x + w, y + h / 2], [x + w, y + h], [x + w / 2, y + h], [x, y + h], [x, y + h / 2]].forEach(([hx, hy]) => g.fillRect(hx - 4, hy - 4, 8, 8));
+        back.querySelectorAll("[data-aspect]").forEach((b) => b.classList.toggle("on", b.dataset.aspect === edit.aspect));
+        const live = back.querySelector("#ref-edit-live");
+        if (live) live.textContent = `${Math.round(edit.crop.w)}×${Math.round(edit.crop.h)} · масштаб ${Math.round(view.z * 100)}%`;
+      };
+      const imagePoint = (ev) => {
+        const img = working();
+        const r = canvas.getBoundingClientRect();
+        const box = place(img);
+        return {
+          x: ((ev.clientX - r.left) * (canvas.width / r.width) - box.ox) / box.scale,
+          y: ((ev.clientY - r.top) * (canvas.height / r.height) - box.oy) / box.scale,
+          img: img,
+          box: box,
+        };
+      };
+      const hit = (ev) => {
+        const p = imagePoint(ev);
+        const r = canvas.getBoundingClientRect();
+        const px = (ev.clientX - r.left) * (canvas.width / r.width);
+        const py = (ev.clientY - r.top) * (canvas.height / r.height);
+        const x = p.box.ox + edit.crop.x * p.box.scale;
+        const y = p.box.oy + edit.crop.y * p.box.scale;
+        const w = edit.crop.w * p.box.scale;
+        const h = edit.crop.h * p.box.scale;
+        const pts = { nw: [x, y], n: [x + w / 2, y], ne: [x + w, y], e: [x + w, y + h / 2], se: [x + w, y + h], s: [x + w / 2, y + h], sw: [x, y + h], w: [x, y + h / 2] };
+        for (const [name, pos] of Object.entries(pts)) {
+          if (Math.abs(px - pos[0]) <= 8 && Math.abs(py - pos[1]) <= 8) return name;
+        }
+        if (px >= x && px <= x + w && py >= y && py <= y + h) return "move";
+        return null;
+      };
+      const keepFraction = (mutate) => {
+        const before = working();
+        const frac = {
+          x: edit.crop.x / before.width,
+          y: edit.crop.y / before.height,
+          w: edit.crop.w / before.width,
+          h: edit.crop.h / before.height,
+        };
+        mutate(frac);
+        const after = working();
+        edit.crop = S.clampRefCrop({
+          x: frac.x * after.width, y: frac.y * after.height, w: frac.w * after.width, h: frac.h * after.height,
+        }, after.width, after.height);
+      };
+      canvas.addEventListener("pointerdown", (ev) => {
+        const handle = hit(ev);
+        const p = imagePoint(ev);
+        if (!handle) {
+          drag = { kind: "pan", x: ev.clientX, y: ev.clientY, viewX: view.x, viewY: view.y };
+        } else {
+          drag = { kind: handle, p: p, crop: { ...edit.crop } };
+        }
+        canvas.setPointerCapture(ev.pointerId);
+      });
+      canvas.addEventListener("pointermove", (ev) => {
+        if (!drag) {
+          canvas.style.cursor = hit(ev) === "move" ? "move" : hit(ev) ? "crosshair" : "grab";
+          return;
+        }
+        if (drag.kind === "pan") {
+          const r = canvas.getBoundingClientRect();
+          view.x = drag.viewX + (ev.clientX - drag.x) * (canvas.width / r.width);
+          view.y = drag.viewY + (ev.clientY - drag.y) * (canvas.height / r.height);
+          paint();
+          return;
+        }
+        const p = imagePoint(ev);
+        if (drag.kind === "move") {
+          edit.crop = S.clampRefCrop({
+            x: drag.crop.x + (p.x - drag.p.x), y: drag.crop.y + (p.y - drag.p.y), w: drag.crop.w, h: drag.crop.h,
+          }, p.img.width, p.img.height);
+        } else {
+          const start = drag.crop;
+          let x1 = start.x, y1 = start.y, x2 = start.x + start.w, y2 = start.y + start.h;
+          if (drag.kind.includes("w")) x1 = p.x;
+          if (drag.kind.includes("e")) x2 = p.x;
+          if (drag.kind.includes("n")) y1 = p.y;
+          if (drag.kind.includes("s")) y2 = p.y;
+          let w = x2 - x1, h = y2 - y1;
+          const ratio = S.refAspectRatio(edit.aspect, frame.w, frame.h);
+          if (ratio) {
+            const edge = drag.kind.length === 1;
+            if (edge && (drag.kind === "n" || drag.kind === "s")) w = Math.abs(h) * ratio * Math.sign(w || 1);
+            else if (edge) h = Math.abs(w) / ratio * Math.sign(h || 1);
+            else if (Math.abs(w) / ratio > Math.abs(h)) h = Math.abs(w) / ratio * Math.sign(h || 1);
+            else w = Math.abs(h) * ratio * Math.sign(w || 1);
+            if (drag.kind.includes("w")) x1 = x2 - w; else x2 = x1 + w;
+            if (drag.kind.includes("n")) y1 = y2 - h; else y2 = y1 + h;
+          }
+          edit.crop = S.clampRefCrop({ x: x1, y: y1, w: x2 - x1, h: y2 - y1 }, p.img.width, p.img.height);
+        }
+        paint();
+      });
+      canvas.addEventListener("pointerup", () => { drag = null; });
+      canvas.addEventListener("wheel", (ev) => {
+        ev.preventDefault();
+        const img = working();
+        const before = place(img);
+        const r = canvas.getBoundingClientRect();
+        const px = (ev.clientX - r.left) * (canvas.width / r.width);
+        const py = (ev.clientY - r.top) * (canvas.height / r.height);
+        const ix = (px - before.ox) / before.scale;
+        const iy = (py - before.oy) / before.scale;
+        view.z = Math.min(8, Math.max(1, view.z * (ev.deltaY < 0 ? 1.1 : 1 / 1.1)));
+        const afterScale = Math.min(viewW / img.width, viewH / img.height) * view.z;
+        view.x = px - ix * afterScale - (viewW - img.width * afterScale) / 2;
+        view.y = py - iy * afterScale - (viewH - img.height * afterScale) / 2;
+        paint();
+      }, { passive: false });
+      const close = (ok) => {
+        window.removeEventListener("keydown", onKey, true);
+        back.remove();
+        resolve(ok ? { edit: edit, role: role } : null);
+      };
+      const onKey = (ev) => {
+        if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); close(false); }
+      };
+      window.addEventListener("keydown", onKey, true);
+      back.addEventListener("click", (ev) => {
+        const aspect = ev.target.closest("[data-aspect]");
+        if (aspect) {
+          edit.aspect = aspect.dataset.aspect;
+          const img = working();
+          const ratio = S.refAspectRatio(edit.aspect, frame.w, frame.h);
+          if (ratio) edit.crop = S.fitRefCrop(img.width, img.height, ratio);
+          paint();
+          return;
+        }
+        const turn = ev.target.closest("[data-turn]");
+        if (turn) {
+          const dir = Number(turn.dataset.turn);
+          keepFraction((frac) => {
+            edit.rot = (Number(edit.rot) + (dir > 0 ? 90 : -90) + 360) % 360;
+            const box = dir > 0
+              ? { x: frac.y, y: 1 - (frac.x + frac.w), w: frac.h, h: frac.w }
+              : { x: 1 - (frac.y + frac.h), y: frac.x, w: frac.h, h: frac.w };
+            frac.x = box.x; frac.y = box.y; frac.w = box.w; frac.h = box.h;
+          });
+          paint();
+          return;
+        }
+        const flip = ev.target.closest("[data-flip]");
+        if (flip) {
+          keepFraction((frac) => {
+            if (flip.dataset.flip === "x") { edit.flipX = !edit.flipX; frac.x = 1 - (frac.x + frac.w); }
+            else { edit.flipY = !edit.flipY; frac.y = 1 - (frac.y + frac.h); }
+          });
+          paint();
+          return;
+        }
+        if (ev.target.closest("[data-reset]")) {
+          const fresh = S.refEditDefaults(source.width, source.height);
+          edit.crop = fresh.crop;
+          edit.aspect = "free";
+          edit.rot = 0;
+          edit.flipX = false;
+          edit.flipY = false;
+          edit.straighten = 0;
+          view = { z: 1, x: 0, y: 0 };
+          back.querySelector("#ref-edit-straight").value = "0";
+          paint();
+          return;
+        }
+        if (ev.target.closest("[data-cancel]")) close(false);
+        else if (ev.target.closest("[data-ok]")) close(true);
+      });
+      back.querySelector("#ref-edit-straight").addEventListener("input", (ev) => {
+        keepFraction(() => { edit.straighten = Number(ev.target.value) || 0; });
+        paint();
+      });
+      back.querySelector("#ref-edit-role").onchange = (ev) => { role = ev.target.value; };
+      document.body.appendChild(back);
+      paint();
+      back.querySelector("[data-ok]").focus();
+    });
+  }
+
+  async function adoptReference(source, name, existing) {
+    const baseEdit = existing && existing.edit ? existing.edit : window.ZeroImageStudioSize.refEditDefaults(source.width, source.height);
+    const result = await openReferenceEditor(source, baseEdit, existing && existing.role, name);
+    if (!result) return null;
+    const ref = existing || {
+      id: "r" + Math.random().toString(36).slice(2, 7),
+      name: String(name || "Реф").slice(0, 200),
+    };
+    ref.original = source;
+    ref.edit = result.edit;
+    ref.role = result.role;
+    if (!existing) ref.name = String(name || "Реф").slice(0, 200);
+    commitReferencePreview(ref);
+    if (!existing) state.references.push(ref);
+    state.dirty = true;
+    paintSaveState();
+    renderRefs();
+    return ref;
   }
 
   function offerImportImage(img, name, sourceFile, preset) {
@@ -6373,35 +6746,32 @@
       if (e.target.closest("#ref-upload")) { $("file-ref").click(); return; }
       if (e.target.closest("#ref-from-layer")) {
         const layer = editor.activeLayer();
-        if (!layer) return;
+        if (!layer) { toast("Нет слоя, чтобы взять референс."); return; }
         const c = document.createElement("canvas");
         c.width = layer.canvas.width; c.height = layer.canvas.height;
         c.getContext("2d").drawImage(layer.canvas, 0, 0);
-        state.references.push({ id: "r" + Date.now(), name: "#" + (state.references.length + 1), canvas: c, url: c.toDataURL("image/png") });
-        renderRefs();
-        canvasBlob(c).then((blob) => rememberAsset(new File([blob], layer.name + ".png", { type: "image/png" }), "reference", null)).catch((err) => toast(err.message || String(err)));
+        const ref = await adoptReference(c, layer.name || ("#" + (state.references.length + 1)));
+        if (ref) canvasBlob(c).then((blob) => rememberAsset(new File([blob], (layer.name || "ref") + ".png", { type: "image/png" }), "reference", null)).catch((err) => toast(err.message || String(err)));
         return;
       }
       const del = e.target.closest("[data-ref-del]");
-      if (del) { state.references = state.references.filter((r) => r.id !== del.dataset.refDel); renderRefs(); return; }
+      if (del) { e.stopPropagation(); state.references = state.references.filter((r) => r.id !== del.dataset.refDel); state.dirty = true; paintSaveState(); renderRefs(); return; }
       const card = e.target.closest(".ref[data-ref]");
       if (card) {
         const ref = state.references.find((r) => r.id === card.dataset.ref);
-        if (ref) { ref.selected = !ref.selected; renderRefs(); }
+        if (ref) await adoptReference(ref.original || ref.canvas, ref.name, ref);
       }
     };
     $("file-ref").onchange = async () => {
       for (const file of $("file-ref").files) {
         const img = await loadImage(URL.createObjectURL(file));
-        const c = document.createElement("canvas");
-        c.width = img.width; c.height = img.height;
-        c.getContext("2d").drawImage(img, 0, 0);
-        state.references.push({ id: "r" + Math.random().toString(36).slice(2, 7), name: file.name || ("#" + (state.references.length + 1)), canvas: c, url: c.toDataURL("image/png") });
-        try { await rememberAsset(file, "reference", null); }
-        catch (err) { toast(err.message || String(err)); }
+        const ref = await adoptReference(canvasFromImage(img), file.name || ("#" + (state.references.length + 1)));
+        if (ref) {
+          try { await rememberAsset(file, "reference", null); }
+          catch (err) { toast(err.message || String(err)); }
+        }
       }
       $("file-ref").value = "";
-      renderRefs();
     };
     $("file-layer").onchange = async () => {
       const file = $("file-layer").files[0];
@@ -6425,13 +6795,24 @@
       await offerImportImage(img, files[0].name, files[0]);
     });
     $("ref-list").addEventListener("dragover", (e) => {
-      if (e.dataTransfer && [...e.dataTransfer.types].includes("text/zis-asset")) e.preventDefault();
+      const types = e.dataTransfer ? [...e.dataTransfer.types] : [];
+      if (types.includes("text/zis-asset") || types.includes("Files")) e.preventDefault();
     });
     $("ref-list").addEventListener("drop", async (e) => {
+      const files = [...(e.dataTransfer && e.dataTransfer.files || [])].filter((f) => f.type.startsWith("image/"));
       const assetId = e.dataTransfer && e.dataTransfer.getData("text/zis-asset");
-      if (!assetId) return;
+      if (!files.length && !assetId) return;
       e.preventDefault();
-      await addAssetAsReference(assetId);
+      e.stopPropagation();
+      for (const file of files) {
+        const img = await loadImage(URL.createObjectURL(file));
+        const ref = await adoptReference(canvasFromImage(img), file.name);
+        if (ref) {
+          try { await rememberAsset(file, "reference", null); }
+          catch (err) { toast(err.message || String(err)); }
+        }
+      }
+      if (assetId) await addAssetAsReference(assetId);
     });
     window.addEventListener("paste", async (e) => {
       if (e.target && /^(input|textarea|select)$/i.test(e.target.tagName)) return;

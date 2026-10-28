@@ -109,6 +109,22 @@ test("a 48 px seam on a small eye mask is clamped and the crop includes that ban
   assert.ok(Math.abs(back.w - geom.crop.w) < 2 || back.w >= geom.crop.w);
 });
 
+test("a reference crop keeps its aspect and survives a 90 degree turn", () => {
+  const full = size.refEditDefaults(400, 200);
+  assert.equal(full.crop.w, 400);
+  assert.equal(full.aspect, "free");
+  const square = size.fitRefCrop(400, 200, size.refAspectRatio("1:1"));
+  assert.ok(Math.abs(square.w - square.h) < 0.01);
+  assert.ok(square.x > 0);
+  const frame = size.fitRefCrop(400, 200, size.refAspectRatio("frame", 1600, 900));
+  assert.ok(Math.abs(frame.w / frame.h - 16 / 9) < 0.02);
+  const turned = size.rotateRefCrop90({ x: 10, y: 20, w: 30, h: 40 }, 100, 80, 1);
+  assert.equal(turned.x, 20);
+  assert.equal(turned.y, 60);
+  assert.equal(turned.w, 40);
+  assert.equal(turned.h, 30);
+});
+
 test("context padding grows the crop past the frame and the preview maps back onto it", () => {
   const frame = { x: 50, y: 40, w: 200, h: 100 };
   const crop = size.contextRect(frame, 1000, 1000, 0.15);
