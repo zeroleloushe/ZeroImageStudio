@@ -1576,7 +1576,7 @@
       if (folder && path !== folder && !path.startsWith(folder + "/")) return false;
       if (q && !path.toLowerCase().includes(q)) return false;
       return true;
-    }).slice(0, 80);
+    }).slice(0, document.body.dataset.tab === "lora" ? 500 : 80);
     const folders = {};
     files.forEach((name) => {
       const path = U.normalizeSlashes(name);
@@ -3303,7 +3303,7 @@
     toast("Маска взята из непрозрачности слоя.");
   }
 
-  function openLayerMenu(x, y) {
+  function layerMenuEl() {
     let menu = $("layer-menu");
     if (!menu) {
       menu = document.createElement("div");
@@ -3315,6 +3315,17 @@
         menu.hidden = true;
       });
     }
+    return menu;
+  }
+
+  function placeLayerMenu(menu, x, y) {
+    menu.hidden = false;
+    menu.style.left = Math.min(x, window.innerWidth - 220) + "px";
+    menu.style.top = Math.min(y, window.innerHeight - 240) + "px";
+  }
+
+  function openLayerMenu(x, y) {
+    const menu = layerMenuEl();
     const layer = editor.activeLayer();
     const maskActs = layer && layer.mask ? `
       <button type="button" data-act="delmask">Удалить маску</button>
@@ -3325,9 +3336,7 @@
       <button type="button" data-act="mask">Маска из слоя</button>
       ${maskActs}
       <button type="button" data-act="del">Удалить</button>`;
-    menu.hidden = false;
-    menu.style.left = Math.min(x, window.innerWidth - 220) + "px";
-    menu.style.top = Math.min(y, window.innerHeight - 220) + "px";
+    placeLayerMenu(menu, x, y);
     menu.onclick = (e) => {
       const act = e.target.closest("[data-act]");
       menu.hidden = true;
@@ -3339,7 +3348,47 @@
       if (act.dataset.act === "applymask") editor.applyLayerMask();
       if (act.dataset.act === "del") editor.deleteActive();
     };
-    void layer;
+  }
+
+  function openWorkMaskMenu(x, y) {
+    const menu = layerMenuEl();
+    menu.innerHTML = `
+      <button type="button" data-act="dup">Дублировать</button>
+      <button type="button" data-act="inv">Инвертировать</button>
+      <button type="button" data-act="eye">${state.workMaskHidden ? "Показать" : "Скрыть"}</button>
+      <button type="button" data-act="clear">Очистить</button>
+      <button type="button" data-act="del">Удалить</button>`;
+    placeLayerMenu(menu, x, y);
+    menu.onclick = (e) => {
+      const act = e.target.closest("[data-act]");
+      menu.hidden = true;
+      if (!act) return;
+      if (act.dataset.act === "dup") duplicateWorkMask();
+      if (act.dataset.act === "inv") editor.invertWorkMask();
+      if (act.dataset.act === "eye") editor.toggleWorkMask();
+      if (act.dataset.act === "clear" || act.dataset.act === "del") editor.clearWorkMask();
+    };
+  }
+
+  function duplicateWorkMask() {
+    editor.pushUndo(editor.fullSnapshot());
+    const src = editor.exportMask();
+    const layer = editor.makeLayer("Маска");
+    layer.canvas.width = editor.doc.w;
+    layer.canvas.height = editor.doc.h;
+    const g = layer.ctx;
+    g.drawImage(src, 0, 0);
+    const data = g.getImageData(0, 0, layer.canvas.width, layer.canvas.height);
+    for (let i = 0; i < data.data.length; i += 4) {
+      const lum = Math.max(data.data[i], data.data[i + 1], data.data[i + 2]);
+      data.data[i] = data.data[i + 1] = data.data[i + 2] = 255;
+      data.data[i + 3] = lum;
+    }
+    g.putImageData(data, 0, 0);
+    editor.addLayer(layer);
+    state.maskFocus = null;
+    editor.requestDraw();
+    renderLayers();
   }
 
   async function saveProject(opts) {
@@ -4862,6 +4911,14 @@
       input.onblur = commit;
     };
     $("layer-list").addEventListener("contextmenu", (e) => {
+      const maskRow = e.target.closest("[data-mask-row]");
+      if (maskRow) {
+        e.preventDefault();
+        state.maskFocus = "work";
+        renderLayers();
+        openWorkMaskMenu(e.clientX, e.clientY);
+        return;
+      }
       const row = e.target.closest("[data-layer]");
       if (!row) return;
       e.preventDefault();

@@ -364,11 +364,30 @@ input.range::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; heigh
   position: absolute; top: 54px; left: 0; right: 0; bottom: 0; display: none; padding: 8px; min-height: 0;
 }
 body[data-tab="presets"] #view-presets { display: flex; }
-body[data-tab="lora"] .cols > :not(:has([data-panel="lora"])) { display: none; }
-body[data-tab="lora"] .cols > :has([data-panel="lora"]) { width: auto !important; flex: 1; max-width: none; }
-body[data-tab="gallery"] .cols > :not(:has([data-panel="gallery"])) { display: none; }
-body[data-tab="gallery"] .cols > :has([data-panel="gallery"]) { width: auto !important; flex: 1; max-width: none; }
-body[data-tab="gallery"] .gal { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
+body[data-tab="lora"] .node:not(#lora-node),
+body[data-tab="gallery"] .node:not(#gallery-node),
+body[data-tab="lora"] .toolcol,
+body[data-tab="gallery"] .toolcol { display: none !important; }
+body[data-tab="lora"] .cols > :not(:has(#lora-node)),
+body[data-tab="gallery"] .cols > :not(:has(#gallery-node)) { display: none !important; }
+body[data-tab="lora"] .left,
+body[data-tab="gallery"] .right { width: auto !important; flex: 1; max-width: none; height: 100%; }
+body[data-tab="lora"] #lora-node,
+body[data-tab="gallery"] #gallery-node { flex: 1; height: 100%; min-height: 0; }
+body[data-tab="lora"] #lora-node > .nb,
+body[data-tab="gallery"] #gallery-node > .nb { flex: 1; min-height: 0; overflow: auto; }
+body[data-tab="lora"] .lora-split { flex: 1; min-height: 280px; align-items: stretch; }
+body[data-tab="lora"] .lora-split .tree { width: 200px; max-height: none; }
+body[data-tab="lora"] .lora-split .lora-table { max-height: none; }
+body[data-tab="gallery"] .gal {
+  flex: 1; min-height: 0; overflow: auto; align-content: start;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px;
+}
+body[data-tab="gallery"] .g { aspect-ratio: 1; }
+body[data-tab="gallery"] .gal-kind,
+body[data-tab="gallery"] .gal-scope { max-width: 420px; }
+body[data-tab="gallery"] .gal-filters { max-width: 720px; }
+body[data-tab="gallery"] .empty-gal { min-height: 240px; display: flex; align-items: center; justify-content: center; text-align: center; font-size: 14px; }
 .left, .right, .center { min-height: 0; min-width: 0; }
 .right .node, .left .node, .center .node { min-width: 0; max-width: 100%; }
 .left { width: 400px; display: flex; flex-direction: column; gap: 8px; flex: none; }
