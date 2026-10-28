@@ -155,6 +155,14 @@
       <div class="mu" id="lora-pick-status">папки ${folders} · файлы ${files}</div>`;
   }
 
+  function explainRunError(message) {
+    const text = String(message || "");
+    if (/normalized_shape|size mismatch|mat1 and mat2/i.test(text) && /4096|3584/.test(text)) {
+      return "CLIP не подходит к этой UNET";
+    }
+    return text || "Ошибка выполнения";
+  }
+
   function formatApiError(body, statusText) {
     if (body == null || body === "") return statusText || "Ошибка запроса";
     if (typeof body === "string") return body.slice(0, 500);
@@ -377,6 +385,7 @@
     loraPickerHtml,
     nextVariantIndex,
     formatApiError,
+    explainRunError,
     safeId,
     finiteNumber,
     requestsRemoval,

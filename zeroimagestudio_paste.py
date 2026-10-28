@@ -157,6 +157,127 @@ def poisson_blend(src: np.ndarray, dst: np.ndarray, mask: np.ndarray, seam: int 
     return np.clip(out, 0.0, 1.0)
 
 
+def dilate_binary(hard: np.ndarray, radius: int) -> np.ndarray:
+    """Square dilation. Outside the image counts as not-in-mask."""
+    r = int(radius)
+    src = hard.astype(bool)
+    if r <= 0:
+        return src
+    h, w = src.shape
+    bits = src.astype(np.uint8)
+    pref = np.zeros((h, w + 1), dtype=np.int32)
+    pref[:, 1:] = np.cumsum(bits, axis=1)
+    xs = np.arange(w)
+    x0 = np.clip(xs - r, 0, w)
+    x1 = np.clip(xs + r + 1, 0, w)
+    horiz = (pref[:, x1] - pref[:, x0]) > 0
+    bits2 = horiz.astype(np.uint8)
+    pref2 = np.zeros((h + 1, w), dtype=np.int32)
+    pref2[1:, :] = np.cumsum(bits2, axis=0)
+    ys = np.arange(h)
+    y0 = np.clip(ys - r, 0, h)
+    y1 = np.clip(ys + r + 1, 0, h)
+    return (pref2[y1, :] - pref2[y0, :]) > 0
+
+
+def _gray(image: np.ndarray) -> np.ndarray:
+    return image[..., 0] * 0.299 + image[..., 1] * 0.587 + image[..., 2] * 0.114
+
+
+def _ncc_at(src: np.ndarray, dst: np.ndarray, valid: np.ndarray, dx: int, dy: int) -> float:
+    """NCC of src shifted by (dx, dy) against dst, on valid.
+
+    Positive dx moves source content to the right. The compared window is the
+    overlap that did not fall off the frame.
+    """
+    h, w = src.shape
+    y0, y1 = max(0, dy), min(h, h + dy)
+    x0, x1 = max(0, dx), min(w, w + dx)
+    if y1 - y0 < 8 or x1 - x0 < 8:
+        return -1.0
+    m = valid[y0:y1, x0:x1]
+    if int(m.sum()) < 64:
+        return -1.0
+    aa = src[y0 - dy:y1 - dy, x0 - dx:x1 - dx][m].astype(np.float64)
+    bb = dst[y0:y1, x0:x1][m].astype(np.float64)
+    aa -= aa.mean()
+    bb -= bb.mean()
+    da = float(np.dot(aa, aa)) ** 0.5
+    db = float(np.dot(bb, bb)) ** 0.5
+    if da < 1e-6 or db < 1e-6:
+        return 0.0
+    return float(np.dot(aa, bb) / (da * db))
+
+
+def estimate_translation(src: np.ndarray, dst: np.ndarray, valid: np.ndarray, max_shift: int = 8):
+    """Integer (dx, dy, ncc) that slides src onto dst. Clamped to ±max_shift.
+
+    The search only looks at `valid` (the far context, outside the seam). A flat
+    or weakly matching context returns (0, 0) so a blank border cannot shove
+    the edit. Positive dx means src content needs to move right to meet dst.
+    """
+    limit = max(0, int(max_shift))
+    far = valid.astype(bool)
+    if int(far.sum()) < 64 or limit == 0:
+        return 0, 0, 0.0
+    a = _gray(src)
+    b = _gray(dst)
+    h, w = a.shape
+    step = 1
+    longest = max(h, w)
+    if longest > 720:
+        step = 2
+    if longest > 1400:
+        step = 3
+
+    def score(dx: int, dy: int) -> float:
+        return _ncc_at(a, b, far, dx, dy)
+
+    best = (score(0, 0), 0, 0)
+    for dy in range(-limit, limit + 1, step):
+        for dx in range(-limit, limit + 1, step):
+            s = score(dx, dy)
+            smaller = abs(dx) + abs(dy) < abs(best[1]) + abs(best[2])
+            if s > best[0] + 1e-9 or (abs(s - best[0]) <= 1e-9 and smaller):
+                best = (s, dx, dy)
+    if step > 1:
+        cx, cy = best[1], best[2]
+        for dy in range(cy - step, cy + step + 1):
+            for dx in range(cx - step, cx + step + 1):
+                if abs(dx) > limit or abs(dy) > limit:
+                    continue
+                s = score(dx, dy)
+                smaller = abs(dx) + abs(dy) < abs(best[1]) + abs(best[2])
+                if s > best[0] + 1e-9 or (abs(s - best[0]) <= 1e-9 and smaller):
+                    best = (s, dx, dy)
+    zero = score(0, 0)
+    found, dx, dy = best
+    # Flat borders and ties stay put. A real copy shifted by a few pixels clears this.
+    if found < 0.35 or found < zero + 0.01:
+        return 0, 0, float(zero)
+    return int(dx), int(dy), float(found)
+
+
+def shift_rgb(src: np.ndarray, dst: np.ndarray, dx: int, dy: int) -> np.ndarray:
+    """Move src content by (dx, dy). Pixels that slide in are taken from dst."""
+    if dx == 0 and dy == 0:
+        return src
+    out = dst.copy()
+    h, w = src.shape[:2]
+    y0, y1 = max(0, dy), min(h, h + dy)
+    x0, x1 = max(0, dx), min(w, w + dx)
+    out[y0:y1, x0:x1] = src[y0 - dy:y1 - dy, x0 - dx:x1 - dx]
+    return out
+
+
+def lock_context(src: np.ndarray, dst: np.ndarray, mask: np.ndarray, seam: int) -> np.ndarray:
+    """Keep generated pixels inside the seam. Outside it, use the original."""
+    keep = dilate_binary(mask > 0.5, max(0, int(seam)))
+    out = src.copy()
+    out[~keep] = dst[~keep]
+    return out
+
+
 def mask_min_side(mask: np.ndarray) -> int:
     """Smaller side of the opaque mask, not of the whole crop."""
     hard = mask > 0.5
@@ -186,6 +307,8 @@ def paste(
     mode: str = "feather",
     feather: int = 48,
     color: bool = True,
+    register: bool = True,
+    max_shift: int = 8,
 ) -> Image.Image:
     """Return an RGBA image the size of `original`.
 
@@ -195,6 +318,11 @@ def paste(
     Poisson: the generated interior is copied verbatim. Pérez is solved only in a
     ring of width `feather`, with the destination on the outer edge and the
     generated colour on the inner edge. Alpha is the hard mask, not a second blur.
+
+    Before the blend, the result is shifted onto the original by the translation
+    of the far context (outside the seam, clamped to ±8 px), then pixels outside
+    that seam are replaced with the original. The seam therefore blends the edit
+    against true context instead of against pixels the model redrew.
     """
     size = original.convert("RGB").size  # (w, h)
     src = _resize_rgb(result, size)
@@ -202,9 +330,25 @@ def paste(
     m = _mask_float(mask, size)
     mode = (mode or "feather").lower()
     seam = clamp_feather(int(feather or 0), m)
+    if register:
+        far = ~dilate_binary(m > 0.5, seam)
+        dx, dy, ncc = estimate_translation(src, dst, far, max_shift)
+        # dx/dy is the correction. The model displacement is the opposite:
+        # output content sits at (-dx, -dy) relative to the input.
+        print(
+            f"[zeroimagestudio] paste register: output is dx={-dx} dy={-dy} "
+            f"from the input (ncc {ncc:.4f}); shifting it by dx={dx} dy={dy} "
+            f"(clamp ±{int(max_shift)})",
+            flush=True,
+        )
+        if dx or dy:
+            src = shift_rgb(src, dst, dx, dy)
     # Poisson already carries the destination colour in the ring. A second transfer blows out the ratio.
+    # Match colour while the border is still the generated context, then throw
+    # that context away so the seam's outer side is the original.
     if color and mode != "poisson":
         src = color_match(src, dst, m)
+    src = lock_context(src, dst, m, seam)
     if mode == "poisson":
         solved = poisson_blend(src, dst, m, seam)
         alpha = (m > 0.5).astype(np.float32)

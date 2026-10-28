@@ -3,7 +3,19 @@ import unittest
 import numpy as np
 from PIL import Image
 
-from zeroimagestudio_paste import box_blur, clamp_feather, color_match, erode_binary, paste, poisson_blend, _mask_float
+from zeroimagestudio_paste import (
+    box_blur,
+    clamp_feather,
+    color_match,
+    dilate_binary,
+    erode_binary,
+    estimate_translation,
+    lock_context,
+    paste,
+    poisson_blend,
+    shift_rgb,
+    _mask_float,
+)
 
 
 class PasteTests(unittest.TestCase):
@@ -159,6 +171,66 @@ class PasteTests(unittest.TestCase):
         colored = paste(result, original, mask, mode="poisson", feather=1, color=True)
         plain = paste(result, original, mask, mode="poisson", feather=1, color=False)
         self.assertTrue(np.array_equal(np.asarray(colored), np.asarray(plain)))
+
+    def _ramp(self, h=96, w=96):
+        rng = np.random.default_rng(0)
+        return rng.integers(0, 255, size=(h, w, 3)).astype(np.float32)
+
+    def _displace(self, image, dx, dy):
+        out = np.zeros_like(image)
+        h, w = image.shape[:2]
+        y0, y1 = max(0, dy), min(h, h + dy)
+        x0, x1 = max(0, dx), min(w, w + dx)
+        out[y0:y1, x0:x1] = image[y0 - dy:y1 - dy, x0 - dx:x1 - dx]
+        return out
+
+    def test_register_recovers_a_known_shift_and_clamps(self):
+        dst = self._ramp()
+        src = self._displace(dst, 3, -4)
+        valid = np.ones(dst.shape[:2], dtype=bool)
+        valid[:16, :] = valid[-16:, :] = False
+        valid[:, :16] = valid[:, -16:] = False
+        valid[32:64, 32:64] = False
+        dx, dy, score = estimate_translation(src, dst, valid, 8)
+        self.assertEqual((dx, dy), (-3, 4))
+        self.assertGreater(score, 0.9)
+        fixed = shift_rgb(src, dst, dx, dy)
+        self.assertLess(float(np.abs(fixed[40:70, 40:70] - dst[40:70, 40:70]).mean()), 1.0)
+
+        yy, xx = np.mgrid[0:96, 0:96]
+        blob = np.exp(-((xx - 48) ** 2 + (yy - 48) ** 2) / (2 * 18.0 ** 2))
+        smooth = np.stack([blob, blob * 0.4, blob * 0.2], axis=-1)
+        far = self._displace(smooth, 14, 0)
+        cdx, cdy, _cscore = estimate_translation(far, smooth, valid, 8)
+        self.assertEqual((cdx, cdy), (-8, 0))
+
+        flat_a = np.zeros_like(dst)
+        flat_b = np.ones_like(dst) * 40
+        zdx, zdy, _z = estimate_translation(flat_a, flat_b, valid, 8)
+        self.assertEqual((zdx, zdy), (0, 0))
+
+    def test_paste_shifts_the_edit_back_and_locks_the_context(self):
+        dst = self._ramp().astype(np.uint8)
+        src = self._displace(dst.astype(np.float32), 4, -2).astype(np.uint8)
+        mask = Image.new("L", (96, 96), 0)
+        mask.paste(255, (32, 32, 64, 64))
+        out = np.asarray(paste(Image.fromarray(src), Image.fromarray(dst), mask, mode="hard", feather=4, color=False))
+        self.assertLess(int(np.abs(out[50, 50, :3].astype(int) - dst[50, 50].astype(int)).max()), 2)
+        raw = np.asarray(paste(Image.fromarray(src), Image.fromarray(dst), mask, mode="hard", feather=4, color=False, register=False))
+        self.assertGreater(int(np.abs(raw[50, 50, :3].astype(int) - dst[50, 50].astype(int)).max()), 2)
+
+    def test_context_outside_the_seam_is_the_original(self):
+        src = np.full((96, 96, 3), 255, dtype=np.uint8)
+        dst = np.full((96, 96, 3), 20, dtype=np.uint8)
+        mask = Image.new("L", (96, 96), 0)
+        mask.paste(255, (40, 40, 56, 56))
+        out = np.asarray(paste(Image.fromarray(src), Image.fromarray(dst), mask, mode="feather", feather=6, color=False, register=False))
+        self.assertEqual(int(out[48, 48, 0]), 255)
+        self.assertEqual(int(out[1, 1, 0]), 20)
+        kept = dilate_binary(_mask_float(mask, (96, 96)) > 0.5, 6)
+        self.assertFalse(bool(kept[1, 1]))
+        locked = lock_context(src.astype(np.float32) / 255.0, dst.astype(np.float32) / 255.0, _mask_float(mask, (96, 96)), 6)
+        self.assertAlmostEqual(float(locked[1, 1, 0]), 20 / 255.0, places=3)
 
 
 if __name__ == "__main__":

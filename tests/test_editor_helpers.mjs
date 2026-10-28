@@ -183,6 +183,12 @@ test("history bytes count image payloads", () => {
   assert.equal(U.historyBytes([rec, rec]), 280);
 });
 
+test("a CLIP width mismatch is the short UNET message", () => {
+  const raw = "RuntimeError: Expected normalized_shape=[4096] but got 3584";
+  assert.equal(U.explainRunError(raw), "CLIP не подходит к этой UNET");
+  assert.equal(U.explainRunError("sampler failed"), "sampler failed");
+});
+
 test("ComfyUI validation errors name the node and the input", () => {
   const text = U.formatApiError({
     node_errors: {

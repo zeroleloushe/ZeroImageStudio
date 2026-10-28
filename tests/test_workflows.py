@@ -445,6 +445,34 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(steps[0]["text"], "Область 1008×1008")
         self.assertIn("0 / 0", steps[4]["text"])
 
+    def test_qwen21_rejects_a_7b_clip(self):
+        with self.assertRaises(WorkflowError) as caught:
+            build_workflow(_diff_spec(
+                unet="qwen_image_2.1_int8_convrot.safetensors",
+                clip="qwen_2.5_vl_7b_fp8_scaled.safetensors",
+                clip_type="qwen_image",
+                encoder="qwen_image_21",
+            ))
+        self.assertEqual(str(caught.exception), "CLIP не подходит к этой UNET")
+
+    def test_qwen21_keeps_the_8b_clip(self):
+        prompt, _warnings, _built = build_workflow(_diff_spec(
+            unet="qwen_image_2.1_int8_convrot.safetensors",
+            clip="qwen3vl_8b_int8_convrot.safetensors",
+            clip_type="qwen_image",
+            encoder="qwen_image_21",
+        ))
+        clip = next(n for n in prompt.values() if n["class_type"] == "CLIPLoader")
+        self.assertEqual(clip["inputs"]["clip_name"], "qwen3vl_8b_int8_convrot.safetensors")
+
+    def test_lora_name_must_be_a_weight_file(self):
+        with self.assertRaises(WorkflowError) as bad:
+            build_workflow(_diff_spec(loras=[{"name": "../secret.safetensors", "enabled": True}]))
+        self.assertIn("Некорректное имя LoRA", str(bad.exception))
+        with self.assertRaises(WorkflowError) as text:
+            build_workflow(_diff_spec(loras=[{"name": "notes.txt", "enabled": True}]))
+        self.assertIn("не похожа на файл весов", str(text.exception))
+
     def test_missing_krea_nodes_report_import_error(self):
         msg = missing_nodes_message(["ZeroImageStudioKrea2EditModelPatch"], "ImportError: no module")
         self.assertIn("ImportError: no module", msg)

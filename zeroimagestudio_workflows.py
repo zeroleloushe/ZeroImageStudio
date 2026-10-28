@@ -158,6 +158,40 @@ class _Graph:
         return [nid, out]
 
 
+_LORA_EXT = re.compile(r"\.(safetensors|sft|pt|ckpt|bin)$", re.IGNORECASE)
+
+
+def _validate_lora_name(name: str) -> None:
+    """Reject a missing, unsafe, or unknown LoRA before the graph is queued."""
+    norm = (name or "").replace("\\", "/").strip()
+    parts = [part for part in norm.split("/") if part != ""]
+    if not parts or any(part in (".", "..") for part in parts):
+        raise WorkflowError(f"Некорректное имя LoRA: {name}")
+    base = parts[-1]
+    if not _LORA_EXT.search(base):
+        raise WorkflowError(f"LoRA «{base}» не похожа на файл весов (.safetensors).")
+    try:
+        import folder_paths
+
+        known = [item.replace("\\", "/") for item in folder_paths.get_filename_list("loras")]
+    except Exception:
+        return
+    bases = {item.split("/")[-1] for item in known}
+    if norm not in known and base not in bases:
+        raise WorkflowError(f"LoRA не найдена: {base}")
+
+
+def _reject_mismatched_qwen_clip(spec: dict) -> None:
+    """Qwen Image 2.1 reads 4096-wide text. Qwen2.5-VL 7B is 3584."""
+    unet = (spec.get("unet") or "").lower()
+    clip = (spec.get("clip") or "").lower()
+    if "qwen_image_2.1" not in unet and "qwen_image_21" not in unet:
+        return
+    old = ("qwen_2.5" in clip) or ("qwen2.5" in clip) or ("qwen2_5" in clip) or ("vl_7b" in clip)
+    if old:
+        raise WorkflowError("CLIP не подходит к этой UNET")
+
+
 def _enabled_loras(spec: dict) -> list[dict]:
     out = []
     for lora in spec.get("loras") or []:
@@ -166,11 +200,13 @@ def _enabled_loras(spec: dict) -> list[dict]:
         name = (lora.get("name") or "").strip()
         if not name:
             continue
+        _validate_lora_name(name)
         out.append(lora)
     return out
 
 
 def _require_files(spec: dict) -> None:
+    _reject_mismatched_qwen_clip(spec)
     loader = spec.get("loader") or "diffusion"
     if loader == "checkpoint":
         if not (spec.get("checkpoint") or "").strip():
@@ -567,6 +603,10 @@ def build_krea_edit(spec: dict, warnings: list[str]) -> dict:
     if denoise < 0.999:
         warnings.append("Krea 2 Edit семплирует чистый шум, обусловленный исходником. Denoise принудительно 1; локальность даёт маска вклейки.")
         denoise = 1.0
+    # Do not hang a noise mask on this empty latent. Unmasked areas would stay
+    # empty-latent noise, not the source photo, and the patch has no
+    # differential-diffusion input that would keep them. Paste locks the
+    # original pixels outside the seam instead.
     _save(
         g,
         g.ref(_sampler(g, spec, g.ref(patched, 0), g.ref(pos, 0), g.ref(neg, 0), g.ref(latent, 0), denoise), 0),

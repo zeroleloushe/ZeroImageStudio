@@ -104,6 +104,8 @@
     {
       title: "Qwen Image 2.1",
       files: [
+        { name: "qwen_image_2.1_int8_convrot.safetensors", folder: "models/diffusion_models/", kind: "unets", url: "https://huggingface.co/Comfy-Org/Qwen-Image-2.1/blob/main/diffusion_models/qwen_image_2.1_int8_convrot.safetensors" },
+        { name: "qwen3vl_8b_int8_convrot.safetensors", folder: "models/text_encoders/", kind: "clips", url: "https://huggingface.co/Comfy-Org/Qwen-Image-2.1/blob/main/text_encoders/qwen3vl_8b_int8_convrot.safetensors" },
         { name: "qwen_image_2.1_bf16.safetensors", folder: "models/diffusion_models/", kind: "unets", url: "https://huggingface.co/Comfy-Org/Qwen-Image-2.1/blob/main/diffusion_models/qwen_image_2.1_bf16.safetensors" },
         { name: "qwen3vl_8b_bf16.safetensors", folder: "models/text_encoders/", kind: "clips", url: "https://huggingface.co/Comfy-Org/Qwen-Image-2.1/blob/main/text_encoders/qwen3vl_8b_bf16.safetensors" },
         { name: "qwen_image_2.1_vae_bf16.safetensors", folder: "models/vae/", kind: "vaes", url: "https://huggingface.co/Comfy-Org/Qwen-Image-2.1/blob/main/vae/qwen_image_2.1_vae_bf16.safetensors" },
@@ -3909,7 +3911,7 @@
           const entry = hist && hist[promptId];
           if (!entry) return;
           const status = entry.status || {};
-          if (status.status_str === "error") finish(new Error(status.exception_message || "Ошибка выполнения"));
+          if (status.status_str === "error") finish(new Error(U.explainRunError(status.exception_message || "Ошибка выполнения")));
           else if (entry.outputs || status.completed) finish();
         } catch { /* the socket may still deliver the result */ }
       }, 4000);
@@ -3932,7 +3934,7 @@
           if (run) run.textContent = "Узел " + d.node;
         }
         if (msg.type === "execution_interrupted") finish(new Error("Генерация остановлена"));
-        if (msg.type === "execution_error") finish(new Error(d.exception_message || "Ошибка выполнения"));
+        if (msg.type === "execution_error") finish(new Error(U.explainRunError(d.exception_message || "Ошибка выполнения")));
         if (msg.type === "execution_success" || (msg.type === "executing" && d.node == null && d.prompt_id === promptId)) finish();
       };
     });
@@ -5614,11 +5616,13 @@
       if (cat.clips) target.clip = resolveInstalled(cat.clips, target.clip, d.clip);
       if (cat.vaes) target.vae = resolveInstalled(cat.vaes, target.vae, d.vae);
       if (cat.checkpoints) target.checkpoint = resolveInstalled(cat.checkpoints, target.checkpoint, d.checkpoint);
+      // A named hint file that is not installed stays empty. Filling it with
+      // the only other CLIP (often Qwen2.5-VL 7B) mismatches the 2.1 UNET.
       if (UX) {
-        target.unet = UX.singleFile(target.unet, cat.unets);
-        target.clip = UX.singleFile(target.clip, cat.clips);
-        target.vae = UX.singleFile(target.vae, cat.vaes);
-        target.checkpoint = UX.singleFile(target.checkpoint, cat.checkpoints);
+        if (!d.unet) target.unet = UX.singleFile(target.unet, cat.unets);
+        if (!d.clip) target.clip = UX.singleFile(target.clip, cat.clips);
+        if (!d.vae) target.vae = UX.singleFile(target.vae, cat.vaes);
+        if (!d.checkpoint) target.checkpoint = UX.singleFile(target.checkpoint, cat.checkpoints);
       }
     }
     syncKreaStack();

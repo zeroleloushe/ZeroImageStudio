@@ -111,3 +111,74 @@ def inverse_box(img_w: int, img_h: int, placed: dict, gen_w: int, gen_h: int) ->
     sw = max(1, int(round(placed["w"] * img_w / max(1, gen_w))))
     sh = max(1, int(round(placed["h"] * img_h / max(1, gen_h))))
     return sx, sy, sw, sh
+
+
+def rope_content_offset(src_h: int, src_w: int, tgt_h: int, tgt_w: int, patch: int = 2, vae_scale: int = 8) -> dict:
+    """Where a reference latent sits on the output latent.
+
+    The offset is the pixel center, converted to tokens. One token is `patch`
+    latent pixels and `patch * vae_scale` image pixels. Centering the padded
+    token counts instead, `(ceil(n / patch) difference) / 2`, snaps a leftover
+    latent row to half a token: 8 px when the patch is 2 and the VAE stride is 8.
+    """
+    patch = max(1, int(patch))
+    vae_scale = max(1, int(vae_scale))
+    off_h = (float(tgt_h) - float(src_h)) / (2.0 * patch)
+    off_w = (float(tgt_w) - float(src_w)) / (2.0 * patch)
+
+    def _tokens(n: int) -> int:
+        pad = (patch - (int(n) % patch)) % patch
+        return (int(n) + pad) // patch
+
+    legacy_h = (_tokens(tgt_h) - _tokens(src_h)) / 2.0
+    legacy_w = (_tokens(tgt_w) - _tokens(src_w)) / 2.0
+    stride = patch * vae_scale
+    return {
+        "off_tok": (off_h, off_w),
+        "legacy_off_tok": (legacy_h, legacy_w),
+        "px": (off_h * stride, off_w * stride),
+        "legacy_px": (legacy_h * stride, legacy_w * stride),
+    }
+
+
+def fit_placement(ih: int, iw: int, lat_h: int, lat_w: int, patch: int = 2, vae_scale: int = 8) -> dict:
+    """Fit-mode crop and the reference's pixel offset inside the output.
+
+    Mirrors `_fit_encode_image` (near-match fill, otherwise the trainer's /16
+    floor). `rope` is the pixel-center offset; `legacy` is the padded-token
+    center the forward used to apply.
+    """
+    vae_scale = max(1, int(vae_scale))
+    px_h, px_w = int(lat_h) * vae_scale, int(lat_w) * vae_scale
+    ih = max(1, int(ih))
+    iw = max(1, int(iw))
+    sc = min(px_h / ih, px_w / iw)
+    # Same 8% band as the node and the trainer.
+    if ih * sc >= px_h * 0.92 and iw * sc >= px_w * 0.92:
+        s = max(px_h / ih, px_w / iw)
+        ch = min(ih, int(round(px_h / s)))
+        cw = min(iw, int(round(px_w / s)))
+        y0, x0 = (ih - ch) // 2, (iw - cw) // 2
+        nh, nw = px_h, px_w
+        mode = "fill"
+    else:
+        nh = min(max(16, int(ih * sc) // 16 * 16), max(16, px_h // 16 * 16))
+        nw = min(max(16, int(iw * sc) // 16 * 16), max(16, px_w // 16 * 16))
+        ch = min(ih, max(1, int(round(nh / sc))))
+        cw = min(iw, max(1, int(round(nw / sc))))
+        y0, x0 = (ih - ch) // 2, (iw - cw) // 2
+        mode = "fit"
+    enc_h, enc_w = nh // vae_scale, nw // vae_scale
+    rope = rope_content_offset(enc_h, enc_w, int(lat_h), int(lat_w), patch, vae_scale)
+    return {
+        "mode": mode,
+        "crop": (ch, cw, y0, x0),
+        "encoded_px": (nh, nw),
+        "encoded_lat": (enc_h, enc_w),
+        "target_lat": (int(lat_h), int(lat_w)),
+        "off_tok": rope["off_tok"],
+        "legacy_off_tok": rope["legacy_off_tok"],
+        "rope_px": rope["px"],
+        "legacy_px": rope["legacy_px"],
+        "geom_px": ((px_h - nh) / 2.0, (px_w - nw) / 2.0),
+    }

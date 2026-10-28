@@ -5,7 +5,7 @@ import unittest
 import numpy as np
 from PIL import Image
 
-from zeroimagestudio_geom import edit_geometry, inverse_box
+from zeroimagestudio_geom import edit_geometry, fit_placement, inverse_box, rope_content_offset
 from zeroimagestudio_paste import paste
 
 
@@ -83,6 +83,27 @@ class StitchTests(unittest.TestCase):
         far = np.ones(doc.shape[:2], dtype=bool)
         far[max(0, y - 40):y + h + 40, max(0, x - 40):x + w + 40] = False
         self.assertLessEqual(int(np.abs(canvas[far].astype(np.int16) - doc[far].astype(np.int16)).max()), 0)
+
+    def test_live_gen_sizes_have_no_rope_offset(self):
+        # height, width of the letterboxed canvas, as the latent sees them.
+        cases = [
+            (1056, 960, 132, 120),
+            (736, 672, 92, 84),
+            (1040, 960, 130, 120),
+            (1280, 1168, 160, 146),
+            (864, 864, 108, 108),
+        ]
+        for ih, iw, lat_h, lat_w in cases:
+            place = fit_placement(ih, iw, lat_h, lat_w)
+            self.assertEqual(place["encoded_lat"], (lat_h, lat_w), (ih, iw))
+            self.assertEqual(place["rope_px"], (0.0, 0.0), (ih, iw))
+            self.assertEqual(place["legacy_px"], (0.0, 0.0), (ih, iw))
+            self.assertEqual(place["crop"][2:], (0, 0), (ih, iw))
+
+    def test_odd_latent_row_is_centered_in_pixels_not_tokens(self):
+        placed = rope_content_offset(130, 120, 131, 120)
+        self.assertEqual(placed["px"], (4.0, 0.0))
+        self.assertEqual(placed["legacy_px"], (8.0, 0.0))
 
     def test_identity_paste_stays_on_the_mask_and_aligned(self):
         self._roundtrip(640, 480, (150, 80, 120, 60), {"x": 0, "y": 0, "w": 640, "h": 480}, 0.5)

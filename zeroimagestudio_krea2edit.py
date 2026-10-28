@@ -7,10 +7,14 @@ Copyright the comfyui-krea2edit contributors.
 Licensed under the Apache License, Version 2.0. See third_party/comfyui-krea2edit/LICENSE.
 
 Modifications in this copy:
-- Node class ids are ZeroImageStudioKrea2EditModelPatch and ZeroImageStudioKrea2EditGroundedEncode so this
-  pack does not overwrite comfyui-krea2edit if both are installed.
-- The import-time banner identifies the embedded copy.
-- The forward, RoPE placement, pixel-path fit, and grounded Qwen3-VL template are unchanged.
+    - Node class ids are ZeroImageStudioKrea2EditModelPatch and ZeroImageStudioKrea2EditGroundedEncode so this
+      pack does not overwrite comfyui-krea2edit if both are installed.
+    - The import-time banner identifies the embedded copy.
+    - Fit-mode RoPE uses the pixel center of the unpadded latents. The previous
+      center used padded token counts, which is 8 px off whenever a side is an
+      odd number of latent pixels. An already-exact canvas is not run through
+      bicubic again. The /16 fit crop itself is unchanged (training geometry).
+    - The grounded Qwen3-VL template is unchanged.
 """
 import math
 
@@ -25,6 +29,11 @@ from comfy.ldm.flux.layers import timestep_embedding
 from comfy.ldm.flux.math import apply_rope
 from comfy.ldm.modules.attention import optimized_attention_masked
 
+try:
+    from .zeroimagestudio_geom import fit_placement, rope_content_offset
+except ImportError:
+    from zeroimagestudio_geom import fit_placement, rope_content_offset
+
 
 def _imgids(bs, frame, h_, w_, device):
     ids = torch.zeros(h_, w_, 3, device=device, dtype=torch.float32)
@@ -34,14 +43,20 @@ def _imgids(bs, frame, h_, w_, device):
     return ids.reshape(1, h_ * w_, 3).repeat(bs, 1, 1)
 
 
-def _imgids_offset(bs, frame, gh, gw, th, tw, device):
-    """Stride-1 integer positions at a centered integer offset. For `fit` refs the
-    pixels are already resampled to target grid density, so the position grid is
-    stride-1 BY CONSTRUCTION — scaling it again only manufactures skip/collision
-    artifacts. Requires gh<=th, gw<=tw (guaranteed by the floor+cap in fit)."""
-    # fractional center (2026-07-28): integer floor placed odd-gap refs 8px off
-    # their true center — RoPE is continuous, half-token positions are exact.
-    off_h, off_w = max(0.0, (th - gh) / 2), max(0.0, (tw - gw) / 2)
+def _imgids_offset(bs, frame, gh, gw, th, tw, device, off=None):
+    """Stride-1 positions. For `fit` refs the pixels are already at the target
+    grid density, so the position grid is stride-1 — scaling it again only
+    manufactures skip/collision artifacts.
+
+    `off` is the pixel-center offset in tokens (see rope_content_offset). The
+    default, used when the caller does not have latent sizes, is the padded
+    token center. RoPE is continuous, so a half-token offset is exact."""
+    if off is None:
+        off_h, off_w = (th - gh) / 2.0, (tw - gw) / 2.0
+    else:
+        off_h, off_w = off
+    # A larger reference than the target stays top-left; fit never produces one.
+    off_h, off_w = max(0.0, float(off_h)), max(0.0, float(off_w))
     ids = torch.zeros(gh, gw, 3, device=device, dtype=torch.float32)
     ids[..., 0] = frame
     ids[..., 1] = (torch.arange(gh, device=device, dtype=torch.float32) + off_h)[:, None]
@@ -118,41 +133,42 @@ def _fit_encode_image(image, vae, H, W, cache, key, fit_mode="crop"):
     if fit_mode == "fit":
         # "bilinear" answer to scale mismatch: resample CONTENT (pixel space, bicubic)
         # to the target's grid density instead of moving positions. AR-preserving
-        # fit-inside, no crop, no grey canvas — the forward places it at an integer
-        # centered offset (scaled-pos with s=1 -> stride 1, no rounding artifacts).
-        sc = min(px_h / ih, px_w / iw)
-        # NEAR-MATCHED AR: fill the target grid EXACTLY via a minimal center-crop.
-        # Fit-inside margins of 1-2 tokens are not harmless: target edge columns
-        # with no ref correspondence get filled by repeating adjacent ref content
-        # (2026-07-14 edge-duplication bug: ref (74,54) vs target (74,56)).
-        # This also restores the design promise fit == crop at matched AR.
-        CROP_TOL = 0.08
-        if ih * sc >= px_h * (1 - CROP_TOL) and iw * sc >= px_w * (1 - CROP_TOL):
-            s = max(px_h / ih, px_w / iw)
-            ch, cw = min(ih, int(round(px_h / s))), min(iw, int(round(px_w / s)))
-            y0, x0 = (ih - ch) // 2, (iw - cw) // 2
+        # fit-inside, no crop, no grey canvas — the forward places it at the pixel
+        # center (stride 1, no second scale).
+        # NEAR-MATCHED AR fills the target grid via a minimal center-crop.
+        # Fit-inside margins of 1-2 tokens repeat the edge (2026-07-14).
+        # A genuine AR mismatch uses the trainer's /16 floor and the 2026-07-28
+        # crop-to-grid so the fitted axis is not squashed. Those numbers live in
+        # fit_placement so the log and the crop cannot drift apart.
+        place = fit_placement(ih, iw, H, W)
+        ch, cw, y0, x0 = place["crop"]
+        nh, nw = place["encoded_px"]
+        rope_y, rope_x = place["rope_px"]
+        leg_y, leg_x = place["legacy_px"]
+        print(
+            f"[krea2edit] fit placement mode={place['mode']} image={ih}x{iw} "
+            f"encode={nh}x{nw}px latent {place['encoded_lat'][0]}x{place['encoded_lat'][1]} "
+            f"target {H}x{W} crop@({y0},{x0}) {ch}x{cw} "
+            f"offset_px=({rope_y:.1f},{rope_x:.1f}) geom_px={place['geom_px'][0]:.1f},{place['geom_px'][1]:.1f} "
+            f"token-floor would be ({leg_y:.1f},{leg_x:.1f})",
+            flush=True,
+        )
+        if (y0, x0, ch, cw) != (0, 0, ih, iw):
             img = img[..., y0:y0 + ch, x0:x0 + cw]
-            nh, nw = px_h, px_w
+        # An exact canvas is already on the latent grid. Bicubic-with-antialias
+        # of an unchanged size resamples every pixel and walks edges.
+        if img.shape[-2] != nh or img.shape[-1] != nw:
+            img = F.interpolate(img.float(), size=(nh, nw), mode="bicubic", antialias=True)
         else:
-            # genuine AR mismatch: MUST match the trainer's _fit_prep EXACTLY
-            # (krea2_edit.py) — /16 floor snap capped at the target's /16 floor.
-            # The model is trained on this geometry; a /8-round node grid would
-            # produce a different ref latent size -> different centered offset ->
-            # a visible margin-boundary seam even from a well-trained model
-            # (train/infer geometry must be byte-identical). 2026-07-15 alignment.
-            nh = min(max(16, int(ih * sc) // 16 * 16), max(16, px_h // 16 * 16))
-            nw = min(max(16, int(iw * sc) // 16 * 16), max(16, px_w // 16 * 16))
-            # CROP-TO-GRID (2026-07-28 seam-doubling RCA): resizing ih*sc -> floor16
-            # SQUASHES content by up to 15px; the misregistration peaks exactly at
-            # the ref band edges — the outpaint seam — and renders as a doubled
-            # band (proven causal: 754px vs 753px input A/B, one pixel flips
-            # clean<->worst). Center-crop the source so the fitted axis lands on
-            # the /16 grid at scale sc EXACTLY: zero squash, stride-1 stays true.
-            ch2, cw2 = min(ih, max(1, int(round(nh / sc)))), min(iw, max(1, int(round(nw / sc))))
-            y0, x0 = (ih - ch2) // 2, (iw - cw2) // 2
-            img = img[..., y0:y0 + ch2, x0:x0 + cw2]
-        img = F.interpolate(img.float(), size=(nh, nw), mode="bicubic", antialias=True)
+            img = img.float()
         lat = vae.encode(img.movedim(1, -1)[..., :3].clamp(0, 1))
+        lat_hw = tuple(int(v) for v in lat.shape[-2:])
+        if lat_hw != (H, W):
+            print(
+                f"[krea2edit] encoded latent {lat_hw[0]}x{lat_hw[1]} != target {H}x{W} "
+                f"(pixel-to-latent stride). The forward centers this size, not the request.",
+                flush=True,
+            )
         cache[key] = lat
         return lat
     # crop (default / "v1 legacy"): center-crop to the target AR, then resize.
@@ -227,6 +243,7 @@ def krea2_edit_forward(m, x, timesteps, context, src_latent, transformer_options
     # (center-crop to target AR then resize — training-matched; never stretch).
     src_list = src_latent if isinstance(src_latent, (list, tuple)) else [src_latent]
     srcs = []
+    src_native_hw = []
     for sl in src_list:
         src = _to_4d(sl).to(x.device, x.dtype)
         if src.shape[0] != bs:
@@ -234,6 +251,9 @@ def krea2_edit_forward(m, x, timesteps, context, src_latent, transformer_options
         if not ref_native and src.shape[-2:] != (H, W):
             print(f"[krea2edit] LATENT-PATH fit_src (crop): src={tuple(src.shape[-2:])} -> {H}x{W}", flush=True)
             src = _fit_src(src, H, W).to(x.dtype)
+        # Unpadded size. pad_to_patch_size adds replicate rows at the bottom;
+        # those must not pull the center (decode throws the pad away).
+        src_native_hw.append((int(src.shape[-2]), int(src.shape[-1])))
         srcs.append(comfy.ldm.common_dit.pad_to_patch_size(src, (patch, patch), padding_mode="replicate"))
     src_grids = [(s_.shape[-2] // patch, s_.shape[-1] // patch) for s_ in srcs]
 
@@ -255,9 +275,21 @@ def krea2_edit_forward(m, x, timesteps, context, src_latent, transformer_options
 
     device = combined.device
     if pos_mode == "stride1" and ref_native:
-        print(f"[krea2edit] STRIDE1-POS fit: ref grids {src_grids} centered in ({h_},{w_})", flush=True)
-        ref_ids = [_imgids_offset(bs, i + 1, gh, gw, h_, w_, device)
-                   for i, (gh, gw) in enumerate(src_grids)]
+        ref_ids = []
+        for i, ((gh, gw), (uh, uw)) in enumerate(zip(src_grids, src_native_hw)):
+            # Center on the decoded latent (H_orig), not the patch-padded grid.
+            # Token-floor of that pad is up to half a token (8 px) off the pixels.
+            placed = rope_content_offset(uh, uw, H_orig, W_orig, patch, 8)
+            off_h, off_w = placed["off_tok"]
+            py, px = placed["px"]
+            ly, lx = placed["legacy_px"]
+            print(
+                f"[krea2edit] STRIDE1-POS ref{i} latent {uh}x{uw} in target {H_orig}x{W_orig} "
+                f"tokens {gh}x{gw} padded-grid {h_}x{w_} "
+                f"offset_px=({py:.1f},{px:.1f}) token-floor would be ({ly:.1f},{lx:.1f})",
+                flush=True,
+            )
+            ref_ids.append(_imgids_offset(bs, i + 1, gh, gw, h_, w_, device, off=(off_h, off_w)))
     else:
         ref_ids = [_imgids(bs, i + 1, gh, gw, device) for i, (gh, gw) in enumerate(src_grids)]
     # per-ref placement, same convention as ref_boost/ref_boost_a: last ref = subject (ref_position),
