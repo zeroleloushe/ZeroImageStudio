@@ -212,18 +212,39 @@ input.range::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; heigh
 }
 .viewcanvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
 .ov { position: absolute; inset: 0; pointer-events: none; }
-.ga { position: absolute; border: 2px dashed var(--ac); pointer-events: auto; }
+.ga { position: absolute; border: 2px dashed var(--ac); pointer-events: none; }
+.ga .lab, .ga .hd, .ga .rim i { pointer-events: auto; }
+.ga .rim { pointer-events: none; }
 .ga .lab {
   position: absolute; left: -2px; top: -24px; height: 22px; background: var(--ac); color: #111; font-weight: 700;
   font-size: 11px; padding: 0 8px; display: flex; align-items: center; gap: 6px; white-space: nowrap;
   font-family: "IBM Plex Mono", ui-monospace, monospace; max-width: calc(100% + 4px); overflow: hidden;
+  cursor: move; z-index: 3;
 }
 .ga .lab.inside { top: 4px; left: 4px; max-width: calc(100% - 8px); }
-.hd { position: absolute; width: 8px; height: 8px; background: var(--ac); pointer-events: auto; }
+.ga .rim { position: absolute; inset: 0; z-index: 1; }
+.ga .rim i { position: absolute; background: transparent; cursor: move; }
+.ga .rim i:nth-child(1) { left: 12px; right: 12px; top: 0; height: 8px; }
+.ga .rim i:nth-child(2) { left: 12px; right: 12px; bottom: 0; height: 8px; }
+.ga .rim i:nth-child(3) { top: 12px; bottom: 12px; left: 0; width: 8px; }
+.ga .rim i:nth-child(4) { top: 12px; bottom: 12px; right: 0; width: 8px; }
+.hd { position: absolute; width: 8px; height: 8px; background: var(--ac); z-index: 4; }
+.ga .hd.edge { background: transparent; z-index: 2; }
+.ga .hd.edge[data-h="n"], .ga .hd.edge[data-h="s"] { left: 14px; right: 14px; width: auto; height: 10px; cursor: ns-resize; }
+.ga .hd.edge[data-h="n"] { top: -5px; }
+.ga .hd.edge[data-h="s"] { bottom: -5px; }
+.ga .hd.edge[data-h="e"], .ga .hd.edge[data-h="w"] { top: 14px; bottom: 14px; height: auto; width: 10px; cursor: ew-resize; }
+.ga .hd.edge[data-h="w"] { left: -5px; }
+.ga .hd.edge[data-h="e"] { right: -5px; }
 .ga .hd[data-h="nw"] { left: -5px; top: -5px; cursor: nwse-resize; }
 .ga .hd[data-h="ne"] { right: -5px; top: -5px; cursor: nesw-resize; }
 .ga .hd[data-h="sw"] { left: -5px; bottom: -5px; cursor: nesw-resize; }
 .ga .hd[data-h="se"] { right: -5px; bottom: -5px; cursor: nwse-resize; }
+.scope-toggle { display: flex; gap: 4px; background: #101216; border: 1px solid var(--ln); border-radius: 6px; padding: 3px; }
+.scope-toggle button { flex: 1; height: 28px; border-radius: 4px; color: var(--mu); font-weight: 700; }
+.scope-toggle button.on { background: var(--ac); color: #111; }
+.mp-row { display: flex; flex-wrap: wrap; gap: 4px; }
+.mp-row button.on { background: var(--ac); color: #111; border-color: var(--ac); }
 .chip {
   height: 24px; padding: 0 8px; border-radius: 4px; border: 1px solid var(--ln); background: #16191e;
   display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; white-space: nowrap; color: var(--tx);

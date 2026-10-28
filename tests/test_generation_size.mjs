@@ -24,6 +24,24 @@ test("a placed area keeps its own output size", () => {
   assert.equal(size.areaLabelText({ w: 400, h: 300 }, doc, area), "Область 400×300 → 1024×1024");
 });
 
+test("megapixels follow the frame aspect and the model step", () => {
+  const frame = size.sizeForMegapixels(800, 1200, 1, 16);
+  assert.equal(frame.w % 16, 0);
+  assert.equal(frame.h % 16, 0);
+  assert.ok(Math.abs(frame.w / frame.h - 800 / 1200) < 0.05);
+  assert.ok(Math.abs(frame.w * frame.h - 1e6) / 1e6 < 0.08);
+});
+
+test("a dragged frame snaps position and size to the model step", () => {
+  const snapped = size.snapRect({ x: 10, y: 12, w: 100, h: 90 }, 16, { w: 1024, h: 1024 });
+  assert.equal(snapped.x % 16, 0);
+  assert.equal(snapped.y % 16, 0);
+  assert.equal(snapped.w % 16, 0);
+  assert.equal(snapped.h % 16, 0);
+  assert.ok(snapped.w >= 16 && snapped.h >= 16);
+  assert.ok(snapped.x + snapped.w <= 1024);
+});
+
 test("an unlinked whole canvas uses the stored output size", () => {
   const doc = { w: 832, h: 1216 };
   const area = { outputLinked: false, userPlaced: false, outW: 640, outH: 960 };

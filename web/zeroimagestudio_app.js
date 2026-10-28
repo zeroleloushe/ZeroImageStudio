@@ -30,7 +30,7 @@
     create: blankPipe("create"),
     edit: blankPipe("edit"),
     references: [],
-    area: { outW: 1024, outH: 1024, aspect: "free", context: 0.15, feather: 48, paste: "poisson", colorMatch: true, userPlaced: false, outputLinked: true, mp: 1, pasteOpen: false },
+    area: { outW: 1024, outH: 1024, aspect: "free", context: 0.15, feather: 48, paste: "poisson", colorMatch: true, userPlaced: false, outputLinked: true, mp: 1, pasteOpen: false, editScope: "full", region: null, exactOpen: false },
     tool: "genarea",
     color: "#e7c27a",
     brush: { size: 64, hardness: 0.3, opacity: 1 },
@@ -188,7 +188,10 @@
       this.overlay = document.createElement("div");
       this.overlay.className = "ov";
       this.overlay.innerHTML =
-        '<div class="ga" id="ga"><div class="lab"></div>' +
+        '<div class="ga" id="ga"><div class="lab" data-h="move"></div>' +
+        '<div class="rim" data-h="move"><i></i><i></i><i></i><i></i></div>' +
+        '<div class="hd edge" data-h="n"></div><div class="hd edge" data-h="s"></div>' +
+        '<div class="hd edge" data-h="e"></div><div class="hd edge" data-h="w"></div>' +
         '<div class="hd" data-h="nw"></div><div class="hd" data-h="ne"></div>' +
         '<div class="hd" data-h="sw"></div><div class="hd" data-h="se"></div></div>';
       this.stage.appendChild(this.overlay);
@@ -457,10 +460,11 @@
       this.ga.style.top = (this.panY + g.y * this.zoom) + "px";
       this.ga.style.width = Math.max(8, g.w * this.zoom) + "px";
       this.ga.style.height = Math.max(8, g.h * this.zoom) + "px";
-      this.ga.style.pointerEvents = state.tool === "genarea" ? "auto" : "none";
+      const draggingFrame = this.drag && (this.drag.kind === "new-ga" || this.drag.kind === "move-ga" || this.drag.kind === "resize");
+      this.ga.hidden = !(state.pipeline === "edit" && (state.area.editScope === "region" || draggingFrame));
       const lab = this.ga.querySelector(".lab");
-      generationSize();
-      lab.textContent = window.ZeroImageStudioSize.areaLabelText(g, this.doc, state.area);
+      const frame = generationSize();
+      lab.textContent = frame.w + "×" + frame.h;
       paintStatus();
       lab.classList.toggle("inside", (this.panY + g.y * this.zoom) < 26);
       const run = $("ga-run");
@@ -658,6 +662,12 @@
         if (rec.mask) this.maskCtx.putImageData(rec.mask, 0, 0);
         this.touchMask();
         this.thumb(layer);
+      } else if (rec.type === "gen") {
+        this.gen = { ...(rec.gen || this.gen) };
+        state.area.editScope = rec.scope === "region" ? "region" : "full";
+        state.area.region = rec.region ? { ...rec.region } : state.area.region;
+        state.area.userPlaced = state.area.editScope === "region";
+        state.area.outputLinked = state.area.editScope !== "region";
       } else if (rec.type === "move") {
         const layer = this.layers.find((l) => l.id === rec.id);
         if (layer) { layer.x = rec.x; layer.y = rec.y; }
@@ -687,6 +697,9 @@
     captureInverse(rec) {
       if (!rec) return null;
       if (rec.type === "full") return this.fullSnapshot();
+      if (rec.type === "gen") {
+        return { type: "gen", gen: { ...this.gen }, scope: state.area.editScope, region: state.area.region ? { ...state.area.region } : null };
+      }
       if (rec.type === "move") {
         const layer = this.layers.find((l) => l.id === rec.id);
         return U.inverseHistory(rec, { x: layer ? layer.x : rec.x, y: layer ? layer.y : rec.y });
@@ -877,13 +890,11 @@
       const down = (e) => this.pointerDown(e);
       this.canvas.addEventListener("pointerdown", down);
       this.ga.addEventListener("pointerdown", (e) => {
-        if (state.tool !== "genarea") return;
+        const handleEl = e.target.closest && e.target.closest("[data-h]");
+        if (!handleEl || !this.ga.contains(handleEl) || e.button !== 0) return;
         e.preventDefault();
         e.stopPropagation();
-        const p = this.screenToDoc(e.clientX, e.clientY);
-        const handle = e.target.dataset ? e.target.dataset.h : null;
-        this.drag = { kind: handle ? "resize" : "move-ga", handle, x: p.x, y: p.y, gen: { ...this.gen }, pid: e.pointerId };
-        this.ga.setPointerCapture(e.pointerId);
+        this.beginFrameDrag(handleEl.dataset.h, e.clientX, e.clientY, handleEl, e.pointerId);
       });
       window.addEventListener("pointermove", (e) => this.pointerMove(e));
       window.addEventListener("pointerup", (e) => this.pointerUp(e));
@@ -933,11 +944,38 @@
       window.addEventListener("blur", () => { this.space = false; });
     }
 
+    frameHit(clientX, clientY) {
+      if (!this.ga || this.ga.hidden) return "";
+      const el = document.elementFromPoint(clientX, clientY);
+      const handle = el && el.closest ? el.closest("[data-h]") : null;
+      if (!handle || !this.ga.contains(handle)) return "";
+      return handle.dataset.h || "";
+    }
+
+    beginFrameDrag(handle, clientX, clientY, captureEl) {
+      if (state.pipeline === "edit" && state.area.editScope !== "region") applyEditScope("region");
+      const p = this.screenToDoc(clientX, clientY);
+      this.drag = {
+        kind: handle === "move" ? "move-ga" : "resize",
+        handle: handle || "se",
+        x: p.x, y: p.y,
+        gen: { ...this.gen },
+        gen0: { ...this.gen },
+        scope0: state.area.editScope,
+        region0: state.area.region ? { ...state.area.region } : null,
+      };
+      if (captureEl && captureEl.setPointerCapture && pointerId != null) {
+        try { captureEl.setPointerCapture(pointerId); } catch { /* already released */ }
+      }
+    }
+
     pointerDown(e) {
       if (e.button === 1 || this.space || state.tool === "hand") {
         this.drag = { kind: "pan", x: e.clientX, y: e.clientY, panX: this.panX, panY: this.panY };
         return;
       }
+      const hit = this.frameHit(e.clientX, e.clientY);
+      if (hit) { this.beginFrameDrag(hit, e.clientX, e.clientY, e.target, e.pointerId); return; }
       const p = this.screenToDoc(e.clientX, e.clientY);
       const tool = state.tool;
       if (tool === "zoom") {
@@ -955,7 +993,8 @@
         return;
       }
       if (tool === "genarea") {
-        this.drag = { kind: "new-ga", x: p.x, y: p.y, gen: { ...this.gen } };
+        if (state.pipeline === "edit" && state.area.editScope !== "region") applyEditScope("region");
+        this.drag = { kind: "new-ga", x: p.x, y: p.y, gen: { ...this.gen }, gen0: { ...this.gen }, scope0: state.area.editScope, region0: state.area.region ? { ...state.area.region } : null };
         return;
       }
       if (tool === "select" || tool === "crop" || tool === "lasso") {
@@ -996,7 +1035,14 @@
     }
 
     pointerMove(e) {
-      if (!this.drag) return;
+      if (!this.drag) {
+        const hit = this.frameHit(e.clientX, e.clientY);
+        if (hit && state.tool !== "hand") {
+          const cursors = { n: "ns-resize", s: "ns-resize", e: "ew-resize", w: "ew-resize", ne: "nesw-resize", sw: "nesw-resize", nw: "nwse-resize", se: "nwse-resize", move: "move" };
+          this.canvas.style.cursor = cursors[hit] || "move";
+        }
+        return;
+      }
       const p = this.screenToDoc(e.clientX, e.clientY);
       const d = this.drag;
       if (d.kind === "pan") {
@@ -1041,6 +1087,17 @@
         renderTags();
       }
       if (d.kind === "move") this.pushUndo({ type: "move", id: d.id, x: d.lx, y: d.ly });
+      if (d.kind === "move-ga" || d.kind === "resize" || d.kind === "new-ga") {
+        this.gen = window.ZeroImageStudioSize.snapRect(this.gen, modelStep(), this.doc);
+        state.area.editScope = "region";
+        state.area.userPlaced = true;
+        state.area.outputLinked = false;
+        state.area.region = { x: this.gen.x, y: this.gen.y, w: this.gen.w, h: this.gen.h };
+        const before = d.gen0 || d.gen;
+        if (before && (before.x !== this.gen.x || before.y !== this.gen.y || before.w !== this.gen.w || before.h !== this.gen.h)) {
+          this.pushUndo({ type: "gen", gen: { ...before }, scope: d.scope0 || "full", region: d.region0 || null });
+        }
+      }
       if (d.kind === "crop" && this.selection && this.selection.w > 4 && this.selection.h > 4) this.applyCrop(this.selection);
       if (d.kind === "transform" && d.snapshot) { this.bakeActive(); this.pushUndo(d.snapshot); }
       renderInspector();
@@ -1070,6 +1127,11 @@
         if (ratio && Math.abs(w) > 2) h = Math.sign(h || 1) * Math.abs(w) / ratio;
         this.gen = normalizeRect(x, y, w, h, this.doc.w, this.doc.h);
       }
+      this.gen = window.ZeroImageStudioSize.snapRect(this.gen, modelStep(), this.doc);
+      state.area.editScope = "region";
+      state.area.userPlaced = true;
+      state.area.outputLinked = false;
+      state.area.region = { x: this.gen.x, y: this.gen.y, w: this.gen.w, h: this.gen.h };
       renderInspector();
     }
 
@@ -1743,12 +1805,49 @@
     }
     return best;
   }
+  function modelStep() {
+    const c = cfg();
+    if (c.method === "krea2_edit" || c.latent_mode === "sd3" || c.encoder === "qwen_image_21" || c.method === "qwen_image_21" || c.method === "qwen_image") return 16;
+    return 8;
+  }
+  function editIsRegion() {
+    return state.pipeline === "edit" && state.area.editScope === "region";
+  }
   function generationSize() {
-    const frame = window.ZeroImageStudioSize.generationFrame(editor && editor.doc, state.area);
+    const step = modelStep();
+    if (!editor || !editIsRegion()) {
+      const w = snapSize(editor ? editor.doc.w : state.area.outW, step);
+      const h = snapSize(editor ? editor.doc.h : state.area.outH, step);
+      state.area.outW = w;
+      state.area.outH = h;
+      return { w, h };
+    }
+    const g = editor.gen;
+    const frame = window.ZeroImageStudioSize.sizeForMegapixels(g.w, g.h, state.area.mp || 1, step);
     state.area.outW = frame.w;
     state.area.outH = frame.h;
-    state.area.mp = nearestMp(frame.w, frame.h);
     return frame;
+  }
+  function applyEditScope(scope) {
+    const next = scope === "region" ? "region" : "full";
+    state.area.editScope = next;
+    if (!editor) return;
+    if (next === "region") {
+      if (state.area.region) editor.gen = { ...state.area.region };
+      editor.gen = window.ZeroImageStudioSize.snapRect(editor.gen, modelStep(), editor.doc);
+      state.area.region = { x: editor.gen.x, y: editor.gen.y, w: editor.gen.w, h: editor.gen.h };
+      state.area.userPlaced = true;
+      state.area.outputLinked = false;
+    } else {
+      if (state.area.userPlaced) state.area.region = { x: editor.gen.x, y: editor.gen.y, w: editor.gen.w, h: editor.gen.h };
+      state.area.userPlaced = false;
+      state.area.outputLinked = true;
+      syncDefaultArea();
+    }
+    editor.requestDraw();
+    renderInspector();
+    renderPipe();
+    paintStatus();
   }
   function sizeForAspectMp(aspect, mp) {
     const hit = ASPECTS.find((a) => a[0] === aspect) || ASPECTS[0];
@@ -1844,47 +1943,33 @@
     const frame = generationSize();
     const g = editor.gen;
     const a = state.area;
-    const aspect = matchAspect(frame.w, frame.h);
-    const known = ASPECTS.some(([n]) => n === aspect);
-    const mpOn = activeMp(frame.w, frame.h);
     const exact = ((frame.w * frame.h) / 1e6).toFixed(2);
-    const aspectOpts = ASPECTS.map(([n]) => `<option value="${n}" ${aspect === n ? "selected" : ""}>${n}</option>`).join("")
-      + (known ? "" : `<option value="${escapeHtml(aspect)}" selected>${escapeHtml(aspect)}</option>`);
-    const mpOpts = MPS.map((m) => `<option value="${m}" ${m === mpOn ? "selected" : ""}>${m}</option>`).join("")
-      + `<option value="custom" ${mpOn == null ? "selected" : ""}>Своё</option>`;
-    const customMp = ((frame.w * frame.h) / 1e6).toFixed(2);
     const meta = $("insp-meta");
-    if (meta) meta.textContent = inspectorContext();
+    const region = editIsRegion();
+    if (meta) meta.textContent = region ? "область" : "весь холст";
     const full = $("btn-gen-full");
-    if (full) {
-      const on = coversWholeCanvas() && a.outputLinked !== false;
-      full.setAttribute("aria-pressed", on ? "true" : "false");
-      full.title = "Весь холст";
-    }
-    const hint = replacesCanvas() ? "Весь холст → новая картинка" : "→ новый слой";
-    $("inspector").innerHTML = `
-      <div class="insp">
-        <section class="insp-sec">
-          <div class="insp-h">Область</div>
+    if (full) full.hidden = true;
+    const mpChoices = [0.5, 1, 1.5, 2];
+    const mpCustom = !mpChoices.includes(Number(a.mp));
+    const mpButtons = mpChoices.map((m) => `<button type="button" class="b s ${Number(a.mp) === m ? "on" : ""}" data-area-mp="${m}">${m}</button>`).join("")
+      + `<button type="button" class="b s ${mpCustom ? "on" : ""}" data-area-mp="custom">Своё</button>`;
+    const scope = state.pipeline === "edit" ? `<div class="scope-toggle" role="group" aria-label="Что править">
+        <button type="button" data-edit-scope="full" class="${region ? "" : "on"}">Весь холст</button>
+        <button type="button" data-edit-scope="region" class="${region ? "on" : ""}">Область</button>
+      </div>` : "";
+    const regionBody = region ? `
+        <div class="insp-h">Мегапиксели</div>
+        <div class="mp-row">${mpButtons}${mpCustom ? `<input id="g-mp-custom" class="f" inputmode="decimal" aria-label="Своё значение в мегапикселях" value="${Number(a.mp) || 1}" style="width:64px">` : ""}</div>
+        <div class="mu">Пропорцию берёт рамка на холсте. Углы и край рамки двигаются любым инструментом.</div>
+        <details class="insp-adv" id="insp-exact" ${a.exactOpen ? "open" : ""}>
+          <summary>Точно</summary>
           <div class="insp-grid">
             <span class="lbl">X</span><input id="gx" class="f" value="${Math.round(g.x)}" inputmode="numeric" aria-label="X">
             <span class="lbl">Y</span><input id="gy" class="f" value="${Math.round(g.y)}" inputmode="numeric" aria-label="Y">
             <span class="lbl">W</span><input id="gw" class="f" value="${Math.round(g.w)}" inputmode="numeric" aria-label="Ширина области">
             <span class="lbl">H</span><input id="gh" class="f" value="${Math.round(g.h)}" inputmode="numeric" aria-label="Высота области">
           </div>
-        </section>
-        <section class="insp-sec">
-          <div class="insp-h">Разрешение генерации</div>
-          <div class="insp-res">
-            <span class="lbl">Аспект</span>
-            <select id="g-aspect" class="dd" aria-label="Соотношение сторон">${aspectOpts}</select>
-            <button type="button" class="b s icon-btn" id="g-swap" title="Портрет или альбом">⇄</button>
-            <span class="lbl">МП</span>
-            <select id="g-mp" class="dd" aria-label="Мегапиксели">${mpOpts}</select>
-            <span class="insp-mp-slot" id="g-mp-slot">${mpOn == null ? `<input id="g-mp-custom" class="f" inputmode="decimal" aria-label="Своё значение в мегапикселях" value="${customMp}">` : ""}</span>
-          </div>
-          <div class="insp-result">${frame.w}×${frame.h} · ${exact} МП</div>
-        </section>
+        </details>
         <details class="insp-adv" id="insp-paste" ${a.pasteOpen ? "open" : ""}>
           <summary>Вклейка</summary>
           <div class="insp-grid">
@@ -1900,61 +1985,46 @@
             <span class="lbl">Цвет</span>
             <label class="insp-span insp-check"><input id="gcolor" type="checkbox" ${a.colorMatch ? "checked" : ""}> подгон</label>
           </div>
-        </details>
-        <div class="insp-hint">${hint}</div>
+        </details>` : `<div class="mu">${state.pipeline === "create" ? "Размер холста и генерации совпадают." : "Генерация на весь холст, без рамки."}</div>`;
+    $("inspector").innerHTML = `<div class="insp">${scope}
+        <div class="insp-result">${frame.w}×${frame.h} · ${exact} МП</div>
+        ${regionBody}
       </div>`;
-    const num = (id, fn) => $(id).onchange = () => { state.area.userPlaced = true; fn(parseFloat($(id).value)); editor.requestDraw(); renderInspector(); renderLayers(); paintStatus(); };
-    num("gx", (v) => { editor.gen.x = clamp(v || 0, 0, editor.doc.w - 8); });
-    num("gy", (v) => { editor.gen.y = clamp(v || 0, 0, editor.doc.h - 8); });
+    $("inspector").querySelectorAll("[data-edit-scope]").forEach((btn) => {
+      btn.onclick = () => applyEditScope(btn.dataset.editScope);
+    });
+    $("inspector").querySelectorAll("[data-area-mp]").forEach((btn) => {
+      btn.onclick = () => {
+        if (btn.dataset.areaMp === "custom") {
+          state.area.mp = Number(state.area.mp) || 1;
+          if ([0.5, 1, 1.5, 2].includes(Number(state.area.mp))) state.area.mp = 1.25;
+          renderInspector();
+          const input = $("g-mp-custom");
+          if (input) { input.focus(); input.select(); }
+          return;
+        }
+        state.area.mp = parseFloat(btn.dataset.areaMp) || 1;
+        renderInspector();
+        if (editor) editor.requestDraw();
+      };
+    });
+    const custom = $("g-mp-custom");
+    if (custom) custom.onchange = () => { state.area.mp = Math.max(0.25, parseFloat(custom.value) || 1); renderInspector(); if (editor) editor.requestDraw(); };
+    const num = (id, fn) => { const el = $(id); if (el) el.onchange = () => { fn(parseFloat(el.value)); editor.gen = window.ZeroImageStudioSize.snapRect(editor.gen, modelStep(), editor.doc); state.area.region = { ...editor.gen }; editor.requestDraw(); renderInspector(); }; };
+    num("gx", (v) => { editor.gen.x = v || 0; });
+    num("gy", (v) => { editor.gen.y = v || 0; });
     num("gw", (v) => { editor.gen.w = Math.max(16, v || 16); });
     num("gh", (v) => { editor.gen.h = Math.max(16, v || 16); });
-    const currentMp = () => {
-      const sel = $("g-mp");
-      const custom = $("g-mp-custom");
-      if (sel && sel.value === "custom" && custom) return Math.max(0.25, parseFloat(custom.value) || 1);
-      return parseFloat(sel && sel.value) || nearestMp(frame.w, frame.h);
-    };
-    const bindCustomMp = () => {
-      const input = $("g-mp-custom");
-      if (!input) return;
-      input.onchange = () => {
-        const ratio = frame.w / frame.h || 1;
-        const pixels = Math.max(0.25, parseFloat(input.value) || 1) * 1e6;
-        const h = Math.sqrt(pixels / ratio);
-        applyOutputSize(snapSize(h * ratio), snapSize(h));
-      };
-    };
-    $("g-aspect").onchange = () => {
-      const name = $("g-aspect").value;
-      const hit = ASPECTS.find((item) => item[0] === name);
-      const ratio = hit ? hit[1] / hit[2] : (frame.w / frame.h || 1);
-      const pixels = currentMp() * 1e6;
-      const h = Math.sqrt(pixels / ratio);
-      applyOutputSize(snapSize(h * ratio), snapSize(h));
-    };
-    $("g-mp").onchange = () => {
-      if ($("g-mp").value === "custom") {
-        const slot = $("g-mp-slot");
-        if (slot && !$("g-mp-custom")) {
-          slot.innerHTML = `<input id="g-mp-custom" class="f" inputmode="decimal" aria-label="Своё значение в мегапикселях" value="${exact}">`;
-        }
-        const input = $("g-mp-custom");
-        if (input) { input.focus(); input.select(); }
-        bindCustomMp();
-        return;
-      }
-      const ratio = frame.w / frame.h || 1;
-      const pixels = Math.max(0.25, parseFloat($("g-mp").value) || 1) * 1e6;
-      const h = Math.sqrt(pixels / ratio);
-      applyOutputSize(snapSize(h * ratio), snapSize(h));
-    };
-    bindCustomMp();
-    $("g-swap").onclick = () => applyOutputSize(frame.h, frame.w);
-    $("insp-paste").addEventListener("toggle", () => { state.area.pasteOpen = $("insp-paste").open; });
-    $("gpaste").onchange = () => { state.area.paste = $("gpaste").value; };
-    $("gfeather").onchange = () => { state.area.feather = Math.max(0, parseInt($("gfeather").value, 10) || 0); };
-    $("gcontext").onchange = () => { state.area.context = Math.max(0, (parseFloat($("gcontext").value) || 0) / 100); };
-    $("gcolor").onchange = () => { state.area.colorMatch = $("gcolor").checked; };
+    const exactBox = $("insp-exact");
+    if (exactBox) exactBox.addEventListener("toggle", () => { state.area.exactOpen = exactBox.open; });
+    const paste = $("insp-paste");
+    if (paste) {
+      paste.addEventListener("toggle", () => { state.area.pasteOpen = paste.open; });
+      $("gpaste").onchange = () => { state.area.paste = $("gpaste").value; };
+      $("gfeather").onchange = () => { state.area.feather = Math.max(0, parseInt($("gfeather").value, 10) || 0); };
+      $("gcontext").onchange = () => { state.area.context = Math.max(0, (parseFloat($("gcontext").value) || 0) / 100); };
+      $("gcolor").onchange = () => { state.area.colorMatch = $("gcolor").checked; };
+    }
   }
 
   function renderTags() { /* status lives in the tool options bar */ }
