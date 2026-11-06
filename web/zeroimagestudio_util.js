@@ -123,6 +123,24 @@
     }).join("");
   }
 
+  function livePreviewOpen(running, picking) {
+    return !!running && !picking;
+  }
+
+  function variantLayerBox(doc, crop) {
+    const dw = Math.max(1, Math.round(Number(doc && doc.w) || 1));
+    const dh = Math.max(1, Math.round(Number(doc && doc.h) || 1));
+    if (crop && crop.w && crop.h) {
+      const x = Math.round(Number(crop.x) || 0);
+      const y = Math.round(Number(crop.y) || 0);
+      const w = Math.max(1, Math.round(Number(crop.w) || 1));
+      const h = Math.max(1, Math.round(Number(crop.h) || 1));
+      const full = x <= 1 && y <= 1 && w >= dw - 2 && h >= dh - 2;
+      if (!full) return { x: x, y: y, w: w, h: h };
+    }
+    return { x: 0, y: 0, w: dw, h: dh };
+  }
+
   function nextVariantIndex(index, count, key) {
     const n = Math.max(0, Number(count) || 0);
     if (!n) return 0;
@@ -383,6 +401,8 @@
     prepareLoraListing,
     loraPickerItemsHtml,
     loraPickerHtml,
+    livePreviewOpen,
+    variantLayerBox,
     nextVariantIndex,
     formatApiError,
     explainRunError,

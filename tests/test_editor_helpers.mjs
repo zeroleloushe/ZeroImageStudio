@@ -76,6 +76,25 @@ test("layer order uses the stack index and the physical bracket keys", () => {
   assert.equal(U.layerArrangeCommand({ key: "]", code: "BracketRight" }), "");
 });
 
+test("the live preview stays hidden while a batch is being picked", () => {
+  assert.equal(U.livePreviewOpen(true, false), true);
+  assert.equal(U.livePreviewOpen(true, true), false);
+  assert.equal(U.livePreviewOpen(false, false), false);
+  assert.equal(U.livePreviewOpen(false, true), false);
+});
+
+test("batch layers use the same rect as a single accept", () => {
+  const doc = { w: 1424, h: 1899 };
+  const full = U.variantLayerBox(doc, null);
+  assert.deepEqual(full, { x: 0, y: 0, w: 1424, h: 1899 });
+  const covered = U.variantLayerBox(doc, { x: 0, y: 0, w: 1424, h: 1899 });
+  assert.deepEqual(covered, full);
+  const region = U.variantLayerBox(doc, { x: 80, y: 120, w: 640, h: 480 });
+  assert.deepEqual(region, { x: 80, y: 120, w: 640, h: 480 });
+  const gen = { x: 200, y: 260, w: 900, h: 900 };
+  assert.notDeepEqual(U.variantLayerBox(doc, null), { x: gen.x, y: gen.y, w: gen.w, h: gen.h });
+});
+
 test("arrow keys and digits move the variant selection", () => {
   assert.equal(U.nextVariantIndex(0, 4, "ArrowRight"), 1);
   assert.equal(U.nextVariantIndex(0, 4, "ArrowLeft"), 3);

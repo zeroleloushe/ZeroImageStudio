@@ -55,6 +55,7 @@
     layout: null,
     settings: null,
     running: false,
+    picking: false,
     promptId: null,
     jobId: "",
     galleryTotal: 0,
@@ -545,7 +546,7 @@
       const mapped = geom ? window.ZeroImageStudioSize.previewMap(crop, fitFrame.w, fitFrame.h, placed) : crop;
       if (editing && geom) lab.textContent = geom.gen.w + "×" + geom.gen.h;
       if (run) {
-        run.hidden = !state.running;
+        run.hidden = !U.livePreviewOpen(state.running, state.picking);
         run.style.left = (this.panX + mapped.x * this.zoom) + "px";
         run.style.top = (this.panY + mapped.y * this.zoom) + "px";
         run.style.width = Math.max(8, mapped.w * this.zoom) + "px";
@@ -3842,10 +3843,14 @@
     const img = $("ga-preview");
     if (img && img.src && img.src.startsWith("blob:")) URL.revokeObjectURL(img.src);
     if (img) { img.removeAttribute("src"); img.hidden = true; }
+    const run = $("ga-run");
+    if (run) run.hidden = true;
+    const label = $("ga-run-label");
+    if (label) label.textContent = "";
   }
 
   function showBinaryPreview(buf) {
-    if (!state.running || buf.byteLength < 8) return;
+    if (!U.livePreviewOpen(state.running, state.picking) || buf.byteLength < 8) return;
     const view = new DataView(buf);
     const event = view.getUint32(0);
     let bytes = null;
@@ -4075,8 +4080,9 @@
       toast(msg, { openModels: missing });
       if (missing) openModelDrawer();
     } finally {
-      clearLivePreview();
+      state.picking = false;
       state.running = false;
+      clearLivePreview();
       state.promptId = null;
       $("btn-gen").classList.remove("stop");
       $("gen-label").textContent = "Сгенерировать";
@@ -4172,39 +4178,28 @@
       }
     }
     const img = await loadImage(URL.createObjectURL(pasted));
-    const replace = !(opts && opts.forceLayer) && replacesCanvas();
+    const box = U.variantLayerBox(editor.doc, crop);
     const painted = !!(crop && spec.has_mask);
     const split = crop ? splitPasteAlpha(img) : null;
-    const color = split ? split.color : (crop ? imageCanvas(img) : null);
+    const source = split && split.color ? split.color : img;
+    const color = (source.width === box.w && source.height === box.h)
+      ? (source === img ? imageCanvas(img) : source)
+      : scaleCanvas(source, box.w, box.h);
+    const replace = !(opts && opts.forceLayer) && replacesCanvas() && box.x === 0 && box.y === 0;
     let placed = null;
-    if (replace && !crop) {
-      const canvas = scaleCanvas(img, editor.doc.w, editor.doc.h);
-      const layer = editor.makeLayer("Холст", canvas);
-      layer.x = 0; layer.y = 0; layer.meta = meta;
-      editor.layers = [layer];
-      editor.active = 0;
-      placed = layer;
-    } else if (replace && crop && crop.x <= 1 && crop.y <= 1 && crop.w >= editor.doc.w - 2 && crop.h >= editor.doc.h - 2) {
+    if (replace) {
       const layer = editor.makeLayer("Холст", color);
-      layer.x = 0; layer.y = 0; layer.meta = meta;
+      layer.x = box.x; layer.y = box.y; layer.meta = meta;
       editor.layers = [layer];
       editor.active = 0;
       placed = layer;
     } else {
       const n = editor.layers.filter((l) => l.name.startsWith(state.pipeline === "edit" ? "Правка" : "Генерация")).length + 1;
       const label = state.pipeline === "edit" ? ("Правка " + n) : ("Генерация " + n);
-      if (!crop) {
-        const layerCanvas = scaleCanvas(img, editor.gen.w, editor.gen.h);
-        const layer = editor.makeLayer(label, layerCanvas);
-        layer.x = editor.gen.x; layer.y = editor.gen.y; layer.meta = meta;
-        editor.addLayer(layer);
-        placed = layer;
-      } else {
-        const layer = editor.makeLayer(label, color);
-        layer.x = crop.x; layer.y = crop.y; layer.meta = meta;
-        editor.addLayer(layer);
-        placed = layer;
-      }
+      const layer = editor.makeLayer(label, color);
+      layer.x = box.x; layer.y = box.y; layer.meta = meta;
+      editor.addLayer(layer);
+      placed = layer;
     }
     if (split && split.mask && placed) editor.attachLayerMask(placed, split.mask, 0);
     if (painted && !(opts && opts.keepMask)) editor.consumeWorkMask();
@@ -4219,6 +4214,8 @@
     if (!host) return Promise.resolve(0);
     let index = 0;
     let collapsed = false;
+    state.picking = true;
+    clearLivePreview();
     const paint = () => {
       host.hidden = false;
       host.classList.toggle("collapsed", collapsed);
@@ -4237,10 +4234,12 @@
     return new Promise((resolve) => {
       const finish = (value) => {
         window.removeEventListener("keydown", onKey, true);
+        state.picking = false;
         host.hidden = true;
         host.innerHTML = "";
         host.onclick = null;
         if (preview) { preview.hidden = true; preview.removeAttribute("src"); }
+        clearLivePreview();
         if (editor) editor.requestDraw();
         resolve(value);
       };
